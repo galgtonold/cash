@@ -36,6 +36,8 @@ from cash.kept_state import reduce_counted
 from cash.live_state import is_live_stream
 from cash.value_types import IMMUTABLE_LEAF_TYPES, shapely_geometry_types
 
+from ._type_memo import class_dict, class_flags, class_module, class_mro, class_name
+
 __all__ = ["ClosureCheck", "closure_check_budget", "closures_sharing"]
 
 #: Hold nothing: not looked inside, and no place of the value's either.
@@ -213,7 +215,7 @@ def _holds_a_closure(captured_vars: Mapping[str, Any], seconds: float) -> bool |
                 if any(fn.__closure__ for fn in group):
                     return True
             elif _pandas_time_kind(kind):
-                if kind.__name__ == "Timestamp":
+                if class_name(kind) == "Timestamp":
                     held.append(item.tzinfo for item in group if item.tzinfo is not None)
             elif not issubclass(kind, _OPAQUE):
                 bulk = _group_parts(group, kind)
@@ -421,7 +423,7 @@ def _read_in_bulk(kind: type) -> bool:
     container's subclass, a bound method or a stream, read on their own."""
     found = _IN_BULK.get(type_key(kind))
     if found is None:
-        mro = kind.__mro__
+        mro = class_mro(kind)
         found = (
             not (
                 kind is types.MethodType
@@ -435,7 +437,7 @@ def _read_in_bulk(kind: type) -> bool:
                 # `_object_parts` reads: a million of them were read one by one.
                 or kind is types.SimpleNamespace
                 or all(
-                    klass.__flags__ & _HEAP_TYPE and not any(hook in _CLASS_DICT(klass) for hook in _REDUCE_HOOKS)
+                    class_flags(klass) & _HEAP_TYPE and not any(hook in _CLASS_DICT(klass) for hook in _REDUCE_HOOKS)
                     for klass in mro[:-1]
                 )
             )
@@ -534,14 +536,14 @@ def slot_readers(kind: type) -> tuple:
     found = _SLOTS.get_for(kind)
     if found is None:
         places = []
-        for at, klass in enumerate(kind.__mro__):
-            own = klass.__dict__
+        for at, klass in enumerate(class_mro(kind)):
+            own = class_dict(klass)
             if "__slots__" in own:
                 places.extend((at, name) for name, m in own.items() if type(m) is types.MemberDescriptorType)
         found = _SLOTS.put(kind, tuple(places))
     if not found:
         return ()
-    mro = kind.__mro__
+    mro = class_mro(kind)
     return tuple(vars(mro[at])[name] for at, name in found)
 
 
@@ -595,7 +597,7 @@ def _items(item: Any, kind: type) -> list:
     method the class may define."""
     if issubclass(kind, dict):
         return [*dict.keys(item), *dict.values(item)]
-    base = next(base for base in kind.__mro__ if base in _BUILTIN_CONTAINERS)
+    base = next(base for base in class_mro(kind) if base in _BUILTIN_CONTAINERS)
     return list(base.__iter__(item))
 
 
@@ -605,7 +607,7 @@ def _reduced(item: Any, kind: type) -> list:
     array holds its items only with object dtype (otherwise its bytes, which
     a copy may read through a view, so its base); reduced, an array that is
     not contiguous would be copied."""
-    if kind.__name__ == "ndarray" and kind.__module__ == "numpy":
+    if class_name(kind) == "ndarray" and class_module(kind) == "numpy":
         if not item.dtype.hasobject:
             return [] if item.base is None else [item.base]
     try:

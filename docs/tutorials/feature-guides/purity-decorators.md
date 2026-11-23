@@ -15,7 +15,7 @@ that reading where you know better:
 | `@cash.stateful` | a helper whose side effect matters | Warns about every call to it; `strict=True` raises |
 | `cash.opaque` | a class passed as an argument | Its code is left out of the key |
 
-<!-- claim: cash/analysis/helper_walk.py:HelperWalk._queue_helper @ca691061 -->
+<!-- claim: cash/analysis/helper_walk.py:HelperWalk._queue_helper @2eee7c5d -->
 `@cash.pure` and `@cash.stateful` change what cash reports, not what it keys. A
 marked helper's code is part of the key of every cached function that calls it,
 as an unmarked helper's is, so editing it recomputes them.
@@ -112,7 +112,7 @@ cash.stateful(pd.DataFrame.to_sql)   # writes to a database
 
 ## `cash.opaque`: leave a class out of the key
 
-<!-- claim: cash/__init__.py:opaque @f07932e6, cash/decorator/arg_hashing.py:is_opaque @d777803e -->
+<!-- claim: cash/__init__.py:opaque @f07932e6, cash/decorator/arg_hashing.py:is_opaque @1cc8d641 -->
 A class or function of yours passed as an argument is keyed by its code, so an
 edit to it recomputes the call. For a class whose code does not affect the
 result (a marker type, a vendored class that changes for unrelated reasons),

@@ -50,6 +50,7 @@ from typing import Any
 from ._active import active_config
 from ._clock import perf_counter as _perf_counter
 from ._memo import REMOTE_URLS, LruMemo
+from ._type_memo import class_name
 from .data_source import DataSource
 from .diagnostics import warn_diagnostic
 from .exceptions import CashCacheIneffectiveWarning, DependencyNotFoundError
@@ -631,7 +632,7 @@ class RemoteFileDataSource(DataSource):
 
     def _warn_failure(self, exc: BaseException) -> None:
         """Warn once per URL and failure kind that freshness went unverified."""
-        ledger_key = f"{self.url}|{type(exc).__name__}"
+        ledger_key = f"{self.url}|{class_name(type(exc))}"
         if not REMOTE_LEDGER.first_time(REMOTE_LEDGER.warned_failures, ledger_key):
             logger.debug("[REMOTE] %s still unresolvable: %s", self.url, exc)
             return
@@ -639,7 +640,7 @@ class RemoteFileDataSource(DataSource):
             CashCacheIneffectiveWarning,
             "REMOTE-STATE-UNREADABLE",
             f"cash could not read the state of {self.url!r} to check whether the "
-            f"cached result is still fresh ({type(exc).__name__}: {exc}), so the "
+            f"cached result is still fresh ({class_name(type(exc))}: {exc}), so the "
             f"call recomputes rather than risk serving a stale result.",
             "restore the access the exception names -- credentials, network, "
             "permissions -- and caching resumes on its own; nothing needs "

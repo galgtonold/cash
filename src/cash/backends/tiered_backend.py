@@ -8,6 +8,7 @@ import time
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
+from .._type_memo import class_name
 from ..sizing import memory_footprint, pickled_size_estimate
 from . import chunk_store, memory_backend, set_order, write_cost
 from ._base import MEASURED_ROUND_TRIP, CacheBackend, MetadataDict, entry_expired, store_seconds
@@ -193,7 +194,7 @@ class TieredBackend(CacheBackend):
             except Exception as e:  # noqa: BLE001 — best-effort cleanup
                 logger.warning(
                     "Shutdown failed for backend %s: %s",
-                    type(backend).__name__,
+                    class_name(type(backend)),
                     e,
                 )
 
@@ -325,7 +326,7 @@ class TieredBackend(CacheBackend):
             try:
                 faster.clear()
             except Exception:  # a read must not fail over a stale RAM tier
-                logger.debug("could not drop %s after a clear", type(faster).__name__, exc_info=True)
+                logger.debug("could not drop %s after a clear", class_name(type(faster)), exc_info=True)
 
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         self._drop_ram_if_cleared()
@@ -339,7 +340,7 @@ class TieredBackend(CacheBackend):
                 # As with a write: one tier down (a server unreachable, a
                 # broken entry) must not fail the caller's program while the
                 # value can still come from another tier or be recomputed.
-                logger.warning("Failed to read key '%s' from tier %d (%s): %s", key, i, type(backend).__name__, e)
+                logger.warning("Failed to read key '%s' from tier %d (%s): %s", key, i, class_name(type(backend)), e)
                 continue
             # Key-presence test: metadata is None when the child backend
             # reports "key absent" (per its API contract). A non-None
@@ -352,7 +353,7 @@ class TieredBackend(CacheBackend):
                 try:
                     backend.delete(key)
                 except Exception:  # an expired copy is not served either way
-                    logger.debug("Could not drop expired %r from %s", key, type(backend).__name__, exc_info=True)
+                    logger.debug("Could not drop expired %r from %s", key, class_name(type(backend)), exc_info=True)
                 continue
             if metadata is not None and i > 0:
                 restore_s = time.perf_counter() - started
@@ -379,7 +380,7 @@ class TieredBackend(CacheBackend):
                     try:
                         backend.delete(key)
                     except Exception:  # the next read judges it again
-                        logger.debug("Could not drop slow %r from %s", key, type(backend).__name__, exc_info=True)
+                        logger.debug("Could not drop slow %r from %s", key, class_name(type(backend)), exc_info=True)
             if metadata is not None:
                 # Read-Repair / Promotion to faster tiers
                 # If found in Tier 2 (File), promote to Tier 1 (Memory)
@@ -588,7 +589,7 @@ class TieredBackend(CacheBackend):
                 else:
                     logger.debug(
                         "[TIERED] Skipping %s for key %r: size %d > cap %d",
-                        type(backend).__name__,
+                        class_name(type(backend)),
                         key,
                         true_size or cap_size,
                         cap,
@@ -612,11 +613,11 @@ class TieredBackend(CacheBackend):
                     backend.set(key, value, metadata, serializer)
                 stored_destinations.append(backend.source_label)
             except Exception as e:  # noqa: BLE001 - backend errors must not propagate
-                logger.warning("[TIERED] Failed to write to backend %s: %s", type(backend).__name__, e)
+                logger.warning("[TIERED] Failed to write to backend %s: %s", class_name(type(backend)), e)
                 # And on the entry's metadata, which is how the caller hears
                 # about it (STORE-FAILED, cache_info()['warnings']), as it
                 # would from a bare FileBackend.
-                errors.append(f"{type(backend).__name__}: {type(e).__name__}: {e}")
+                errors.append(f"{class_name(type(backend))}: {class_name(type(e))}: {e}")
         return _TierWrites(stored_destinations, size_refused, refused_size, refusing_caps, errors)
 
     def persist_from_memory(self, key: str, rebuild_seconds: float) -> bool:
@@ -807,7 +808,7 @@ class TieredBackend(CacheBackend):
                 # And on the entry's metadata, so the caller hears it: the RAM tier
                 # refuses a value it cannot copy, and nothing else would say why the
                 # call recomputes every time.
-                store_errors.append(f"{type(self.backends[0]).__name__}: {type(e).__name__}: {e}")
+                store_errors.append(f"{type(self.backends[0]).__name__}: {class_name(type(e))}: {e}")
                 if would_write_a_file(e):
                     writes_a_file.append(True)
 

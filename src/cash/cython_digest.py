@@ -90,7 +90,8 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
-from ._user_attrs import module_file
+from ._type_memo import class_module, class_name
+from ._user_attrs import module_file, plain_getattr
 from .tracking.tracker_context import untracked
 
 __all__ = ["canonical_build_config", "cimported_binaries_digest", "cython_function_digest"]
@@ -344,20 +345,20 @@ _LOCK = threading.RLock()
 def is_cyfunction(fn: object) -> bool:
     """Is *fn* a function Cython compiled?"""
     kind = type(fn)
-    return kind.__name__ in _CYFUNCTION_TYPES and str(getattr(kind, "__module__", "")).startswith("_cython_")
+    return class_name(kind) in _CYFUNCTION_TYPES and str(plain_getattr(kind, "__module__", "")).startswith("_cython_")
 
 
 def cython_function_digest(fn: object) -> str | None:
     """The digest of what *fn*, a Cython function of a user's built extension,
     can reach in its ``.pyx`` (see the module docstring), or ``None`` when that
     cannot be trusted and the whole built file must stand for it. Never raises."""
-    fn = getattr(fn, "__func__", fn) if isinstance(fn, types.MethodType) else fn
+    fn = plain_getattr(fn, "__func__", fn) if isinstance(fn, types.MethodType) else fn
     if not is_cyfunction(fn):
         return None
-    code = getattr(fn, "__code__", None)
+    code = plain_getattr(fn, "__code__", None)
     if not isinstance(code, types.CodeType) or not code.co_filename.lower().endswith(".pyx"):
         return None
-    module = sys.modules.get(getattr(fn, "__module__", None) or "")
+    module = sys.modules.get(plain_getattr(fn, "__module__", None) or "")
     binary = module_file(module)
     if module is None or not isinstance(binary, str):
         return None
@@ -367,7 +368,7 @@ def cython_function_digest(fn: object) -> str | None:
         analysis = _analysis_of(module, binary, code.co_filename)
         if analysis is None:
             return None
-        qualname = str(getattr(fn, "__qualname__", "") or "")
+        qualname = str(plain_getattr(fn, "__qualname__", "") or "")
         key = f"{code.co_filename}:{code.co_firstlineno}:{qualname}"
         if key not in analysis.digests:
             try:
@@ -390,14 +391,14 @@ def cimported_binaries_digest(fn: object) -> str | None:
     user-built module loaded from the caller's package folder stands in.
     Never raises.
     """
-    fn = getattr(fn, "__func__", fn) if isinstance(fn, types.MethodType) else fn
+    fn = plain_getattr(fn, "__func__", fn) if isinstance(fn, types.MethodType) else fn
     if not is_cyfunction(fn):
         return None
-    module = sys.modules.get(getattr(fn, "__module__", None) or "")
+    module = sys.modules.get(plain_getattr(fn, "__module__", None) or "")
     binary = module_file(module)
     if module is None or not isinstance(binary, str):
         return None
-    code = getattr(fn, "__code__", None)
+    code = plain_getattr(fn, "__code__", None)
     co_filename = code.co_filename if isinstance(code, types.CodeType) else ""
     with _LOCK:
         try:
@@ -694,8 +695,8 @@ def _function_digest(analysis: _Module, fn: object, code: types.CodeType, qualna
     reached, names = _reach(analysis, own, ())
     parts = [
         "cash-cython-function-v2",
-        type(fn).__module__,
-        str(getattr(fn, "__module__", "")),
+        class_module(type(fn)),
+        str(plain_getattr(fn, "__module__", "")),
         qualname,
         analysis.header_digest,
         analysis.files_digest,
@@ -1087,7 +1088,7 @@ def _parse(module_name: str, pyx: str) -> Any:
 
 
 def _top_level(node: Any) -> Iterator[Any]:
-    if type(node).__name__ == "StatListNode":
+    if class_name(type(node)) == "StatListNode":
         for stat in node.stats:
             yield from _top_level(stat)
     else:
@@ -1223,7 +1224,7 @@ def _blocks(stats: list[Any], tokens: dict[str, list[tuple[str, str, int]]]) -> 
     starts = {path: _logical_starts(toks) for path, toks in tokens.items()}
     blocks = []
     for stat in stats:
-        if type(stat).__name__ not in _BLOCK_NODES:
+        if class_name(type(stat)) not in _BLOCK_NODES:
             continue
         path = _node_path(stat)
         line = stat.pos[1]
@@ -1240,7 +1241,7 @@ def _blocks(stats: list[Any], tokens: dict[str, list[tuple[str, str, int]]]) -> 
 
 
 def _defined_names(stat: Any) -> frozenset[str]:
-    kind = type(stat).__name__
+    kind = class_name(type(stat))
     if kind == "CClassDefNode":
         names = {stat.class_name, getattr(stat, "as_name", None)}
     elif kind == "CFuncDefNode":
@@ -1383,7 +1384,7 @@ def _cimports(tree: Any) -> Iterator[tuple[str, int]]:
     stack = [tree]
     while stack:
         node = stack.pop()
-        kind = type(node).__name__
+        kind = class_name(type(node))
         if kind == "CImportStatNode":
             yield node.module_name, 0
         elif kind == "FromCImportStatNode":
@@ -1519,9 +1520,9 @@ def _module_functions(module: types.ModuleType) -> Iterator[Any]:
     for value in list(vars(module).values()):
         if is_cyfunction(value):
             yield value
-        elif isinstance(value, type) and getattr(value, "__module__", None) == module.__name__:
+        elif isinstance(value, type) and plain_getattr(value, "__module__", None) == module.__name__:
             for member in list(vars(value).values()):
-                member = getattr(member, "__func__", member)
+                member = plain_getattr(member, "__func__", member)
                 if is_cyfunction(member):
                     yield member
 
@@ -1532,11 +1533,11 @@ def _check_built_from(analysis: _Module, module: types.ModuleType) -> None:
     and rebuilt elsewhere, or never rebuilt, does not match."""
     pyx_name = os.path.basename(os.path.normcase(analysis.pyx))
     for fn in _module_functions(module):
-        code = getattr(fn, "__code__", None)
+        code = plain_getattr(fn, "__code__", None)
         if not isinstance(code, types.CodeType):
             continue
         if os.path.basename(os.path.normcase(code.co_filename)) != pyx_name and _code_path(analysis, code) is None:
             continue
-        qualname = str(getattr(fn, "__qualname__", "") or "")
+        qualname = str(plain_getattr(fn, "__qualname__", "") or "")
         if _own_blocks(analysis, code, qualname) is None:
             raise _Fallback(f"{qualname} is not where the binary says")

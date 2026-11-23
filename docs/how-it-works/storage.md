@@ -96,7 +96,7 @@ less; [the CLI page](../cli.md) has every option.
 
 ## The tiers
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @a3ccd8f3, cash/backends/memory_backend.py:_cheap_to_keep @f12d65f9 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @120d0a9b, cash/backends/memory_backend.py:_cheap_to_keep @ef9b9285 -->
 | Tier | Where | Survives a restart? |
 |------|-------|---------------------|
 | Memory | RAM | No |
@@ -113,7 +113,7 @@ would have to copy 64 MB or more goes to the disk tier alone when it is
 stored, and is not kept in memory when it is read either; when no disk tier
 takes it, memory keeps it as usual.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @94031dc3, cash/backends/frame_sharing.py:_freeze @8890809b, cash/backends/frame_sharing.py:own_parts @bd7577a7, cash/backends/tiered_backend.py:TieredBackend.get @a3ccd8f3, cash/backends/memory_backend.py:_copy_polars @d34b28a6 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @4d56c7f5, cash/backends/frame_sharing.py:_freeze @d40098df, cash/backends/frame_sharing.py:own_parts @bd7577a7, cash/backends/tiered_backend.py:TieredBackend.get @120d0a9b, cash/backends/memory_backend.py:_copy_polars @d34b28a6 -->
 The memory tier keeps a copy of each value that only it holds, so nothing you
 do to a value you were handed reaches the stored one, or the other way round.
 Under pandas copy-on-write (pandas 3, or `pd.options.mode.copy_on_write = True`
@@ -166,7 +166,7 @@ The Python objects in an `Object` column are copied.
 tiers; see
 [choosing a backend](../tutorials/feature-guides/choosing-a-backend.md).
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @a3ccd8f3, cash/backends/_base.py:effective_ttl @c0f1dab8 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @120d0a9b, cash/backends/_base.py:effective_ttl @c0f1dab8 -->
 An entry's ttl is checked on every tier's copy as it is read, so the memory
 copy expires with the disk copy, and a backend used on its own applies the
 same rule. The ttl is the decorator's `ttl=`, or else the shorter of the ttl
@@ -193,7 +193,7 @@ the entry was written with and the tier's current `default_ttl`.
     `%cash_persist on` writes it anyway. The [cost model](../cost-model.md)
     explains the prediction and every setting.
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @34e7db12 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @efe3040d -->
 Each tier turns down a single value too large for its cap, so a 20 MB frame
 can be stored in memory and on disk while skipping a Redis tier limited to
 10 MB. When a value was meant for disk but every disk tier refused it, cash
@@ -280,7 +280,7 @@ does. cash waits for a write only when something needs it on disk:
 A process this one did not start, reading the same folder at the same time,
 finds a result once its write has finished, and computes it until then.
 
-<!-- claim: cash/backends/memory_backend.py:_snapshot @b77f0d22, cash/backends/tiered_backend.py:TieredBackend._stored_payload @92ed63c1, cash/backends/memory_backend.py:InMemoryBackend.set @6a1fb648, cash/notebook/call_refs.py:digest_and_size @c51197c8, cash/kept_state.py:stored_views @8fe0d16f, cash/stored_pickle.py:keeping @d7836c52, cash/notebook/statement/store.py:_nestable @c08c0b90, cash/stored_pickle.py:object_digest @3b287f5e, cash/notebook/statement/processor.py:StatementProcessor._keeping_outputs @0374b627 -->
+<!-- claim: cash/backends/memory_backend.py:_snapshot @189a3253, cash/backends/tiered_backend.py:TieredBackend._stored_payload @92ed63c1, cash/backends/memory_backend.py:InMemoryBackend.set @6a1fb648, cash/notebook/call_refs.py:digest_and_size @c51197c8, cash/kept_state.py:stored_views @8fe0d16f, cash/stored_pickle.py:keeping @d7836c52, cash/notebook/statement/store.py:_nestable @c08c0b90, cash/stored_pickle.py:object_digest @3b287f5e, cash/notebook/statement/processor.py:StatementProcessor._keeping_outputs @0374b627 -->
 An object of a class of its own (a fitted model, a graph) is kept in memory
 as the bytes its disk entry holds, made when it is stored: its arrays are
 copied out of it then, so a later change to your object, by Python or by
@@ -334,7 +334,7 @@ killed process was still writing is missing, and is computed again.
 
 ## Turning objects into bytes
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @c5fd2627, cash/backends/serialization.py:PickleSerializer.serialize @d8e20083 -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @9ae74e54, cash/backends/serialization.py:PickleSerializer.serialize @d8e20083 -->
 Every result is stored with `pickle` (protocol 5), pandas DataFrames
 included, so a hit hands back the same frame: its class, index, dtypes, cell
 types, `attrs` and `flags`. Pickle is several times faster than Parquet to
@@ -343,7 +343,7 @@ write and read. Parquet files are smaller for columns with few distinct values
 matters more than speed, the [`compress`](../getting-started/configuration.md#all-settings)
 setting gets most of that back.
 
-<!-- claim: cash/backends/serialization.py:_reduce_arrow_array @2c76f35c, cash/backends/serialization.py:_compact @79a515ab -->
+<!-- claim: cash/backends/serialization.py:_reduce_arrow_array @834e4921, cash/backends/serialization.py:_compact @79a515ab -->
 A pandas column backed by Arrow (pandas' `str` columns, `ArrowDtype`) is
 stored as its Arrow chunks, written as they are: pandas' own pickle first
 joins a column's chunks into one copy. A short slice of a long column is
@@ -363,7 +363,7 @@ before: a subclass of `datetime`, items in two zones or in a zone other than
 item (a `NaN` for missing), Timestamps of two units, or fewer than 1,024
 items.
 
-<!-- claim: cash/backends/text_columns.py:encode @738da182, cash/backends/text_columns.py:encode_column @e0182210, cash/backends/serialization.py:_reduce_text_for_write @72acdb39, cash/backends/serialization.py:reduce_text_objects @840b0ff4 -->
+<!-- claim: cash/backends/text_columns.py:encode @738da182, cash/backends/text_columns.py:encode_column @e0182210, cash/backends/serialization.py:_reduce_text_for_write @670ff542, cash/backends/serialization.py:reduce_text_objects @840b0ff4 -->
 A pandas column of Python strings (pandas 3's `str` columns without
 `pyarrow`, `string[python]`, or an object column holding only strings and
 missing values) is stored as its strings joined in one UTF-8 buffer, with

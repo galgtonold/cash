@@ -110,6 +110,8 @@ from cash.tracking.randomness import (
 )
 from cash.value_types import INTERPRETER_MANAGED_GLOBALS
 
+from .._type_memo import class_dict, class_name
+
 logger = logging.getLogger(__name__)
 
 __all__ = ["call_site_is_cacheable", "CallCache", "CallUnit"]
@@ -929,7 +931,7 @@ class CallUnit:
         tier a statement's value is restored from."""
         try:
             kind = restore_kind(attribute_or(self._cash, "backend", None))
-            return estimated_restore_time(type(value).__name__, estimate_object_size(value), kind)
+            return estimated_restore_time(class_name(type(value)), estimate_object_size(value), kind)
         except Exception:  # noqa: BLE001 - an estimate is never worth an error
             return 0.0
 
@@ -1873,7 +1875,7 @@ def _watched_values(watched: tuple, fingerprints: Any) -> tuple:
             # in the context, which is what it is read by.
             value = ("context variable", id(value.get(_ABSENT)))
         elif instance_of(value, type):
-            attrs = dict(vars(value))
+            attrs = dict(class_dict(value))
             value = (
                 tuple((key, id(item)) for key, item in attrs.items()),
                 {key: item for key, item in attrs.items() if not key.startswith("__") and not callable(item)},

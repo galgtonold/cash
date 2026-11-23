@@ -23,6 +23,8 @@ import sys
 from datetime import datetime
 from typing import Any
 
+from ._type_memo import class_module
+
 __all__ = ["JsonFormatter", "application_handlers", "disable", "enable", "enable_console", "follow", "setup_logging"]
 
 #: Handlers cash added to the ``cash`` logger; everything else is the application's.
@@ -66,7 +68,7 @@ def application_handlers(logger: logging.Logger) -> list[logging.Handler]:
         for handler in current.handlers:
             if handler in _OWN_HANDLERS or isinstance(handler, logging.NullHandler):
                 continue
-            if (type(handler).__module__ or "").startswith("_pytest"):
+            if (class_module(type(handler)) or "").startswith("_pytest"):
                 continue
             found.append(handler)
         if not current.propagate:

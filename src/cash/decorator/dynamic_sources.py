@@ -44,6 +44,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .._memo import DYNAMIC_RESOLUTION_BYTES, DYNAMIC_RESOLUTIONS, DYNAMIC_SOURCE_ENTRIES, LruMemo
+from .._user_attrs import named_attr
 from ..data_source import DataSource, state_token_of
 
 logger = logging.getLogger(__name__)
@@ -145,7 +146,7 @@ def _resolution_by_reference(
     module_name, qualname = owner
     target: Any = sys.modules[module_name]
     for part in qualname.split("."):
-        target = getattr(target, part)
+        target = named_attr(target, part)
     resolvers = getattr(target, "_cash_dynamic_depends_on", None)
     if not resolvers:
         raise LookupError(f"{module_name}.{qualname} declares no dynamic_depends_on")

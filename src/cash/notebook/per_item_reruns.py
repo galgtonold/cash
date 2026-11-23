@@ -37,6 +37,8 @@ from cash.exceptions import CashCacheIneffectiveWarning
 from cash.notebook.file_round_trips import quote
 from cash.row_blocks import HashBudgetSpent, RowBlocks, compare, describe_ranges, fingerprint, row_count
 
+from .._type_memo import class_module, class_name
+
 logger = logging.getLogger(__name__)
 
 __all__ = ["CODE", "HASH_SHARE", "MIN_COST_S", "MIN_UNCHANGED", "STEP_SHARE", "PerItemReruns"]
@@ -83,7 +85,9 @@ def _plain(value: Any) -> bool:
 
 def _numpy_scalar(value: Any) -> bool:
     """A numpy number (``grid_s.index[0]`` unpacks to ``np.int64``)."""
-    return type(value).__module__ == "numpy" and attribute_or(value, "shape", None) == () and value.dtype.kind in "biuf"
+    return (
+        class_module(type(value)) == "numpy" and attribute_or(value, "shape", None) == () and value.dtype.kind in "biuf"
+    )
 
 
 def _others_digest(lineages: Mapping[str, str], values: Mapping[str, Any], fingerprinted: Iterable[str]) -> str:
@@ -97,7 +101,7 @@ def _others_digest(lineages: Mapping[str, str], values: Mapping[str, Any], finge
             continue
         value = values.get(name)
         if name in values and _plain(value):
-            parts.append(f"{name}:{type(value).__name__}:{value!r}")
+            parts.append(f"{name}:{class_name(type(value))}:{value!r}")
         else:
             parts.append(f"{name}={lineages.get(name)}")
     return hashlib.sha256("\0".join(parts).encode()).hexdigest()[:16]

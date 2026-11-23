@@ -38,7 +38,7 @@ another object's entry. See [Custom hashers](tutorials/feature-guides/custom-has
 
 ## A table changed past pandas
 
-<!-- claim: cash/decorator/arg_hashing.py:watch_array_handles @f229a7a7, cash/decorator/arg_hashing.py:_watch_callback_handouts @0bf3e511 -->
+<!-- claim: cash/decorator/arg_hashing.py:watch_array_handles @1742c211, cash/decorator/arg_hashing.py:_watch_callback_handouts @52060a2e -->
 Under pandas copy-on-write, a table passed to a cached function again is not
 hashed again while pandas has given it no new data: pandas copies a column
 before it writes it. A write that goes past pandas is seen as long as it goes
@@ -100,7 +100,7 @@ fit([1, 2, 3])   # _fit hits: log and verbose are not in its key
 The wrapper's own work runs on every call, so the log line appears on a hit
 too, which a logger inside the cached body would not do.
 
-<!-- claim: cash/core.py:Cash.register_hasher @f8a61573 -->
+<!-- claim: cash/core.py:Cash.register_hasher @0fc93c81 -->
 For an argument **type** that never affects a result, a hasher that returns a
 constant does the same without a wrapper. Every logger then counts as the same
 value:
@@ -155,7 +155,7 @@ with `@cash.opaque`; see [Purity markers](tutorials/feature-guides/purity-decora
 
 ## Dispatch tables and strategy registries {#dispatch-tables}
 
-<!-- claim: cash/analysis/purity_visitor.py:PurityVisitor._table_is_reachable_from_the_key @9018bbca, cash/decorator/global_values.py:GlobalValues.data_callable_identity @76331cf7 -->
+<!-- claim: cash/analysis/purity_visitor.py:PurityVisitor._table_is_reachable_from_the_key @9018bbca, cash/decorator/global_values.py:GlobalValues.data_callable_identity @daee15be -->
 A cached function that picks a function from a table caches correctly. The
 table can be a dict of functions, a registry a `@register` decorator fills, a
 dict of classes, or a `.get()` on any of them, and it can live at module level,
@@ -309,7 +309,7 @@ scikit-learn `n_jobs=`). Each task then runs under a tracker of its own in the
 worker: about 20 µs a task, which only shows for tiny tasks sent one at a time
 (`pool.imap` with the default `chunksize=1`).
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.track_scanned_files @1e54b5f0 -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.track_scanned_files @afeb16b6 -->
 A polars `LazyFrame` argument from `scan_csv` or `scan_parquet` names its file
 by path, so cash records the files its plan scans as reads of the call, as if
 the body had opened them: an edited file recomputes, and so does a new file
@@ -355,7 +355,7 @@ paths from the project root or pass absolute paths.
 - A result that can't be pickled is not stored
   ([`STORE-FAILED`](warnings.md#store-failed)), unless the function is
   `frozen=True`.
-<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_left @c293daef, cash/decorator/runtime.py:CallRunner._arguments_to_write @57069cf7, cash/rewrite_in_place.py:refusal @cece1b9e -->
+<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_left @c293daef, cash/decorator/runtime.py:CallRunner._arguments_to_write @57069cf7, cash/rewrite_in_place.py:refusal @abbcccec -->
 <!-- claim: cash/decorator/runtime.py:CallRunner.arguments_before @50acf221, cash/decorator/arg_hashing.py:ContentKeyed.covers @4d5faf1a -->
 - A call that changed its argument in place is stored with the state it left
   the argument in when the argument is a NumPy array (not of objects), a
@@ -399,13 +399,13 @@ paths from the project root or pass absolute paths.
   argument (a list of lists, a frame given a new column, an object of your
   class changed other than as the next item says) are not stored, so they
   run every time. Return a modified copy instead (`rows = sorted(rows)`).
-  <!-- claim: cash/decorator/store.py:ResultStore.restore_identity @2e52815d -->
+  <!-- claim: cash/decorator/store.py:ResultStore.restore_identity @255cf26e -->
   A call that fills its `out=` argument and returns it (a body ending
   `np.multiply(x, 2, out=out); return out`) is stored the same way: a hit
   writes the stored state into the `out` you pass and returns that very
   object, so `result is out` holds
   ([`CACHE-ARG-WRITTEN-BACK`](warnings.md#cache-arg-written-back)).
-<!-- claim: cash/decorator/attribute_replay.py:AttrVerdict.of @5152391a, cash/rewrite_in_place.py:attribute_refusal @a163557b, cash/rewrite_in_place.py:AttrState.replay @0e4c9439, cash/decorator/attribute_replay.py:find @6c04b2c5 -->
+<!-- claim: cash/decorator/attribute_replay.py:AttrVerdict.of @5152391a, cash/rewrite_in_place.py:attribute_refusal @0ad90168, cash/rewrite_in_place.py:AttrState.replay @0e4c9439, cash/decorator/attribute_replay.py:find @618f676b -->
 - A call that only binds, rebinds or deletes **attributes of an object it
   was handed** (`est.fit(X)` setting `self.coef_` and returning `self`, a
   resampler's `fit_resample` setting `self.sampling_strategy_`, or a
@@ -448,7 +448,7 @@ paths from the project root or pass absolute paths.
   cannot replay it. Sharing cash cannot see stays a limit: an object
   written in C that holds references without telling the garbage collector
   is not looked into.
-<!-- claim: cash/decorator/attribute_replay.py:also_changed @0c99ff5f, cash/decorator/runtime.py:CallRunner._source_changes @7dad10ee -->
+<!-- claim: cash/decorator/attribute_replay.py:also_changed @0c99ff5f, cash/decorator/runtime.py:CallRunner._source_changes @6c02f310 -->
 - A call that **writes into a container an argument holds** is not stored,
   and runs every time: a dict, list or array the object keeps as an
   attribute (`data.uns["total"] = ...`, `self.history.append(x)`, a new
@@ -515,7 +515,7 @@ See [Async functions](tutorials/feature-guides/async-caching.md).
 
 ## Edits inside a running process
 
-<!-- claim: cash/loaded_code.py:code_objects_of @906e9b7c, cash/decorator/function_identity.py:warn_source_changed_since_load @66c0eeb3 -->
+<!-- claim: cash/loaded_code.py:code_objects_of @dd9b7b3c, cash/decorator/function_identity.py:warn_source_changed_since_load @767f9eca -->
 cash keys a function by the code that is running. An edit saved while a
 long-running process works is seen by the next process, or in this one once
 the module is reloaded (`importlib.reload`, IPython's `%autoreload`): the

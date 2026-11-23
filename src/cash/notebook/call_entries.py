@@ -45,6 +45,7 @@ from cash.sizing import estimate_object_size, pickled_size_estimate
 from cash.tracking.env_reads import environment_unchanged
 from cash.tracking.file_dep_snapshot import attach_code_relative, snapshot_dependencies, snapshot_is_fresh
 
+from .._type_memo import class_name
 from ..backends.memory_backend import release_premade
 from ..cost_model import estimated_restore_time
 
@@ -237,7 +238,7 @@ class CallEntries:
         """
         try:
             size = estimate_object_size(result)
-            predicted = estimated_restore_time(type(result).__name__, size, "disk")
+            predicted = estimated_restore_time(class_name(type(result)), size, "disk")
         except Exception:  # noqa: BLE001 - no prediction: store, as before
             return True
         return predicted <= max(self._MIN_HIT_LOSS_S, 0.8 * elapsed)

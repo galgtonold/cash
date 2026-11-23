@@ -49,6 +49,8 @@ from cash.content_hashers import hash_numpy
 from cash.notebook.borrowed_memory import MemoryHome, data_arrays, memory_home, rebuild_view
 from cash.notebook.shared_objects import check_walk_budget
 
+from .._type_memo import class_dict, class_flags, class_mro, class_name
+
 __all__ = [
     "ARRAY_CONTENT",
     "MEMORY_HOME",
@@ -388,13 +390,13 @@ def _slot_names(cls: type) -> list[str]:
     """The slots the classes of *cls* declare, as default pickling saves
     them (``copyreg._slotnames``, without ``__dict__`` and ``__weakref__``)."""
     names: list[str] = []
-    for klass in cls.__mro__:
-        slots = klass.__dict__.get("__slots__", ())
+    for klass in class_mro(cls):
+        slots = class_dict(klass).get("__slots__", ())
         for slot in (slots,) if isinstance(slots, str) else slots:
             if slot in ("__dict__", "__weakref__"):
                 continue
             if slot.startswith("__") and not slot.endswith("__"):
-                slot = f"_{klass.__name__.lstrip('_')}{slot}"
+                slot = f"_{class_name(klass).lstrip('_')}{slot}"
             names.append(slot)
     return names
 
@@ -413,26 +415,26 @@ def _pickles_by_default(cls: type, exempt: Mapping[str, Any], keyed: bool) -> bo
     that defines them), and no ``__slotnames__`` other than its slots;
     ``__eq__`` and ``__hash__`` not when *keyed*. And *cls* has no
     ``copyreg.dispatch_table`` entry."""
-    if not cls.__flags__ & _HEAP_TYPE or cls in copyreg.dispatch_table:
+    if not class_flags(cls) & _HEAP_TYPE or cls in copyreg.dispatch_table:
         return False
-    for klass in cls.__mro__:
+    for klass in class_mro(cls):
         if klass in _DEFAULT_BASES:
             continue
-        if not klass.__flags__ & _HEAP_TYPE or type(klass) not in _METACLASSES:
+        if not class_flags(klass) & _HEAP_TYPE or type(klass) not in _METACLASSES:
             return False  # over a class written in C, or made by another metaclass
-        base = next(b for b in klass.__mro__ if b in _DEFAULT_BASES)
-        for name, defined in klass.__dict__.items():
+        base = next(b for b in class_mro(klass) if b in _DEFAULT_BASES)
+        for name, defined in class_dict(klass).items():
             if exempt.get(name) is defined:
                 continue
             if name in _PICKLING or (name in ("__eq__", "__hash__") and keyed):
                 return False
             if name not in _CLASS_DICT and any(name in b.__dict__ for b in base.__mro__):
                 return False
-        if "__slotnames__" in klass.__dict__ and list(klass.__dict__["__slotnames__"]) != _slot_names(klass):
+        if "__slotnames__" in class_dict(klass) and list(class_dict(klass)["__slotnames__"]) != _slot_names(klass):
             return False
     for slot in _slot_names(cls):
         # Set through ``setattr``: it must reach the slot's own descriptor.
-        found = next((klass.__dict__[slot] for klass in cls.__mro__ if slot in klass.__dict__), None)
+        found = next((class_dict(klass)[slot] for klass in class_mro(cls) if slot in class_dict(klass)), None)
         if type(found) is not types.MemberDescriptorType:
             return False
     return True

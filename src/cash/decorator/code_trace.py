@@ -88,7 +88,8 @@ from .._own_work import inside as own_work_inside
 from .._own_work import left_out as own_work_left_out
 from .._own_work import rearm_with as own_work_rearm_with
 from .._paths import is_pseudo_filename
-from .._user_attrs import NOT_HELD, held_attribute, instance_of, module_file
+from .._type_memo import class_dict, class_module, class_mro, class_name, class_qualname
+from .._user_attrs import NOT_HELD, held_attribute, instance_of, module_file, plain_getattr
 from ..analysis.purity_flow import LOG_METHODS as _LOG_METHOD_NAMES
 from ..analysis.purity_report import (
     ISSUE_AMBIENT_READ,
@@ -1160,7 +1161,9 @@ def _recorder_class() -> type:
                 held = {name: f_locals.get(name) for name in roots}
             except Exception:  # noqa: BLE001 - unreadable locals: nothing followed from them
                 return
-            held = {k: v for k, v in held.items() if isinstance(v, types.ModuleType)}
+            # Not a class: ``isinstance`` would ask it for its ``__class__``,
+            # which a metaclass's hook of the user's answers.
+            held = {k: v for k, v in held.items() if not issubclass(type(v), type) and isinstance(v, types.ModuleType)}
             if held:
                 for unit in units:
                     unit.lib_cells.setdefault(code, held)
@@ -1502,7 +1505,7 @@ def _digest(value: Any) -> str | None:
     from ..install_paths import is_cash_path
     from ..tracking.trace_items import value_digest
 
-    wrapped = getattr(value, "__wrapped__", None) if type(value) is types.FunctionType else None
+    wrapped = plain_getattr(value, "__wrapped__", None) if type(value) is types.FunctionType else None
     if wrapped is not None and is_cash_path(value.__code__.co_filename):
         # A ``@cash.cache`` wrapper: by the function it wraps (its state,
         # when it is served inside the call, is a "cached" item of its own).
@@ -1539,7 +1542,7 @@ def _wrapping_cached_digest(value: Any) -> str | None:
                 return None
             parts.append(f"cached:{state}")
             return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()[:24]
-        nxt = getattr(link, "__wrapped__", None) if type(link) is types.FunctionType else None
+        nxt = plain_getattr(link, "__wrapped__", None) if type(link) is types.FunctionType else None
         if nxt is None:
             return None
         layer = _code_digest(link.__code__, link)
@@ -1566,10 +1569,10 @@ def _type_alias(ns: Mapping[str, Any] | None, module: str, name: str) -> Any:
     *module*, else None."""
     alias = None if ns is None else ns.get(name)
     if (
-        type(alias).__name__ == "TypeAliasType"
-        and type(alias).__module__ == "typing"
-        and getattr(alias, "__name__", None) == name
-        and getattr(alias, "__module__", None) == module
+        class_name(type(alias)) == "TypeAliasType"
+        and class_module(type(alias)) == "typing"
+        and plain_getattr(alias, "__name__", None) == name
+        and plain_getattr(alias, "__module__", None) == module
     ):
         return alias
     return None
@@ -1595,7 +1598,7 @@ def _code_digest(code: types.CodeType, fn: Any) -> str | None:
 
 def _namespace(module: str) -> Mapping[str, Any] | None:
     mod = sys.modules.get(module)
-    ns = getattr(mod, "__dict__", None)
+    ns = plain_getattr(mod, "__dict__", None)
     return ns if isinstance(ns, dict) else None
 
 
@@ -1647,9 +1650,9 @@ def _type_held_digest(module: str, name: str, qualname: str, attr: str) -> str |
         return None
     held = ns[name]
     cls = held if isinstance(held, type) else type(held)
-    for klass in cls.__mro__:
-        if klass.__qualname__ == qualname and attr in vars(klass):
-            return _digest(vars(klass)[attr])
+    for klass in class_mro(cls):
+        if class_qualname(klass) == qualname and attr in class_dict(klass):
+            return _digest(class_dict(klass)[attr])
     return None
 
 
@@ -1683,9 +1686,9 @@ def _holding_class(code: types.CodeType, g: Mapping[str, Any], module: str) -> t
     from ..tracking.trace_items import candidates
 
     for value in list(g.values()):
-        if not isinstance(value, type) or "<locals>" in value.__qualname__:
+        if not isinstance(value, type) or "<locals>" in class_qualname(value):
             continue
-        if value.__module__ != module and _find(value.__module__, value.__qualname__) is not value:
+        if class_module(value) != module and _find(class_module(value), class_qualname(value)) is not value:
             # Defined here and renamed to where it is exported from
             # (``@set_module("pkg")``): kept only where that name finds it.
             continue
@@ -1700,7 +1703,7 @@ def _holding_class(code: types.CodeType, g: Mapping[str, Any], module: str) -> t
 
 
 def _user_class(cls: Any) -> bool:
-    return isinstance(cls, type) and _user_module(sys.modules.get(cls.__module__ or ""))
+    return isinstance(cls, type) and _user_module(sys.modules.get(class_module(cls) or ""))
 
 
 def _classes_digest(cls: type) -> str | None:
@@ -1708,11 +1711,11 @@ def _classes_digest(cls: type) -> str | None:
     from ..tracking.trace_items import remembered_class_digest
 
     parts = []
-    for klass in cls.__mro__:
+    for klass in class_mro(cls):
         if _user_class(klass):
             parts.append(remembered_class_digest(klass))
         else:
-            parts.append(f"{klass.__module__}.{klass.__qualname__}")
+            parts.append(f"{class_module(klass)}.{class_qualname(klass)}")
     return hashlib.blake2b("|".join(parts).encode(), digest_size=12).hexdigest()
 
 
@@ -2018,7 +2021,7 @@ class _Build:
                 )
                 continue
             # The module itself: what it holds, name by name.
-            name = getattr(target, "__name__", None)
+            name = plain_getattr(target, "__name__", None)
             if not isinstance(name, str) or not _user_module(target):
                 continue
             self.add(
@@ -2121,10 +2124,10 @@ class _Build:
 
         classes = list(dict.fromkeys(self.unit.receivers.values()))
         for cls in classes:
-            for klass in cls.__mro__:
+            for klass in class_mro(cls):
                 if not _user_class(klass):
                     continue
-                for attr, value in list(vars(klass).items()):
+                for attr, value in list(class_dict(klass).items()):
                     if not isinstance(attr, str) or attr.startswith("__") or isinstance(value, type):
                         continue
                     if not any(c.__code__ is code for c in candidates(value)):
@@ -2134,8 +2137,8 @@ class _Build:
                         return False
                     module, name = where
                     self.add(
-                        ("type_held", module, name, klass.__qualname__, attr),
-                        _type_held_digest(module, name, klass.__qualname__, attr),
+                        ("type_held", module, name, class_qualname(klass), attr),
+                        _type_held_digest(module, name, class_qualname(klass), attr),
                         f"{code.co_qualname} holds values that cannot be checked",
                     )
                     self.functions.extend(c for c in candidates(value) if c.__code__ is code)
@@ -2145,12 +2148,12 @@ class _Build:
     def _class(self, cls: type, ran: set[str], *, receiver: bool = False) -> None:
         from ..tracking.trace_items import class_surface_digest, remembered_class_digest
 
-        qn = cls.__qualname__
+        qn = class_qualname(cls)
         if "<locals>" in qn:
             if qn.rsplit(".<locals>.", 1)[0] in ran:
                 return
             raise _Unnamed(f"it ran a method of {qn}, a class no name holds")
-        where = _instance_holder(cls, self.holders) if _find(cls.__module__, qn) is not cls else None
+        where = _instance_holder(cls, self.holders) if _find(class_module(cls), qn) is not cls else None
         if where is not None:
             # No name finds it (``type(...)`` built it, as xclim builds each
             # indicator's class): found again through a module global that
@@ -2165,9 +2168,9 @@ class _Build:
             # all its code below.
             surface = class_surface_digest(cls)
             if surface is not None:
-                self.add(("surface", cls.__module__, qn), surface, "")
+                self.add(("surface", class_module(cls), qn), surface, "")
                 return
-        self.add(("class", cls.__module__, qn), remembered_class_digest(cls), "")
+        self.add(("class", class_module(cls), qn), remembered_class_digest(cls), "")
 
     def _lookup(self, kind: str, target: Any, name: str | None) -> None:
         if kind == "import":
@@ -2184,7 +2187,7 @@ class _Build:
             self.add(("import", module), _import_digest(module), f"the module {module} has no file to check")
         else:
             cls = target if isinstance(target, type) else type(target)
-            module, qualname = cls.__module__, cls.__qualname__
+            module, qualname = class_module(cls), class_qualname(cls)
             if "<locals>" in qualname or _find(module, qualname) is not cls:
                 raise _Untraceable(f"it looks up a name on {qualname}, a class no name holds")
             if name is None and not _user_class(cls):
@@ -2800,7 +2803,7 @@ def build(
     except _Untraceable as e:
         return None, str(e)
     except Exception as e:  # noqa: BLE001 - a trace that cannot be built is not stored
-        return None, f"its trace could not be built ({type(e).__name__})"
+        return None, f"its trace could not be built ({class_name(type(e))})"
 
 
 def static_codes(functions: Iterable[Any], reports: Iterable[Any]) -> set[types.CodeType]:
@@ -2810,7 +2813,7 @@ def static_codes(functions: Iterable[Any], reports: Iterable[Any]) -> set[types.
     from ..tracking.trace_items import candidates
 
     out: set[types.CodeType] = set()
-    stack: list[Any] = [getattr(getattr(f, "__func__", f), "__code__", None) for f in functions]
+    stack: list[Any] = [getattr(plain_getattr(f, "__func__", f), "__code__", None) for f in functions]
     for report in reports:
         for _ref, codes in getattr(report, "walked_code", ()) or ():
             stack.extend(codes)
@@ -2844,7 +2847,7 @@ def folded_codes(folded: Any) -> set[types.CodeType] | None:
         # (an attribute bound on a global's object) is judged by the
         # strict check, which a method accepted here would skip.
         out.update(set(codes) & set(code_objects_of(owner, follow_wrapped=False)))
-        for base in owner.__mro__[1:]:
+        for base in class_mro(owner)[1:]:
             if base is not object and is_user_code_object(base):
                 out.update(code_objects_of(base, follow_wrapped=False))
     return out
@@ -2893,7 +2896,7 @@ def verify(
                 return f"{what} changed"
         return None
     except Exception as e:  # noqa: BLE001 - a trace that cannot be checked is not served
-        return f"its trace could not be checked ({type(e).__name__})"
+        return f"its trace could not be checked ({class_name(type(e))})"
 
 
 _UNKNOWN = object()

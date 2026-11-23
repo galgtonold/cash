@@ -31,7 +31,7 @@ big inputs and computes them again; it never serves one install's entry to
 the other. Give every machine that shares a cache (a team's S3 or Redis
 backend, CI and laptops) the same install to keep their hits.
 
-<!-- claim: cash/_native.py:_load @6f4f7018, cash/__main__.py:cmd_info @1442fa70, cash/notebook/ipython/magics.py:CashMagics.cash_status @17cd0ee5, cash/backends/set_order.py:restore @d4e04f7d -->
+<!-- claim: cash/_native.py:_load @0ee246a3, cash/__main__.py:cmd_info @1442fa70, cash/notebook/ipython/magics.py:CashMagics.cash_status @17cd0ee5, cash/backends/set_order.py:restore @d4e04f7d -->
 ## The C fast path
 
 On CPython 3.12 or newer, pip installs a wheel with a small C extension for

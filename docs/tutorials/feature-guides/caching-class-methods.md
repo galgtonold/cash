@@ -20,7 +20,7 @@ The fix for all three is to tell cash what identifies an instance.
 
 ## Give the class a `__cash_key__`
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.cash_key_hash @839a8823 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.cash_key_hash @27ffc2c9 -->
 ```python
 from cash import Cash
 
@@ -78,7 +78,7 @@ buckets, too weak for a cache key, and it is often identity-based.
 
 ## A class you don't own
 
-<!-- claim: cash/core.py:Cash.register_hasher @f8a61573 -->
+<!-- claim: cash/core.py:Cash.register_hasher @0fc93c81 -->
 For a class you can't add a method to, register a hasher for it before the
 first call. It applies wherever an instance is an argument of a cached
 function, as `self` or not:
@@ -92,7 +92,7 @@ See [Custom hashers](custom-hashers.md#registering-a-hasher).
 
 ## Methods that set attributes on `self`
 
-<!-- claim: cash/decorator/attribute_replay.py:AttrVerdict.of @5152391a, cash/rewrite_in_place.py:attribute_refusal @a163557b -->
+<!-- claim: cash/decorator/attribute_replay.py:AttrVerdict.of @5152391a, cash/rewrite_in_place.py:attribute_refusal @0ad90168 -->
 A method that only sets attributes on `self`, as a model's `fit` does, is
 cached too. The entry keeps the attributes the call set, and a hit sets them
 again on the instance you call it on:

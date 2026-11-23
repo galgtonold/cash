@@ -10,6 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from .._user_attrs import plain_getattr
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning
 from .ast_util import parse_cached, walk_tree
@@ -490,7 +491,7 @@ def _names_bound_for(func: Any, tree: ast.AST) -> dict[str, Any]:
     """What names in *func*'s body resolve to besides its globals: its
     closure cells, and the modules and names its own ``import`` lines bind."""
     namespace: dict[str, Any] = {}
-    code = getattr(func, "__code__", None)
+    code = plain_getattr(func, "__code__", None)
     for name, cell in zip(getattr(code, "co_freevars", ()) or (), getattr(func, "__closure__", None) or ()):
         try:
             namespace[name] = cell.cell_contents
@@ -570,7 +571,7 @@ def assume_safe_block_lines(tree: ast.AST, func: Any = None) -> frozenset[int]:
         from ..effect_observer import assume_safe
 
         bound = _names_bound_for(func, tree)
-        globals_ = getattr(func, "__globals__", None) or {}
+        globals_ = plain_getattr(func, "__globals__", None) or {}
 
         def resolves(parts: list[str]) -> bool:
             return _resolves_to(parts, bound, globals_, assume_safe)

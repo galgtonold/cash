@@ -44,6 +44,8 @@ from collections.abc import Callable, Iterable, Mapping
 from enum import Enum
 from typing import Any, NamedTuple
 
+from ._user_attrs import plain_getattr
+
 __all__ = [
     "ENVIRONMENT_TEXT_MARKERS",
     "CLOCK_WHEN_ARG_CALLS",
@@ -1061,7 +1063,7 @@ def _canonical_names(chain: list[str], namespace: Mapping[str, Any]) -> list[str
         elif i == len(chain) - 1 and issubclass(type(obj), (types.MethodType, types.BuiltinMethodType)):
             # `now = datetime.now` bound in an earlier cell: a method of a
             # known class, whose bound object is new on every read.
-            owner = roots.get(id(getattr(obj, "__self__", None)))
+            owner = roots.get(id(plain_getattr(obj, "__self__", None)))
             if owner is not None and owner[0] is obj.__self__:
                 candidates.append(f"{owner[1]}.{obj.__name__}")
     return candidates

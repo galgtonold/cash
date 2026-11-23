@@ -19,7 +19,8 @@ from typing import TYPE_CHECKING, Any
 from .. import identity_refs
 from .._clock import perf_counter as _perf_counter
 from .._memo import RESULT_TYPES, LruMemo
-from .._user_attrs import from_family
+from .._type_memo import class_name
+from .._user_attrs import from_family, plain_getattr, unwrapped
 from ..backends.memory_backend import InMemoryBackend
 from ..backends.serialization import PickleSerializer
 from ..backends.tiered_backend import TieredBackend
@@ -483,14 +484,14 @@ class ResultStore:
         spec = self._registry.cached.get(func_name)
         if spec is None:
             return None
-        return sentinel_ref(inspect.unwrap(spec.func), result)
+        return sentinel_ref(unwrapped(spec.func), result)
 
     def _held_refs(self, func_name: str, result: Any) -> list | None:
         """The sentinels the body names that *result* holds inside it (`identity_refs.find`)."""
         spec = self._registry.cached.get(func_name)
         if spec is None:
             return None
-        named = held_sentinels(inspect.unwrap(spec.func))
+        named = held_sentinels(unwrapped(spec.func))
         return identity_refs.find(result, named) if named else None
 
     def _frozen_digest(self, func_name: str, result: Any) -> str | None:
@@ -579,13 +580,13 @@ class ResultStore:
         if metadata.held_refs:
             spec = self._registry.cached.get(func_name)
             if spec is not None:
-                resolve = identity_refs.resolver(inspect.unwrap(spec.func))
+                resolve = identity_refs.resolver(unwrapped(spec.func))
                 value = identity_refs.put_back(value, metadata.held_refs, resolve)
         ref = metadata.result_ref
         if ref and len(ref) == 2:
             spec = self._registry.cached.get(func_name)
             if spec is not None:
-                func = inspect.unwrap(spec.func)
+                func = unwrapped(spec.func)
                 kind, name = ref
                 try:
                     if kind == "closure":
@@ -609,7 +610,7 @@ class ResultStore:
         the data" fix does not apply). The body has not run yet -- the caller
         awaits it -- so nothing can be stored; the call goes through uncached.
         """
-        kind = type(res).__name__
+        kind = class_name(type(res))
         self._notices.warn_once(
             CashCacheIneffectiveWarning,
             func_name,
@@ -656,7 +657,7 @@ class ResultStore:
         if frozen and type(result) in (list, tuple, dict):
             self._frozen.remember_container(result, func_name, lineage_hash(cache_key, auto_file_deps))
             return
-        if frozen and type(result).__name__ == "ndarray" and from_family(type(result), "numpy"):
+        if frozen and class_name(type(result)) == "ndarray" and from_family(type(result), "numpy"):
             # An array cannot carry a tag, and read-only is a promise numpy
             # enforces: a write raises instead of going stale.
             try:
@@ -690,7 +691,7 @@ class ResultStore:
             UNTAGGABLE_TYPES[type(result)] = True
             logger.debug(
                 "results of type %s cannot carry a lineage tag, so a cached function taking one hashes its content",
-                type(result).__name__,
+                class_name(type(result)),
             )
 
     def store(self, request: StoreRequest, result: Any) -> bool:
@@ -841,13 +842,13 @@ class ResultStore:
             # object and whatever a __reduce__ raises. The body has run; its
             # result goes back to the caller whatever happens here.
             self._misses.note_not_stored(cache_key, "the backend refused the write", func_name)
-            backend_name = type(self._backend_slot.backend).__name__
+            backend_name = class_name(type(self._backend_slot.backend))
             self._notices.warn_once(
                 CashCacheStoreFailedWarning,
                 func_name,
                 "",
                 f"@cash.cache on {func_name}: backend {backend_name} failed to store "
-                f"result ({type(e).__name__}: {e}). Compute succeeded, nothing was "
+                f"result ({class_name(type(e))}: {e}). Compute succeeded, nothing was "
                 f"stored, and the next call recomputes.",
                 code="STORE-FAILED",
                 fix=REDUCER_NOT_RUN_FIX if isinstance(e, ReducerNotRun) else STORE_FAILED_FIX,
@@ -1033,7 +1034,7 @@ class ResultStore:
         self._files.credit_remembered_reads(func_name, tracker, call.args, call.kwargs)
         self._files.warn_unrecorded_reads(func_name, tracker)
         self._files.warn_unseen_native_reads(func_name, tracker)
-        auto_file_deps = snapshot_tracked_deps(tracker, getattr(spec.func, "__module__", None))
+        auto_file_deps = snapshot_tracked_deps(tracker, plain_getattr(spec.func, "__module__", None))
 
         if chunks.written == 0:
             # Everything fit in one chunk, so cache_if can still see the
@@ -1151,7 +1152,7 @@ class ResultStore:
             if store_errors and not [t for t in (chunk_metadata.get("storage") or []) if t != "RAM"]:
                 raise _store_error(store_errors)
         except Exception as e:  # noqa: BLE001 - as in `ResultStore.store`: the stream goes on
-            backend_name = type(self._backend_slot.backend).__name__
+            backend_name = class_name(type(self._backend_slot.backend))
             self._notices.warn_once(
                 CashCacheStoreFailedWarning,
                 chunk_key,
@@ -1161,7 +1162,7 @@ class ResultStore:
                 # MISS, on both read paths, so the cost is a permanent recompute
                 # rather than a short answer.
                 f"@cash.cache: backend {backend_name} failed to store "
-                f"chunk {chunk_index} of {prefix} ({type(e).__name__}: {e}), "
+                f"chunk {chunk_index} of {prefix} ({class_name(type(e))}: {e}), "
                 f"so the entry can never be read back and every later call "
                 f"recomputes it.",
                 code="STORE-CHUNK-FAILED",

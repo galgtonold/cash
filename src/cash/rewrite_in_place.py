@@ -40,11 +40,14 @@ import types
 from collections.abc import Callable, Iterable
 from typing import Any, NamedTuple
 
+from cash._type_memo import class_name, module_of_class
 from cash._user_attrs import attribute_or
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
 from . import _weak as cash_weak
 from ._native import cwatch
+from ._type_memo import class_dict, class_dictoffset, class_flags, class_mro
+from ._user_attrs import class_attr, plain_getattr
 
 __all__ = [
     "ABSENT",
@@ -84,7 +87,7 @@ _LEAVES = frozenset(IMMUTABLE_LEAF_TYPES)
 
 def _numpy_array(obj: Any) -> bool:
     kind = type(obj)
-    return kind.__name__ == "ndarray" and kind.__module__ == "numpy"
+    return class_name(kind) == "ndarray" and module_of_class(kind) == "numpy"
 
 
 def _pandas_kind(obj: Any) -> str | None:
@@ -135,7 +138,7 @@ def refusal(obj: Any) -> str | None:
     if type(obj) in _CONTAINERS:
         items = [*obj.keys(), *obj.values()] if type(obj) is dict else obj
         if not _leaves_only(items):
-            return f"a {type(obj).__name__} holding objects that can change in place is not put back in place"
+            return f"a {class_name(type(obj))} holding objects that can change in place is not put back in place"
         return None
     if _numpy_array(obj):
         if obj.dtype.hasobject:
@@ -158,7 +161,7 @@ def refusal(obj: Any) -> str | None:
             return _column_refusal(obj.array, obj.dtype, frame=False)
         except Exception:  # noqa: BLE001 - a Series that cannot be read is not written
             return "the Series could not be read"
-    return f"a {type(obj).__name__} is not put back in place, and a new one would not be that object"
+    return f"a {class_name(type(obj))} is not put back in place, and a new one would not be that object"
 
 
 def _same_axis(a: Any, b: Any) -> bool:
@@ -387,7 +390,7 @@ def shape_change(before: Shape, after: Any) -> str | None:
     or None: the computation added a column, reshaped an array, changed a
     dtype or the index."""
     if before.kind is not type(after):
-        return f"it is bound to a {before.kind.__name__}, not a {type(after).__name__}"
+        return f"it is bound to a {before.kind.__name__}, not a {class_name(type(after))}"
     try:
         now = shape_of(after)
         if not _same(before.parts, now.parts):
@@ -416,7 +419,7 @@ def mismatch(live: Any, stored: Any) -> str | None:
                 )
         stored = stored.frame
     if type(live) is not type(stored):
-        return f"it is bound to a {type(live).__name__}, not a {type(stored).__name__}"
+        return f"it is bound to a {class_name(type(live))}, not a {class_name(type(stored))}"
     why = refusal(live) or refusal(stored)
     if why is not None:
         return why
@@ -617,28 +620,31 @@ def attribute_refusal(obj: Any) -> str | None:
     ``__dict__``, an exact dict."""
     kind = type(obj)
     if isinstance(obj, (type, types.ModuleType, types.FunctionType, types.MethodType)):
-        return f"a {kind.__name__} is not an instance whose attributes are replayed"
-    if kind.__setattr__ is not object.__setattr__ or kind.__delattr__ is not object.__delattr__:
-        return f"{kind.__name__} sets or deletes its attributes through its own code"
-    for klass in kind.__mro__[:-1]:
-        if not klass.__flags__ & _HEAPTYPE:
-            return f"{kind.__name__} keeps state outside its __dict__ (it derives from {klass.__name__})"
-        for name, held in vars(klass).items():
+        return f"a {class_name(kind)} is not an instance whose attributes are replayed"
+    if (
+        class_attr(kind, "__setattr__") is not object.__setattr__
+        or class_attr(kind, "__delattr__") is not object.__delattr__
+    ):
+        return f"{class_name(kind)} sets or deletes its attributes through its own code"
+    for klass in class_mro(kind)[:-1]:
+        if not class_flags(klass) & _HEAPTYPE:
+            return f"{class_name(kind)} keeps state outside its __dict__ (it derives from {class_name(klass)})"
+        for name, held in class_dict(klass).items():
             if _setter(held) and name not in _OWN_SLOTS:
-                return f"{kind.__name__}.{name} runs code when it is set"
-        slots = vars(klass).get("__slots__")
+                return f"{class_name(kind)}.{name} runs code when it is set"
+        slots = class_dict(klass).get("__slots__")
         if slots is not None:
             names = (slots,) if isinstance(slots, str) else tuple(slots)
             if any(name not in _OWN_SLOTS for name in names):
-                return f"{kind.__name__} keeps attributes in __slots__"
-    if not kind.__dictoffset__:
-        return f"{kind.__name__} has no instance __dict__"
+                return f"{class_name(kind)} keeps attributes in __slots__"
+    if not class_dictoffset(kind):
+        return f"{class_name(kind)} has no instance __dict__"
     try:
         state = object.__getattribute__(obj, "__dict__")
     except AttributeError:
-        return f"the {kind.__name__} has no instance __dict__"
+        return f"the {class_name(kind)} has no instance __dict__"
     if type(state) is not dict:
-        return f"the {kind.__name__}'s __dict__ is not a plain dict"
+        return f"the {class_name(kind)}'s __dict__ is not a plain dict"
     return None
 
 
@@ -671,7 +677,7 @@ def _stores_only(fset: Any) -> bool:
     import builtins
     import dis
 
-    code = getattr(fset, "__code__", None)
+    code = plain_getattr(fset, "__code__", None)
     if (
         type(fset) is not types.FunctionType
         or code is None
@@ -732,8 +738,8 @@ def _stores_only(fset: Any) -> bool:
 
 def _data_descriptor(kind: type, name: str) -> bool:
     """Whether *kind* has a data descriptor (a property, a slot) named *name*."""
-    for klass in kind.__mro__:
-        found = vars(klass).get(name, ABSENT)
+    for klass in class_mro(kind):
+        found = class_dict(klass).get(name, ABSENT)
         if found is not ABSENT:
             held = type(found)
             return hasattr(held, "__set__") or hasattr(held, "__delete__")
@@ -834,7 +840,7 @@ def held_changes(recording: AttrRecording) -> list[tuple[str, str]]:
     found = []
     for key, (value, size) in recording.held.items():
         if recording.state.get(key, ABSENT) is value and len(value) != size:
-            found.append((key, type(value).__name__))
+            found.append((key, class_name(type(value))))
     return found
 
 
@@ -910,7 +916,7 @@ class AttrState:
     def mismatch(self, live: Any) -> str | None:
         """Why the attributes cannot be replayed on *live*, or None."""
         if type(live) is not self.kind:
-            return f"it is a {type(live).__name__}, not a {self.kind.__name__}"
+            return f"it is a {class_name(type(live))}, not a {self.kind.__name__}"
         why = attribute_refusal(live)
         if why is not None:
             return why

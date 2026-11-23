@@ -17,7 +17,6 @@ from __future__ import annotations
 import ast
 import builtins
 import functools
-import inspect
 import itertools
 import sys
 import types
@@ -29,6 +28,7 @@ from cash._user_attrs import importable_attr, instance_of, own_dict
 from cash.control_markers import neutral_markers
 
 from .. import _weak
+from .._user_attrs import plain_getattr, static_attr
 
 __all__ = [
     "CallScope",
@@ -269,7 +269,7 @@ def resolve_dotted_name(name: str, namespace: Mapping[str, Any]) -> Any | None:
 def _static_attribute(obj: Any, attr: str) -> Any | None:
     """``obj.attr`` as Python would bind it, when that runs no user code."""
     try:
-        raw = inspect.getattr_static(obj, attr)
+        raw = static_attr(obj, attr)
     except AttributeError:
         return None
     is_class = isinstance(obj, type)
@@ -438,8 +438,8 @@ def bytecode_global_refs(func: Any) -> list[tuple[str, ...]]:
     attribute name matches any global), which costs a fold, never a stale
     value.
     """
-    code = getattr(func, "__code__", None)
-    g = getattr(func, "__globals__", None)
+    code = plain_getattr(func, "__code__", None)
+    g = plain_getattr(func, "__globals__", None)
     if code is None or not isinstance(g, dict):
         return []
     names: dict[str, None] = {}

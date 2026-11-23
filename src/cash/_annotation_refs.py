@@ -22,6 +22,9 @@ import types
 import typing
 from typing import Any
 
+from ._type_memo import class_dict, class_mro
+from ._user_attrs import hooked_class, named_attr, plain_getattr
+
 _DOTTED = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
 
 
@@ -35,22 +38,45 @@ def _raw_annotations(owner: Any) -> dict:
     """*owner*'s own annotations, unevaluated where the runtime allows it."""
     if _annotationlib is not None:
         try:
+            if hooked_class(owner):
+                return _class_annotations(owner)
             return dict(_annotationlib.get_annotations(owner, format=_annotationlib.Format.FORWARDREF))
         except Exception:  # noqa: BLE001 - a broken __annotate__ is not ours to raise
             return {}
     try:
         if isinstance(owner, type):
-            found = owner.__dict__.get("__annotations__", {})
+            found = class_dict(owner).get("__annotations__", {})
         else:
-            found = getattr(owner, "__annotations__", {})
+            found = plain_getattr(owner, "__annotations__", {})
         return dict(found) if isinstance(found, dict) else {}
     except Exception:  # noqa: BLE001 - a broken __annotations__ is not ours to raise
         return {}
 
 
+def _class_annotations(owner: type) -> dict:
+    """What ``annotationlib.get_annotations(owner, format=FORWARDREF)``
+    gives for a class whose metaclass hooks its lookups, read through
+    ``type``'s own descriptors: ``get_annotations`` asks the class for its
+    ``__annotate__`` with ``getattr``, which runs the hook, and so does
+    ``type``'s own ``__annotations__`` the first time it is read."""
+    namespace = class_dict(owner)
+    for name in ("__annotations__", "__annotations_cache__"):
+        found = namespace.get(name)
+        if isinstance(found, dict):
+            return dict(found)
+    annotate = _TYPE_ANNOTATE(owner)
+    if annotate is None:
+        return {}
+    found = _annotationlib.call_annotate_function(annotate, _annotationlib.Format.FORWARDREF, owner=owner)
+    return dict(found) if isinstance(found, dict) else {}
+
+
+_TYPE_ANNOTATE = type.__dict__["__annotate__"].__get__ if "__annotate__" in type.__dict__ else None
+
+
 def _module_namespace(owner: Any) -> dict:
-    module = sys.modules.get(getattr(owner, "__module__", None) or "")
-    return vars(module) if module is not None else (getattr(owner, "__globals__", None) or {})
+    module = sys.modules.get(plain_getattr(owner, "__module__", None) or "")
+    return vars(module) if module is not None else (plain_getattr(owner, "__globals__", None) or {})
 
 
 def _resolve_string(text: str, namespace: dict) -> list[Any]:
@@ -61,7 +87,7 @@ def _resolve_string(text: str, namespace: dict) -> list[Any]:
         for attr in rest:
             if value is None:
                 break
-            value = getattr(value, attr, None)
+            value = named_attr(value, attr, None)
         if value is not None:
             found.append(value)
     return found
@@ -124,26 +150,26 @@ def annotation_referents(obj: Any, is_user: Any = None) -> list[Any]:
     # stale. The caller's key build or helper walk runs the call uncached.
     if isinstance(obj, type):
         owners = []
-        for base in obj.__mro__:
+        for base in class_mro(obj):
             if base is object or (is_user is not None and not is_user(base)):
                 continue
             owners.append(base)
-            for member in vars(base).values():
+            for member in class_dict(base).values():
                 if isinstance(member, property):
                     owners.extend(a for a in (member.fget, member.fset) if a is not None)
                     continue
-                member = getattr(member, "__func__", member)
+                member = plain_getattr(member, "__func__", member)
                 if type(member) is types.FunctionType:
-                    owners.append(getattr(member, "__wrapped__", member))
+                    owners.append(plain_getattr(member, "__wrapped__", member))
     else:
-        obj = getattr(obj, "__func__", obj)
-        owners = [getattr(obj, "__wrapped__", obj)]
+        obj = plain_getattr(obj, "__func__", obj)
+        owners = [plain_getattr(obj, "__wrapped__", obj)]
     for owner in owners:
         namespace = _module_namespace(owner)
         for value in _raw_annotations(owner).values():
             _walk(value, namespace, out, seen)
     if isinstance(obj, type):
-        fields = getattr(obj, "model_fields", None)
+        fields = plain_getattr(obj, "model_fields", None)
         if isinstance(fields, dict):
             namespace = _module_namespace(obj)
             for info in fields.values():

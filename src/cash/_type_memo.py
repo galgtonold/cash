@@ -101,6 +101,60 @@ def per_type(fn: Callable[[type], V]) -> Callable[[type], V]:
 mro_of: Callable[[type], tuple] = type.__dict__["__mro__"].__get__
 
 
+def _class_reader(name: str) -> Callable[[Any], Any]:
+    """``obj.<name>`` read by ``type``'s own descriptor for a class, so a
+    ``__getattribute__`` or ``__getattr__`` of its metaclass's (code of the
+    user's, which plain Python never asks for these) does not run. An
+    object that only passes for a class (a ``__class__`` property, which
+    ``isinstance(obj, type)`` believes) is read as ``obj.<name>`` reads it,
+    as before."""
+    read = type.__dict__[name].__get__
+
+    def class_reader(obj: Any) -> Any:
+        try:
+            return read(obj)
+        except TypeError:
+            if issubclass(type(obj), type):
+                raise
+            return getattr(obj, name)
+
+    class_reader.__name__ = class_reader.__qualname__ = f"class_reader_{name.strip('_')}"
+    return class_reader
+
+
+# A class's own facts as ``type`` reads them, for any class cash meets.
+#: Its namespace (``vars(cls)``, ``cls.__dict__``).
+class_dict: Callable[[type], Any] = _class_reader("__dict__")
+#: ``cls.__name__``.
+class_name: Callable[[type], str] = _class_reader("__name__")
+#: ``cls.__qualname__``.
+class_qualname: Callable[[type], str] = _class_reader("__qualname__")
+#: ``cls.__module__``; raises AttributeError for a class made with none.
+class_module: Callable[[type], Any] = _class_reader("__module__")
+#: ``cls.__flags__``.
+class_flags: Callable[[type], int] = _class_reader("__flags__")
+#: ``cls.__dictoffset__``.
+class_dictoffset: Callable[[type], int] = _class_reader("__dictoffset__")
+#: ``cls.__bases__``.
+class_bases: Callable[[type], tuple] = _class_reader("__bases__")
+#: ``cls.__mro__`` for a value that may only pass for a class (`mro_of`
+#: takes a real one).
+class_mro: Callable[[type], tuple] = _class_reader("__mro__")
+#: ``getattr(cls, name)`` by ``type``'s own lookup (the metaclass's
+#: descriptors, then the MRO's namespaces), never by the metaclass's
+#: ``__getattribute__`` or ``__getattr__``.
+type_lookup: Callable[[type, str], Any] = type.__getattribute__
+
+
+def module_of_class(cls: type, default: Any = None) -> Any:
+    """*cls*'s ``__module__`` (`class_module`), *default* for a class made
+    with none."""
+    try:
+        return class_module(cls)
+    except AttributeError:
+        return default
+
+
 class MroMemo(TypeMemo):
     """A `TypeMemo` for an answer read along a class's MRO: a class keeps its
     address when its ``__bases__`` are assigned, and its MRO changes. Read

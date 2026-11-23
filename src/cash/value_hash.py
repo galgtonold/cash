@@ -27,6 +27,7 @@ from time import perf_counter
 from typing import Any
 
 from . import _weak, kept_state, value_watch
+from ._type_memo import class_name
 from ._user_attrs import instance_of
 from .content_hashers import builtin_hash, builtin_hash_family, is_native_panic
 from .sizing import pandas_nbytes
@@ -53,7 +54,7 @@ def is_bulky(value: Any) -> bool:
 
 def _is_bulky_type(t: type) -> bool:
     """`is_bulky`, asked of a type."""
-    return t.__name__ in _BULKY_TYPE_NAMES or builtin_hash_family(t) is not None
+    return class_name(t) in _BULKY_TYPE_NAMES or builtin_hash_family(t) is not None
 
 
 def _hash_collection(obj: Any) -> str:
@@ -72,7 +73,7 @@ def _hash_collection(obj: Any) -> str:
     # cost 0.9 s here, 30x the pickle that hashes it.
     types = set(map(type, values))
     if any(map(_is_bulky_type, types)):
-        parts = [f"{type(obj).__name__}:{len(obj)}"]
+        parts = [f"{class_name(type(obj))}:{len(obj)}"]
         if items is not None:
             parts.extend(f"{compute_hash(k)}={compute_hash(v)}" for k, v in items)
         else:
@@ -145,7 +146,7 @@ def _scalar_run_digest(obj: Any, types: set[type] | None = None) -> str | None:
         return None
     item = type(obj[0])
     sha = hashlib.sha256(_SCALAR_RUN_HEAD)
-    sha.update(f"{type(obj).__name__}\0{item.__module__}.{item.__qualname__}\0{dtype.str}\0{len(obj)}\0".encode())
+    sha.update(f"{class_name(type(obj))}\0{item.__module__}.{item.__qualname__}\0{dtype.str}\0{len(obj)}\0".encode())
     # As bytes: a buffer of datetimes is refused on older numpy.
     sha.update(values.view(numpy.uint8))
     return sha.hexdigest()
@@ -433,7 +434,7 @@ def digest_via_pickle(obj: Any) -> bool:
     (`call_refs.digest_and_size`)? Then that digest is *obj*'s
     `compute_hash`, when it pickles at all."""
     kind = type(obj)
-    if kind.__name__ in _PANDAS_TYPE_NAMES or _is_bulky_type(kind):
+    if class_name(kind) in _PANDAS_TYPE_NAMES or _is_bulky_type(kind):
         return False
     if isinstance(obj, tuple) and isinstance(getattr(kind, "_fields", None), tuple):
         return False
@@ -635,7 +636,7 @@ def unshared_hash(obj: Any) -> str:
     except HashBudgetExceeded:
         raise
     except Exception as exc:  # noqa: BLE001 - whatever stops this pickle, as `compute_hash` reads it
-        logger.debug("Unshared hash failed for %s: %r", type(obj).__name__, exc)
+        logger.debug("Unshared hash failed for %s: %r", class_name(type(obj)), exc)
     except BaseException as exc:
         if not is_native_panic(exc):
             raise
@@ -768,7 +769,7 @@ def _reusable(obj: Any, digest: str) -> bool:
 
 def _compute_hash(obj: Any) -> str:
     """`compute_hash`, read from the value itself."""
-    type_name = type(obj).__name__
+    type_name = class_name(type(obj))
 
     try:
         digest = _memoised_frame_digest(obj) if type_name in _PANDAS_TYPE_NAMES else None
@@ -785,7 +786,7 @@ def _compute_hash(obj: Any) -> str:
             # every run: a loop over itertuples() never restored.
             fields = type(obj)._fields
             return hashlib.sha256(
-                f"namedtuple:{type(obj).__name__}:{fields!r}:{_hash_collection(tuple(obj))}".encode("utf-8")
+                f"namedtuple:{class_name(type(obj))}:{fields!r}:{_hash_collection(tuple(obj))}".encode("utf-8")
             ).hexdigest()
         if type(obj) in _COLLECTIONS:
             # Exact types: a subclass is pickled whole, with the attributes

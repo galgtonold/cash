@@ -25,6 +25,8 @@ from cash.tracking.read_classification import is_cash_internal, own_stat
 from cash.tracking.read_credit import note_untracked_read
 from cash.tracking.tracker_context import active_tracker
 
+from .._type_memo import class_name
+
 __all__ = ["subscribe_read_events"]
 
 
@@ -367,7 +369,7 @@ def _on_failure(event: str, args: tuple, error: Exception) -> None:
             path = os.path.abspath(os.fsdecode(args[0]))
         except (TypeError, ValueError):
             path = None
-    note(event, path, f"{type(error).__name__}: {error}")
+    note(event, path, f"{class_name(type(error))}: {error}")
 
 
 io_watch.on_consumer_error(_on_failure)

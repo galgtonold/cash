@@ -29,6 +29,7 @@ import sys
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+from ._user_attrs import named_attr
 from .code_swaps import note_report
 from .data_source import state_token_of
 
@@ -105,7 +106,7 @@ class SysModulesHelperResolver:
                 continue
             obj: Any = mod
             for attr in attr_chain:
-                obj = getattr(obj, attr, None)
+                obj = named_attr(obj, attr, None)
                 if obj is None:
                     break
             if obj is None or not callable(obj):
@@ -324,7 +325,7 @@ def _resolve_helper(report: PurityReport, qual: str) -> Any:
         for attr in path[1]:
             if obj is None:
                 return None
-            obj = getattr(obj, attr, None)
+            obj = named_attr(obj, attr, None)
         return obj
     ref = getattr(report, "helper_objects", {}).get(qual)
     return ref() if ref is not None else None

@@ -51,7 +51,7 @@ from cash._user_attrs import attribute_or, builtin_items, instance_of, own_dict
 from .. import _native, _weak
 from .._memo import CODE_OBJECTS, LruMemo
 from .._plain_data import whole_tree_facts
-from .._type_memo import per_mro, per_type
+from .._type_memo import class_bases, class_dict, class_flags, class_module, class_mro, class_name, per_mro, per_type
 from ..install_paths import is_user_code_module
 from ..tracking import io_watch
 from ..tracking.function_tracker import is_local_module
@@ -400,7 +400,7 @@ def _held_of(found: tuple[tuple[Any, ...], tuple[Any, ...], bool], namespace: Ma
             continue
         for code in _class_codes(cls, namespace):
             codes.setdefault(id(code), code)
-        for klass in cls.__mro__:
+        for klass in class_mro(cls):
             if _of_a_users_module(klass):
                 module_classes.setdefault(id(klass), klass)
     return Held(tuple(codes.values()), complete, tuple(module_classes.values()))
@@ -588,8 +588,8 @@ def module_class_objects_exist() -> bool:
     own = {id(classes), id(module_functions), id(pending), id(kinds), id(asked_of)}
     for cls in kinds:
         own.add(id(cls))
-        own.add(id(cls.__mro__))
-        own.add(id(cls.__bases__))
+        own.add(id(class_mro(cls)))
+        own.add(id(class_bases(cls)))
     own |= _cash_memos()
     for cls in kinds:
         own |= _class_cells(cls)
@@ -612,7 +612,7 @@ def _class_cells(cls: type) -> set[int]:
     """The ids of the ``__class__`` cells of *cls*'s own methods (``super()``),
     which refer to it in every class that calls ``super()``."""
     found: set[int] = set()
-    for member in list(vars(cls).values()):
+    for member in list(class_dict(cls).values()):
         for fn in (member, attribute_or(member, "__func__"), attribute_or(member, "fget")):
             code = attribute_or(fn, "__code__")
             if code is None or "__class__" not in code.co_freevars:
@@ -729,7 +729,7 @@ def _users_module_classes() -> list[type]:
     for module in _users_modules():
         name = module.__name__
         for value in list(vars(module).values()):
-            if isinstance(value, type) and value.__flags__ & _HEAP_TYPE and value.__module__ == name:
+            if isinstance(value, type) and class_flags(value) & _HEAP_TYPE and class_module(value) == name:
                 found.append(value)
     return found
 
@@ -1099,8 +1099,8 @@ def _visit_group(
             if _notebook_class(cls, globals_ids):
                 classes.setdefault(id(cls), cls)
                 for klass in _own_mro(cls, globals_ids):
-                    children.extend(vars(klass).values())
-            elif any(map(_of_a_users_module, cls.__mro__)):
+                    children.extend(class_dict(klass).values())
+            elif any(map(_of_a_users_module, class_mro(cls))):
                 # Noted, not entered: its methods' code is keyed by its
                 # module (`Held.module_classes`).
                 classes.setdefault(id(cls), cls)
@@ -1179,7 +1179,7 @@ def _identity_hashed(kind: type) -> bool:
     class, which the walk then met -- without end."""
     try:
         for name in ("__hash__", "__eq__"):
-            found = next((vars(klass)[name] for klass in kind.__mro__ if name in vars(klass)), None)
+            found = next((class_dict(klass)[name] for klass in class_mro(kind) if name in class_dict(klass)), None)
             if found is not _OBJECT_SLOTS[name]:
                 return False
     except TypeError:
@@ -1256,7 +1256,7 @@ def _may_have_dict(kind: type) -> bool:
     if attribute_or(kind, "__dictoffset__", 1):
         return True
     try:
-        return any("__dict__" in vars(klass) for klass in kind.__mro__)
+        return any("__dict__" in class_dict(klass) for klass in class_mro(kind))
     except TypeError:
         return True
 
@@ -1266,7 +1266,7 @@ def _slot_getter(kind: type, name: str) -> Callable[[Any], Any] | None:
     finds for *name* on an object of *kind* (the first class along the MRO
     that defines *name*), or None when that is not a plain slot."""
     at = _slot_places(kind).get(name)
-    return None if at is None else vars(kind.__mro__[at])[name].__get__
+    return None if at is None else vars(class_mro(kind)[at])[name].__get__
 
 
 @per_mro
@@ -1278,8 +1278,8 @@ def _slot_places(kind: type) -> dict[str, int | None]:
     for name in slot_names(kind):
         places[name] = None
         try:
-            for at, klass in enumerate(kind.__mro__):
-                found = vars(klass).get(name, _MISSING)
+            for at, klass in enumerate(class_mro(kind)):
+                found = class_dict(klass).get(name, _MISSING)
                 if found is not _MISSING:
                     places[name] = at if type(found) is types.MemberDescriptorType else None
                     break
@@ -1305,8 +1305,8 @@ def _cell_contents(cells: tuple[Any, ...] | None) -> list[Any]:
 def slot_names(kind: type) -> tuple[str, ...]:
     """The slots *kind* and its bases declare, but ``__dict__`` and ``__weakref__``."""
     names: list[str] = []
-    for klass in kind.__mro__:
-        slots = vars(klass).get("__slots__", ())
+    for klass in class_mro(kind):
+        slots = class_dict(klass).get("__slots__", ())
         if isinstance(slots, str):
             slots = (slots,)
         try:
@@ -1322,7 +1322,7 @@ def _mangled(klass: type, name: str) -> str:
     """The attribute a slot *name* of *klass* is stored under: a private
     ``__x`` is ``_Klass__x``, as for any private name in a class body (read
     by its own name, it was not found and its contents were not walked)."""
-    owner = klass.__name__.lstrip("_")
+    owner = class_name(klass).lstrip("_")
     if name.startswith("__") and not name.endswith("__") and owner:
         return f"_{owner}{name}"
     return name
@@ -1342,7 +1342,7 @@ def _defined_in(klass: type, globals_ids: frozenset[int]) -> bool:
     """Whether a cell defined *klass*: its module is the notebook's
     (``__main__``), or one of its own methods has the notebook's globals."""
     try:
-        members = list(vars(klass).values())
+        members = list(class_dict(klass).values())
     except TypeError:
         return False
     if any(id(fn.__globals__) in globals_ids for member in members for fn in _member_functions(member)):
@@ -1353,13 +1353,13 @@ def _defined_in(klass: type, globals_ids: frozenset[int]) -> bool:
 
 def _own_mro(cls: type, globals_ids: frozenset[int]) -> list[type]:
     """The classes in *cls*'s MRO a cell defined."""
-    return [klass for klass in cls.__mro__ if klass is not object and _defined_in(klass, globals_ids)]
+    return [klass for klass in class_mro(cls) if klass is not object and _defined_in(klass, globals_ids)]
 
 
 def _notebook_class(cls: type, globals_ids: frozenset[int]) -> bool:
     """Whether a cell defined *cls* or a class it derives from. A class of a
     library is told at once by its module: its 500 members are not read."""
-    if not cls.__flags__ & _HEAP_TYPE:
+    if not class_flags(cls) & _HEAP_TYPE:
         return False  # a type built into the interpreter or an extension
     name = attribute_or(cls, "__module__", None) or ""
     module = sys.modules.get(name)
@@ -1376,7 +1376,7 @@ def _class_codes(cls: type, namespace: Mapping[str, Any]) -> list[types.CodeType
     globals_ids = _globals_ids(namespace)
     codes = []
     for klass in _own_mro(cls, globals_ids):
-        for member in list(vars(klass).values()):
+        for member in list(class_dict(klass).values()):
             for fn in _member_functions(member):
                 if id(fn.__globals__) in globals_ids:
                     codes.append(fn.__code__)

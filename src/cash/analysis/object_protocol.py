@@ -11,6 +11,7 @@ import ast
 import textwrap
 from dataclasses import dataclass
 
+from .._type_memo import class_name
 from .ast_util import walk_tree
 from .callee_effects import all_param_names, factory_body_scope, free_vars_mutated_in_function, resolve_function_def
 from .mutations import (
@@ -774,7 +775,7 @@ class _ProtocolScan:
     def _aug_assign(self, target: str, op: ast.operator) -> None:
         """``obj <op>= x`` dispatching to an in-place operator dunder."""
         cls, cdef = self._instance_classdef(target)
-        dunders = _AUGOP_DUNDERS.get(type(op).__name__)
+        dunders = _AUGOP_DUNDERS.get(class_name(type(op)))
         if cdef is None or dunders is None:
             return
         inplace_dunder, fallback_dunder = dunders

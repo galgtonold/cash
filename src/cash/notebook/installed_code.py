@@ -31,6 +31,8 @@ from cash.decorator.closure_fold import iter_code_scopes
 from cash.decorator.code_args import installed_user_code, loaded_accessor_classes
 from cash.loaded_code import class_functions
 
+from .._type_memo import class_dict, class_mro
+
 __all__ = ["installed_code_parts"]
 
 _MISSING = object()
@@ -114,8 +116,8 @@ def installed_code_parts(
     reads: set[str] = set()
     for name in sorted(names):
         for cls in family:
-            for klass in cls.__mro__:
-                attr = klass.__dict__.get(name, _MISSING)
+            for klass in class_mro(cls):
+                attr = class_dict(klass).get(name, _MISSING)
                 if attr is _MISSING:
                     continue
                 for carrier in _user_code(attr):

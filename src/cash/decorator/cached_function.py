@@ -14,6 +14,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from .._type_memo import class_name
+from .._user_attrs import plain_getattr
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_reading import own_source
 
@@ -141,11 +143,11 @@ def follow_passthrough(func: Callable[..., Any]) -> tuple[Any, inspect.Signature
     leading, keywords = 0, frozenset()
     for _ in range(32):
         own = inspect.signature(func, follow_wrapped=False)
-        wrapped = getattr(func, "__wrapped__", None)
+        wrapped = plain_getattr(func, "__wrapped__", None)
         kinds = {p.kind for p in own.parameters.values()}
         if (
             wrapped is None
-            or "__signature__" in getattr(func, "__dict__", {})
+            or "__signature__" in plain_getattr(func, "__dict__", {})
             or not kinds
             or not kinds <= _PASS_THROUGH
         ):
@@ -207,7 +209,7 @@ def checked_ttl(ttl: Any) -> float | None:
         hint = " Convert it with int(...) first." if isinstance(ttl, str) else ""
         raise TypeError(
             f"@cash.cache: ttl must be a number of seconds, a datetime.timedelta or None, "
-            f"not {type(ttl).__name__} {ttl!r}.{hint}"
+            f"not {class_name(type(ttl))} {ttl!r}.{hint}"
         )
     if math.isnan(ttl) or math.isinf(ttl) or ttl < 0:
         raise ValueError(

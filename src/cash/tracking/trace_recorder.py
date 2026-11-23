@@ -36,6 +36,8 @@ from typing import Any
 
 from .. import _weak
 from .._gc_context import collecting
+from .._type_memo import class_name
+from .._user_attrs import plain_getattr
 from ..tracking.tracker_context import untracked
 
 __all__ = ["TOOL_NAME", "Recorder", "Unit", "other_thread_alive", "runs_user_code"]
@@ -69,7 +71,7 @@ POOL_STARTS = frozenset(
 def inspect_unwrap(fn: Any) -> Any:
     """The function a bound method or partial runs."""
     for _ in range(4):
-        inner = getattr(fn, "__func__", None) or getattr(fn, "func", None)
+        inner = plain_getattr(fn, "__func__", None) or getattr(fn, "func", None)
         if inner is None:
             break
         fn = inner
@@ -78,7 +80,7 @@ def inspect_unwrap(fn: Any) -> Any:
 
 def _target_name(t: threading.Thread) -> str:
     fn = getattr(t, "_target", None)
-    return getattr(fn, "__qualname__", "") if fn is not None else ""
+    return plain_getattr(fn, "__qualname__", "") if fn is not None else ""
 
 
 class Unit:
@@ -251,7 +253,7 @@ class Recorder:
                 else:
                     # A library's own thread (a writer, a pool's idle
                     # worker): what it runs is no code of the user's.
-                    unit.notes.add("library_thread:" + type(t).__name__ + ":" + _target_name(t))
+                    unit.notes.add("library_thread:" + class_name(type(t)) + ":" + _target_name(t))
         if stack:
             stack[-1].absorb(unit)
         return unit
@@ -271,7 +273,7 @@ class Recorder:
             # generated ``__init__``) runs on its module's own dict.
             mod = sys.modules.get(name)
             file = g.get("__file__")
-            if mod is not None and getattr(mod, "__dict__", None) is not g and isinstance(file, str):
+            if mod is not None and plain_getattr(mod, "__dict__", None) is not g and isinstance(file, str):
                 # A module that put another object in its place in
                 # ``sys.modules`` (``torch._VF``): judged by its own file,
                 # not by the replacement, which has none.
@@ -284,7 +286,7 @@ class Recorder:
         # as the process anyway; an ``exec``'d namespace is classified again
         # rather than kept alive here, with every function defined in it.
         mod = sys.modules.get(name)
-        if g is self.notebook_ns or (mod is not None and getattr(mod, "__dict__", None) is g):
+        if g is self.notebook_ns or (mod is not None and plain_getattr(mod, "__dict__", None) is g):
             if len(self._kinds) > 4096:
                 self._kinds.clear()
             self._kinds[id(g)] = entry
@@ -369,10 +371,10 @@ def note_finalizer(units: Any, frame: Any) -> None:
     func = getattr(info, "func", None) if info is not None else None
     if not isinstance(func, (types.BuiltinFunctionType, types.BuiltinMethodType)):
         return
-    owner = getattr(func, "__self__", None)
+    owner = plain_getattr(func, "__self__", None)
     if owner is None or isinstance(owner, types.ModuleType):
         return
-    entry = (f"{type(owner).__name__}.{getattr(func, '__name__', '?')}", collecting())
+    entry = (f"{class_name(type(owner))}.{getattr(func, '__name__', '?')}", collecting())
     for unit in units:
         unit.finalizers.append(entry)
 
@@ -405,7 +407,7 @@ def runs_user_code(t: threading.Thread, notebook_ns: Any) -> bool:
     g = getattr(inspect_unwrap(fn), "__globals__", None)
     if g is notebook_ns:
         return True
-    name = getattr(fn, "__module__", None) or (g or {}).get("__name__")
+    name = plain_getattr(fn, "__module__", None) or (g or {}).get("__name__")
     if not isinstance(name, str) or name == "cash" or name.startswith("cash."):
         return False
     mod = sys.modules.get(name)
@@ -504,7 +506,7 @@ _KERNEL_THREADS = frozenset(
 
 
 def _named(obj: Any) -> str | None:
-    module, qualname = getattr(obj, "__module__", None), getattr(obj, "__qualname__", None)
+    module, qualname = plain_getattr(obj, "__module__", None), plain_getattr(obj, "__qualname__", None)
     return f"{module}:{qualname}" if isinstance(module, str) and isinstance(qualname, str) else None
 
 
@@ -514,7 +516,7 @@ def _kernel_code(t: threading.Thread) -> bool:
     target = getattr(t, "_target", None)
     if target is None:
         return not isinstance(t, threading.Timer) and _named(type(t)) in _KERNEL_THREADS
-    return _named(getattr(target, "__func__", target)) in _KERNEL_THREADS
+    return _named(plain_getattr(target, "__func__", target)) in _KERNEL_THREADS
 
 
 def other_thread_alive(notebook_ns: Any) -> bool:

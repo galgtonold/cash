@@ -51,6 +51,7 @@ from cash.tracking.read_credit import frame_kind, note_untracked_read
 from cash.tracking.tracker_context import active_tracker
 
 from .. import _weak
+from .._user_attrs import plain_getattr
 
 __all__ = ["FileDependencyRegistry", "PostImportHook", "file_registry", "install_patches", "remove_patches"]
 
@@ -113,7 +114,7 @@ def _find_patch_targets(func_pattern: str, module_obj: Any) -> list:
     cost.
     """
     if func_pattern.endswith("*"):
-        namespace = getattr(module_obj, "__dict__", None)
+        namespace = plain_getattr(module_obj, "__dict__", None)
         size = len(namespace) if isinstance(namespace, dict) else -1
         key = (id(module_obj), func_pattern)
         cached = _patch_targets.get(key)
@@ -380,7 +381,7 @@ def _wrapped_originals() -> dict[int, tuple[Any, Any]]:
 def _is_user_module(module: Any) -> bool:
     """A module of the user's own code, loaded from a file: a script or an
     import. Not a notebook's namespace -- see `patch_reader_aliases`."""
-    return issubclass(type(module), types.ModuleType) and is_user_path(getattr(module, "__file__", None))
+    return issubclass(type(module), types.ModuleType) and is_user_path(plain_getattr(module, "__file__", None))
 
 
 def _patch_aliases_in(module: types.ModuleType) -> None:
@@ -487,7 +488,7 @@ def _patch_library_reexports() -> None:
                 found.append((name, module))
         _library_modules[:] = [len(sys.modules), tuple(found)]
     for name, module in _library_modules[1]:
-        ns = getattr(module, "__dict__", None)
+        ns = plain_getattr(module, "__dict__", None)
         if not isinstance(ns, dict):
             continue
         size = len(ns)
@@ -552,7 +553,7 @@ def patch_reader_aliases(ns: Any) -> None:
         return
     name = ns.get("__name__")
     module = sys.modules.get(name) if isinstance(name, str) else None
-    if module is None or getattr(module, "__dict__", None) is not ns or not _is_user_module(module):
+    if module is None or plain_getattr(module, "__dict__", None) is not ns or not _is_user_module(module):
         return
     with _install_lock:
         _patch_aliases_in(module)
@@ -686,11 +687,11 @@ def _runs_user_code(thread: threading.Thread) -> bool:
     the pool patches' to place."""
     fn = _thread_function(thread)
     for _ in range(4):  # a bound method's or a partial's function
-        inner = getattr(fn, "__func__", None) or getattr(fn, "func", None)
+        inner = plain_getattr(fn, "__func__", None) or getattr(fn, "func", None)
         if inner is None:
             break
         fn = inner
-    code = getattr(fn, "__code__", None)
+    code = plain_getattr(fn, "__code__", None)
     return code is not None and is_user_code_file(code.co_filename)
 
 
@@ -770,7 +771,7 @@ def _probe_handler(original_func: Callable[..., Any], kind: str) -> Callable[...
     This wraps a genuinely hot function, so it calls through first and only
     looks further while a tracker is open.
     """
-    exact_negative = kind == "any" and getattr(original_func, "__name__", "") != "access"
+    exact_negative = kind == "any" and plain_getattr(original_func, "__name__", "") != "access"
 
     @functools.wraps(original_func)
     def tracked_probe(path, *args, **kwargs):

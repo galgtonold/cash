@@ -40,8 +40,8 @@ import types
 from collections.abc import Callable
 from typing import Any
 
-from ._type_memo import TypeMemo, type_key
-from ._user_attrs import module_file
+from ._type_memo import TypeMemo, class_bases, class_name, type_key
+from ._user_attrs import module_file, named_attr, plain_getattr
 
 #: Class attributes that are bookkeeping, not definitions: the abc cache
 #: (``_abc_impl``) fills as ``isinstance`` is asked, ``__slotnames__`` as
@@ -119,7 +119,7 @@ def _unnamed_parts(obj: Any, building: set[int]) -> Any:
         check = _USER_FUNCTIONS[0]
         if type(obj) is not types.FunctionType or check is None or not check(obj):
             return None
-    name = (getattr(obj, "__module__", None), getattr(obj, "__qualname__", None))
+    name = (plain_getattr(obj, "__module__", None), plain_getattr(obj, "__qualname__", None))
     if id(obj) in building:
         return (unnamed_library_code, ("cycle", *name))
     building.add(id(obj))  # one pickle's: the objects stay alive while it runs
@@ -129,11 +129,11 @@ def _unnamed_parts(obj: Any, building: set[int]) -> Any:
             if attr in _DERIVED_CLASS_ATTRS:
                 continue
             if isinstance(held, (staticmethod, classmethod)):
-                held = (type(held).__name__, held.__func__)
+                held = (class_name(type(held)), held.__func__)
             elif isinstance(held, property):
                 held = ("property", held.fget, held.fset, held.fdel)
             attrs.append((attr, held))
-        return (unnamed_library_code, ("class", *name, type(obj), obj.__bases__, tuple(attrs)))
+        return (unnamed_library_code, ("class", *name, type(obj), class_bases(obj), tuple(attrs)))
     from .source_norm import bytecode_identity  # it imports the analysis package
 
     cells = tuple(_cell_contents(cell) for cell in obj.__closure__ or ())
@@ -155,11 +155,11 @@ def _cell_contents(cell: types.CellType) -> Any:
 
 def _found_by_name(obj: Any) -> bool:
     """Does pickle find *obj* again by its module and qualified name?"""
-    target: Any = sys.modules.get(getattr(obj, "__module__", None) or "")
-    for part in (getattr(obj, "__qualname__", "") or "").split("."):
+    target: Any = sys.modules.get(plain_getattr(obj, "__module__", None) or "")
+    for part in (plain_getattr(obj, "__qualname__", "") or "").split("."):
         if target is None or part.startswith("<"):
             return False
-        target = getattr(target, part, None)
+        target = named_attr(target, part, None)
     return target is obj
 
 
@@ -181,7 +181,7 @@ def _user_code(obj: Any) -> bool:
     user's, and so is a module name nothing is loaded under."""
     from .install_paths import is_user_code_module  # it reads the installation
 
-    module = sys.modules.get(getattr(obj, "__module__", None) or "")
+    module = sys.modules.get(plain_getattr(obj, "__module__", None) or "")
     if module is None or module_file(module) is None:
         return True
     return is_user_code_module(module)

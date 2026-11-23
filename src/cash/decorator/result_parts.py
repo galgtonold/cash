@@ -29,6 +29,9 @@ import sys
 import types
 from typing import Any
 
+from .._type_memo import class_dict, class_name, mro_of
+from .._user_attrs import plain_getattr
+
 __all__ = ["split_by_a_hit"]
 
 #: How deep, and over how many containers in all, the containers around a
@@ -163,15 +166,17 @@ def _items(value: Any, path: Any, generic: type) -> list[tuple[Any, Any]]:
         return []
     # An object holding both: ``Result(raw=a, series=pl.Series(a))``.
     found = []
-    own = getattr(value, "__dict__", None)
+    own = plain_getattr(value, "__dict__", None)
     if type(own) is dict:
         found = [((path, name, "."), item) for name, item in list(own.items())]
-    for cls in type(value).__mro__:
-        slots = cls.__dict__.get("__slots__", ())
+    for cls in mro_of(type(value)):
+        slots = class_dict(cls).get("__slots__", ())
         for name in (slots,) if isinstance(slots, str) else slots:
             if name in ("__dict__", "__weakref__"):
                 continue
-            stored = f"_{cls.__name__.lstrip('_')}{name}" if name.startswith("__") and not name.endswith("__") else name
+            stored = (
+                f"_{class_name(cls).lstrip('_')}{name}" if name.startswith("__") and not name.endswith("__") else name
+            )
             try:
                 found.append(((path, name, "."), object.__getattribute__(value, stored)))
             except (AttributeError, TypeError):

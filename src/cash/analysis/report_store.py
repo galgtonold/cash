@@ -64,6 +64,8 @@ from typing import Any
 from .. import _weak, source_reads
 from .._memo import CODE_OBJECTS, MODULE_ANALYSES, LruMemo
 from .._paths import is_pseudo_filename
+from .._type_memo import class_dict, class_qualname, module_of_class
+from .._user_attrs import plain_getattr, static_attr
 from ..code_digest import callable_identity
 from ..effects import EffectKind
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -116,7 +118,7 @@ def status() -> dict:
 
 def _wrapped(obj: Any) -> Any:
     try:
-        return inspect.getattr_static(obj, "__wrapped__", None)
+        return static_attr(obj, "__wrapped__", None)
     except Exception:  # noqa: BLE001 - an object whose type answers oddly
         return None
 
@@ -269,8 +271,8 @@ def _chain(qualname: str) -> tuple[str, ...]:
 
 def _home(obj: Any) -> tuple[str, tuple[str, ...]] | None:
     base = obj.__func__ if type(obj) is types.MethodType else obj
-    module = getattr(base, "__module__", None) if isinstance(base, (type, types.FunctionType)) else None
-    qualname = getattr(base, "__qualname__", None) if module else None
+    module = plain_getattr(base, "__module__", None) if isinstance(base, (type, types.FunctionType)) else None
+    qualname = plain_getattr(base, "__qualname__", None) if module else None
     if not isinstance(module, str) or not isinstance(qualname, str) or "<" in qualname:
         return None
     return module, _chain(qualname)
@@ -286,7 +288,7 @@ def _defining_home(obj: Any) -> tuple[str, tuple[str, ...]] | None:
     if type(base) is not types.FunctionType:
         return None
     module = base.__globals__.get("__name__")
-    if not isinstance(module, str) or module == getattr(base, "__module__", None):
+    if not isinstance(module, str) or module == plain_getattr(base, "__module__", None):
         return None
     qualname = base.__qualname__
     if "<" in qualname:
@@ -319,9 +321,9 @@ def _owner_homes(obj: Any) -> list[tuple[str, tuple[str, ...]]]:
         if not isinstance(namespace, dict):
             continue
         for held in list(namespace.values()):
-            if not isinstance(held, type) or held.__module__ != module or name not in held.__dict__:
+            if not isinstance(held, type) or module_of_class(held) != module or name not in class_dict(held):
                 continue
-            qualname = held.__qualname__
+            qualname = class_qualname(held)
             if isinstance(qualname, str) and "<" not in qualname:
                 found.append((module, (*qualname.split("."), name)))
     return found
@@ -352,8 +354,8 @@ def _instance_homes(obj: Any) -> list[tuple[str, tuple[str, ...]]]:
     the method is bound to (``model = Model()``), by the method's name."""
     if type(obj) is not types.MethodType or isinstance(obj.__self__, type):
         return []
-    owner, name = obj.__self__, getattr(obj.__func__, "__name__", None)
-    module = getattr(obj.__func__, "__module__", None)
+    owner, name = obj.__self__, plain_getattr(obj.__func__, "__name__", None)
+    module = plain_getattr(obj.__func__, "__module__", None)
     namespace = getattr(sys.modules.get(module) if isinstance(module, str) else None, "__dict__", None)
     if not isinstance(name, str) or not isinstance(namespace, dict):
         return []
@@ -368,7 +370,7 @@ def _holder_homes(obj: Any) -> list[tuple[str, tuple[str, ...]]]:
     Asked only when no other name leads to it: one lookup per loaded
     module."""
     base = obj.__func__ if type(obj) is types.MethodType else obj
-    qualname = getattr(base, "__qualname__", None) if type(base) is types.FunctionType else None
+    qualname = plain_getattr(base, "__qualname__", None) if type(base) is types.FunctionType else None
     if not isinstance(qualname, str) or "<" in qualname or "." not in qualname:
         return []
     chain = _chain(qualname)
@@ -383,7 +385,7 @@ _HOLDERS: dict[str, tuple[int, tuple[str, ...]]] = {}
 def _holds_own_class(name: str, attr: str) -> bool:
     namespace = getattr(sys.modules.get(name), "__dict__", None)
     held = namespace.get(attr) if type(namespace) is dict else None
-    return isinstance(held, type) and getattr(held, "__module__", None) == name
+    return isinstance(held, type) and plain_getattr(held, "__module__", None) == name
 
 
 def _class_holders(attr: str) -> tuple[str, ...]:
@@ -401,9 +403,9 @@ def _class_holders(attr: str) -> tuple[str, ...]:
     for name, module in list(sys.modules.items()):
         # `_holds_own_class`, without looking the module up again: this
         # reads every loaded module.
-        namespace = getattr(module, "__dict__", None)
+        namespace = plain_getattr(module, "__dict__", None)
         held = namespace.get(attr) if type(namespace) is dict else None
-        if held is not None and isinstance(held, type) and getattr(held, "__module__", None) == name:
+        if held is not None and isinstance(held, type) and plain_getattr(held, "__module__", None) == name:
             found.append(name)
     if len(_HOLDERS) > 4096:
         _HOLDERS.clear()
@@ -472,7 +474,7 @@ def _find(path: Any) -> Any:
 
 def _static_str(obj: Any, name: str) -> str | None:
     try:
-        value = inspect.getattr_static(obj, name, None)
+        value = static_attr(obj, name, None)
     except Exception:  # noqa: BLE001 - a user class's own lookup can raise anything; unknown means walk
         return None
     return value if isinstance(value, str) else None
@@ -484,23 +486,23 @@ def _token(value: Any) -> list:
     for every visited callable on its own, `_object_guard`)."""
     kind = type(value)
     if issubclass(kind, types.ModuleType):
-        return ["m", getattr(value, "__name__", None)]
+        return ["m", plain_getattr(value, "__name__", None)]
     if is_mock(value):
         raise _Unstorable("a mock")
     if kind is types.MethodType:
         owner = value.__self__
         return ["bm", _token(value.__func__), _token(owner) if isinstance(owner, type) else _type_name(type(owner))]
     if kind in (types.FunctionType, types.BuiltinFunctionType) or isinstance(value, type):
-        code = getattr(value, "__code__", None) if kind is types.FunctionType else None
+        code = plain_getattr(value, "__code__", None) if kind is types.FunctionType else None
         return [
             "f",
             _type_name(kind),
-            getattr(value, "__module__", None),
-            getattr(value, "__qualname__", None),
+            plain_getattr(value, "__module__", None),
+            plain_getattr(value, "__qualname__", None),
             code.co_filename if code is not None else None,
             is_pure(value),
             is_stateful(value),
-            getattr(value, "_cash_cached", False) is True,
+            plain_getattr(value, "_cash_cached", False) is True,
         ]
     if isinstance(value, functools.partial):
         return ["p", _token(value.func)]
@@ -520,7 +522,7 @@ def _token(value: Any) -> list:
 
 
 def _type_name(kind: type) -> list:
-    return [getattr(kind, "__module__", None), getattr(kind, "__qualname__", None)]
+    return [plain_getattr(kind, "__module__", None), plain_getattr(kind, "__qualname__", None)]
 
 
 def _codes_below(code: types.CodeType) -> list[types.CodeType]:
@@ -576,8 +578,8 @@ def _file_of(obj: Any) -> str | None:
     if type(obj) is types.FunctionType:
         filename = obj.__code__.co_filename
     else:
-        module = sys.modules.get(getattr(obj, "__module__", None) or "")
-        filename = getattr(module, "__file__", None)
+        module = sys.modules.get(plain_getattr(obj, "__module__", None) or "")
+        filename = plain_getattr(module, "__file__", None)
     if not isinstance(filename, str) or is_pseudo_filename(filename):
         return None
     return filename
@@ -915,7 +917,7 @@ def _read_file(obj: Any) -> str | None:
     """The file whose text was read as *obj*'s (`cash.source_reads`)."""
     if type(obj) is types.MethodType:
         obj = obj.__func__
-    code = obj if type(obj) is types.CodeType else getattr(obj, "__code__", None)
+    code = obj if type(obj) is types.CodeType else plain_getattr(obj, "__code__", None)
     if type(code) is types.CodeType:
         filename = code.co_filename
         return None if is_pseudo_filename(filename) else filename
@@ -954,7 +956,7 @@ def _plan(objects: list[Any], paths: list[list], report: PurityReport, reads: so
                 whole.add(filename)
     for obj in reads.objects.values():
         base = obj.__func__ if type(obj) is types.MethodType else obj
-        if id(base) in covered or id(getattr(base, "__code__", None)) in covered:
+        if id(base) in covered or id(plain_getattr(base, "__code__", None)) in covered:
             continue
         if type(base) is types.FunctionType or isinstance(base, type):
             try:

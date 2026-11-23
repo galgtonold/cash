@@ -79,7 +79,7 @@ data = [1, 2, 3]      # stored: [1, 2, 3]
 data.append(4)        # data is now [1, 2, 3, 4]; the stored copy is not
 ```
 
-<!-- claim: cash/analysis/mutations.py:MutationVisitor @9e18d5d7, cash/analysis/mutations.py:MUTATING_METHODS @d047b7a6 broad="the table lists every pattern the visitor detects" -->
+<!-- claim: cash/analysis/mutations.py:MutationVisitor @d40e7655, cash/analysis/mutations.py:MUTATING_METHODS @d047b7a6 broad="the table lists every pattern the visitor detects" -->
 What decides the verdict is whether the statement also *produces* the variable
 it changed. If it does, the change is a new version of that variable: it is
 stored, its lineage advances, and the statement caches. If it changes some
@@ -167,7 +167,7 @@ leave every other reference to the object with the unchanged original, so
 the statement is cached only when cash can write the stored state back into
 the object itself:
 
-<!-- claim: cash/rewrite_in_place.py:refusal @cece1b9e, cash/rewrite_in_place.py:shape_change @496efe57, cash/notebook/statement/mutation_routing.py:MutationRouting._store_in_place @b4f1f1e6 -->
+<!-- claim: cash/rewrite_in_place.py:refusal @abbcccec, cash/rewrite_in_place.py:shape_change @9ecf321f, cash/notebook/statement/mutation_routing.py:MutationRouting._store_in_place @b4f1f1e6 -->
 - **Stored with the object's new state.** A NumPy array (not of objects), a
   pandas DataFrame or Series that keeps its index, columns and dtypes (a
   Series of a NumPy dtype, not pandas' `str` or another extension dtype), or

@@ -15,6 +15,8 @@ import types
 from typing import TYPE_CHECKING, Any
 
 from .._memo import CODE_OBJECTS, LruMemo
+from .._type_memo import class_dict, class_module, class_mro, class_qualname
+from .._user_attrs import plain_getattr, plain_hasattr
 from ..analysis.helper_code import renamed
 from ..code_digest import source_digest, unwrap_partials
 from ..code_swaps import note_owner, settable
@@ -125,7 +127,7 @@ class CodeSurface:
         ``def m(self, x=_MISSING)`` reprs as ``<object object at 0x...>``,
         the same address leak as a nested code object, just one layer up.
         """
-        code = getattr(fn, "__code__", None)
+        code = plain_getattr(fn, "__code__", None)
         if code is None:
             return ()
         return (
@@ -206,7 +208,7 @@ class CodeSurface:
         # containers being walked) ends a container that holds itself.
         if isinstance(v, (list, tuple, set, frozenset, dict)):
             if id(v) in _path:
-                return f"<cycle:{type(v).__qualname__}>"
+                return f"<cycle:{class_qualname(type(v))}>"
             _path = _path | {id(v)}
         if isinstance(v, (list, tuple, set, frozenset)):
             inner = [self._unpicklable_identity(x, _path) for x in v]
@@ -215,7 +217,7 @@ class CodeSurface:
                 # hashing is randomized per process -- sort or reintroduce the
                 # very instability this method exists to remove.
                 inner.sort()
-            return f"{type(v).__qualname__}[{'|'.join(inner)}]"
+            return f"{class_qualname(type(v))}[{'|'.join(inner)}]"
         if isinstance(v, dict):
             return (
                 "dict["
@@ -247,15 +249,15 @@ class CodeSurface:
             return text
         cls = type(v)
         if isinstance(v, SYNC_TYPES):
-            return f"<{cls.__module__}.{cls.__qualname__}>"
-        name = f"{getattr(cls, '__module__', '?')}.{getattr(cls, '__qualname__', '?')}"
+            return f"<{class_module(cls)}.{class_qualname(cls)}>"
+        name = f"{plain_getattr(cls, '__module__', '?')}.{plain_getattr(cls, '__qualname__', '?')}"
         raise KeyBuildFailed(
             "KEY-UNHASHABLE-DEFAULT",
             f"cash cannot key a {name} that code reaching the call holds as a default or constant: "
             f"it cannot be hashed and has no value-based repr, so a change to it could not be "
             f"seen and the call ran uncached.",
             f"get the value out of the signature -- build it in the body or pass it as an argument -- "
-            f"or register a hasher with cash.register_hasher({cls.__qualname__}, ...).",
+            f"or register a hasher with cash.register_hasher({class_qualname(cls)}, ...).",
         )
 
     def _code_surface_own(self, obj: Any) -> str | None:
@@ -389,14 +391,14 @@ class CodeSurface:
             ident = self._code_identity(obj)
             if not ident:
                 return self._wrapper_digest(obj)
-            parts = [(getattr(obj, "__qualname__", "?") + renamed(obj), "", ident)]
+            parts = [(plain_getattr(obj, "__qualname__", "?") + renamed(obj), "", ident)]
             # And the user functions it runs besides its own code: what a
             # decorator wraps, a function a closure holds. A decorator's
             # wrapper code is shared by every function it wraps; the
             # function itself is what tells them apart.
             layers = [obj, *user_layers(obj)]
             for layer in layers[1:]:
-                parts.append((getattr(layer, "__qualname__", "?"), "runs", self._code_identity(layer)))
+                parts.append((plain_getattr(layer, "__qualname__", "?"), "runs", self._code_identity(layer)))
         if not parts:
             return None, layers
         return hashlib.sha256(repr(parts).encode("utf-8")).hexdigest(), layers
@@ -410,15 +412,15 @@ class CodeSurface:
         "opaque" (KEY-OPAQUE-CALLABLE): passed as an argument, it was keyed by
         its name alone, and an edit was served the old result unless a trace
         of the call caught it. ``None`` for any other codeless callable."""
-        if getattr(obj, "__code__", None) is not None:
+        if plain_getattr(obj, "__code__", None) is not None:
             return None, []
-        wrapped = getattr(obj, "__wrapped__", None)
+        wrapped = plain_getattr(obj, "__wrapped__", None)
         if wrapped is None or wrapped is obj or not callable(wrapped):
             return None, []
         inner = self._code_surface_own(wrapped)
         if inner is None:
             return None, []
-        part = (getattr(obj, "__qualname__", "?") + renamed(obj), "wraps", inner)
+        part = (plain_getattr(obj, "__qualname__", "?") + renamed(obj), "wraps", inner)
         return hashlib.sha256(repr([part]).encode("utf-8")).hexdigest(), [wrapped]
 
     def code_surface_hash(self, obj: Any) -> str | None:
@@ -498,7 +500,7 @@ class CodeSurface:
             # `str(f.type)` and not the object: an annotation may be a string
             # (`from __future__ import annotations`) or a class, and both spell
             # the same thing deterministically this way.
-            parts.append((base.__qualname__, f"__dataclass_field__:{fname}", (str(getattr(f, "type", "")), meta)))
+            parts.append((class_qualname(base), f"__dataclass_field__:{fname}", (str(getattr(f, "type", "")), meta)))
         return parts
 
     def _pydantic_field_parts(self, cls: type) -> list[tuple]:
@@ -520,7 +522,7 @@ class CodeSurface:
         # computes something, or raises. Hashing must never be the thing that
         # breaks a call.
         try:
-            fields = getattr(cls, "model_fields", None)
+            fields = plain_getattr(cls, "model_fields", None)
         except Exception:  # noqa: BLE001 - a descriptor of someone else's
             return []
         if not isinstance(fields, dict):
@@ -533,7 +535,7 @@ class CodeSurface:
                 default = None
             parts.append(
                 (
-                    cls.__qualname__,
+                    class_qualname(cls),
                     f"__pydantic_field__:{fname}",
                     (
                         str(getattr(info, "annotation", "")),
@@ -554,7 +556,7 @@ class CodeSurface:
         here, which ends a cycle.
         """
         parts: list[tuple] = self._pydantic_field_parts(cls)
-        for base in reversed(cls.__mro__):
+        for base in reversed(class_mro(cls)):
             # An OPAQUE base contributes nothing, so `cash.opaque(VendorBase)`
             # also stops a `Derived(VendorBase)` digest moving when the vendor
             # edits its own base. Without this the escape hatch worked only
@@ -566,7 +568,7 @@ class CodeSurface:
                 continue
             if not is_user_code_object(base):
                 continue
-            namespace = vars(base)
+            namespace = class_dict(base)
             data = tuple(n for n, m in namespace.items() if isinstance(n, str) and not callable(m))
             leftovers = set_loop_leftovers(base, data)
             for name, member in sorted(namespace.items(), key=lambda kv: kv[0]):
@@ -624,7 +626,7 @@ class CodeSurface:
             return self._dataclass_field_parts(base, member)
         if isinstance(member, property):
             return [
-                (base.__qualname__, f"{name}.{tag}", ident)
+                (class_qualname(base), f"{name}.{tag}", ident)
                 for tag, accessor in (("get", member.fget), ("set", member.fset))
                 if (ident := self._code_identity(accessor))
             ]
@@ -651,10 +653,10 @@ class CodeSurface:
         unchanging descriptor repr.
         """
         outer = member.__func__ if isinstance(member, (classmethod, staticmethod)) else member
-        target = getattr(outer, "__wrapped__", outer)
-        if not hasattr(target, "__code__"):
+        target = plain_getattr(outer, "__wrapped__", outer)
+        if not plain_hasattr(target, "__code__"):
             func_attr = getattr(target, "func", None)
-            if func_attr is not None and hasattr(func_attr, "__code__"):
+            if func_attr is not None and plain_hasattr(func_attr, "__code__"):
                 target = func_attr
         ident = self._code_identity(target)
         if ident and callable(outer):
@@ -697,8 +699,8 @@ class CodeSurface:
         if target is not member:
             own = self._member_content(member)
             if own is not None:
-                return (base.__qualname__, name, (ident, own))
-        return (base.__qualname__, name, ident)
+                return (class_qualname(base), name, (ident, own))
+        return (class_qualname(base), name, ident)
 
     def _codeless_callable_parts(
         self, cls: type, base: type, name: str, member: Any, path: tuple[type, ...]
@@ -736,7 +738,7 @@ class CodeSurface:
         content = self._member_content(member)
         if content is None and not isinstance(member, type):
             content = self._unpicklable_member(base, name, member)
-        return [(base.__qualname__, name, (nested, content))]
+        return [(class_qualname(base), name, (nested, content))]
 
     def _unpicklable_member(self, base: type, name: str, member: Any) -> str:
         """The stand-in for a codeless callable class attribute whose content
@@ -751,26 +753,26 @@ class CodeSurface:
         and a lock's own method by its kind, as a lock held anywhere else
         is: no result is computed from one.
         """
-        owner = getattr(member, "__self__", None)
+        owner = plain_getattr(member, "__self__", None)
         if isinstance(member, _STATELESS_C_CALLABLES) or (
             isinstance(member, types.BuiltinFunctionType)
             and (owner is None or isinstance(owner, (type, types.ModuleType)))
         ):
             home = getattr(member, "__objclass__", owner)
-            module = getattr(home, "__module__", None) or getattr(home, "__name__", "?")
+            module = plain_getattr(home, "__module__", None) or plain_getattr(home, "__name__", "?")
             return f"builtin:{module}.{getattr(member, '__qualname__', getattr(member, '__name__', '?'))}"
         if isinstance(owner, SYNC_TYPES):
             cls = type(owner)
-            return f"sync:{cls.__module__}.{cls.__qualname__}.{getattr(member, '__name__', '?')}"
+            return f"sync:{class_module(cls)}.{class_qualname(cls)}.{getattr(member, '__name__', '?')}"
         kind = type(member)
-        kind_name = f"{getattr(kind, '__module__', '?')}.{getattr(kind, '__qualname__', '?')}"
+        kind_name = f"{plain_getattr(kind, '__module__', '?')}.{plain_getattr(kind, '__qualname__', '?')}"
         raise KeyBuildFailed(
             "KEY-UNHASHABLE-DEFAULT",
-            f"cash cannot key the class attribute {base.__qualname__}.{name}, a {kind_name} that code "
+            f"cash cannot key the class attribute {class_qualname(base)}.{name}, a {kind_name} that code "
             f"reaching the call holds: it cannot be hashed, so a change to what it computes could not "
             f"be seen and the call ran uncached.",
-            f"make {base.__qualname__}.{name} a method or a function, or register a hasher with "
-            f"cash.register_hasher({getattr(kind, '__qualname__', '?')}, ...).",
+            f"make {class_qualname(base)}.{name} a method or a function, or register a hasher with "
+            f"cash.register_hasher({plain_getattr(kind, '__qualname__', '?')}, ...).",
         )
 
     def _data_member_parts(self, base: type, name: str, member: Any, ident: tuple) -> list[tuple]:
@@ -804,7 +806,7 @@ class CodeSurface:
         content = self._member_content(member)
         if not ident and content is None:
             return []
-        return [(base.__qualname__, name, (ident, content))]
+        return [(class_qualname(base), name, (ident, content))]
 
     def _field_factory_parts(self, cls: type) -> list[tuple]:
         """The parts for *cls*'s dataclass field factories.
@@ -822,7 +824,7 @@ class CodeSurface:
         skips pseudo-fields, and this must never raise.
         """
         parts: list[tuple] = []
-        fields_map = getattr(cls, "__dataclass_fields__", None)
+        fields_map = plain_getattr(cls, "__dataclass_fields__", None)
         if isinstance(fields_map, dict):
             for fname, fld in sorted(fields_map.items()):
                 factory = getattr(fld, "default_factory", None)
@@ -832,7 +834,7 @@ class CodeSurface:
                     continue
                 ident = self._code_identity(factory)
                 if ident:
-                    parts.append((cls.__qualname__, f"field:{fname}:factory", ident))
+                    parts.append((class_qualname(cls), f"field:{fname}:factory", ident))
         return parts
 
     def user_class_source_hash(self, cls: type) -> str:
@@ -922,13 +924,13 @@ class CodeSurface:
             if is_user_class(cls, own_pkg):
                 surface = self.held_class_surface(cls) if by_name else None
                 if surface is not None:
-                    parts.append((cls.__qualname__, surface))
+                    parts.append((class_qualname(cls), surface))
                 else:
                     try:
-                        parts.append((cls.__qualname__, self.user_class_source_hash(cls)))
+                        parts.append((class_qualname(cls), self.user_class_source_hash(cls)))
                     except SOURCE_RETRIEVAL_ERRORS:
                         pass
-            held = getattr(item, "__dict__", None)
+            held = plain_getattr(item, "__dict__", None)
             if isinstance(held, dict):
                 found = [
                     inner

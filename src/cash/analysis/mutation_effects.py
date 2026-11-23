@@ -29,6 +29,7 @@ from cash._referents import get_referents
 from cash._user_attrs import attribute_or, instance_of, is_routine
 
 from .. import source_reads
+from .._user_attrs import has_attribute, static_attr
 from ..content_hashers import builtin_hash_family
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..install_paths import is_user_code_file
@@ -158,7 +159,7 @@ def live_function_source(name: str, namespace: Mapping[str, Any]) -> str | None:
         fn = namespace.get(head)
         for attr in attrs:
             try:
-                fn = inspect.getattr_static(fn, attr)
+                fn = static_attr(fn, attr)
             except AttributeError:
                 return None
         if type(fn) is types.FunctionType:
@@ -506,7 +507,7 @@ class _LoopNames:
         value = self.namespace[base]
         for attr in rest.split(".") if rest else ():
             try:
-                value = inspect.getattr_static(value, attr)
+                value = static_attr(value, attr)
             except AttributeError:
                 return False
         if issubclass(type(value), types.ModuleType):
@@ -1666,7 +1667,7 @@ def _draws_through(obj: Any) -> bool:
 
 def _has_next(obj: Any) -> bool:
     """Whether *obj* is an iterator (its type has ``__next__``)."""
-    return hasattr(type(obj), "__next__")
+    return has_attribute(type(obj), "__next__")
 
 
 def _add_source(out: dict[str, None], code: Any) -> None:

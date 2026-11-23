@@ -48,6 +48,8 @@ from cash.tracking.read_classification import own_exists, own_lstat, own_stat, s
 from cash.tracking.tracker_context import untracked
 from cash.tracking.written_in_place import is_written_in_place
 
+from .._user_attrs import plain_getattr
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -1422,7 +1424,7 @@ def _code_root(module_name: str, mod: Any) -> str | None:
     Remembered per module name and file for the life of the process: a worker
     checks thousands of dependencies against the same loaded code, and
     resolving its path each time cost a ``realpath`` per check."""
-    path = getattr(mod, "__file__", None)
+    path = plain_getattr(mod, "__file__", None)
     if not isinstance(path, str) or not path:
         return None
     key = (module_name, path)

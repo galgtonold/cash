@@ -55,6 +55,7 @@ from cash.source_reading import own_source, wrapper_layers
 from cash.value_hash import compute_hash
 
 from .. import _weak
+from .._type_memo import class_dict
 
 if TYPE_CHECKING:
     from cash.notebook.call_interception import CallSite
@@ -806,7 +807,10 @@ def _read_only_methods() -> frozenset:
         collections.defaultdict, re.Pattern, struct.Struct, array.array,
     )  # fmt: skip
     return frozenset(
-        method for kind in classes for name, method in vars(kind).items() if name in _READERS and method is not None
+        method
+        for kind in classes
+        for name, method in class_dict(kind).items()
+        if name in _READERS and method is not None
     )
 
 
@@ -1959,7 +1963,7 @@ def _is_plain_data(value, budget: list[int]) -> bool:
     budget[0] -= 1
     if budget[0] < 0:
         return False
-    if isinstance(value, _PLAIN_ATOMS):
+    if not issubclass(type(value), type) and isinstance(value, _PLAIN_ATOMS):
         return True
     np = sys.modules.get("numpy")
     if np is not None:
@@ -2018,7 +2022,9 @@ def _plain_or_code(value, seen: set[int], budget: list[int]) -> bool:
             # re-fitted on byte-identical text.
             return True
         return _callee_state_is_plain(value, seen, budget)
-    if isinstance(value, (_ModuleType, type, _types.BuiltinFunctionType)):
+    # ``type`` first: a class is one by its real type, and is never asked
+    # for a ``__class__`` its metaclass's hook would answer.
+    if isinstance(value, (type, _ModuleType, _types.BuiltinFunctionType)):
         return True
     np = sys.modules.get("numpy")
     if np is not None and isinstance(value, np.ufunc):

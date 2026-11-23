@@ -323,7 +323,7 @@ In worker processes (`multiprocessing`, `ProcessPoolExecutor`, joblib):
 
 See [Threads and processes](../tutorials/feature-guides/thread-safety.md#across-processes-pool-processpoolexecutor-joblib).
 
-<!-- claim: cash/reconfigure.py:apply_overrides @b8ecc0a2, cash/config/resolve.py:validated_overrides @fecbc461 -->
+<!-- claim: cash/reconfigure.py:apply_overrides @7a11e1a6, cash/config/resolve.py:validated_overrides @fecbc461 -->
 Values are checked exactly as `Cash(...)` checks them, before anything
 changes:
 

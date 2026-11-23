@@ -14,6 +14,9 @@ import sys
 from collections.abc import Mapping, Sequence
 from functools import lru_cache
 
+from .._type_memo import class_module
+from .._user_attrs import plain_getattr
+
 __all__ = [
     "ESTIMATOR_READING_METHODS",
     "ESTIMATOR_READ_ARGUMENTS",
@@ -171,7 +174,7 @@ def reads_its_arguments_only(
     overwrite_input=True)`` sorts ``a`` in place and ``np.mean(a, out=b)``
     writes ``b``, so a call that turns on a write parameter is not read-only.
     """
-    name = getattr(fn, "__name__", None)
+    name = plain_getattr(fn, "__name__", None)
     if not isinstance(name, str) or name not in _ALL_NAMES:
         return False
     for module_name, names in _READ_ONLY_CALLEES.items():
@@ -233,9 +236,9 @@ _PLAIN = (type(None), bool, int, float, complex, str, bytes)
 
 
 def _root_module(obj) -> str:
-    module = getattr(obj, "__module__", None) if callable(obj) and not hasattr(obj, "get_params") else None
+    module = plain_getattr(obj, "__module__", None) if callable(obj) and not hasattr(obj, "get_params") else None
     if not isinstance(module, str):
-        module = type(obj).__module__
+        module = class_module(type(obj))
     return module.partition(".")[0]
 
 
@@ -262,7 +265,7 @@ def _held_value_is_known(value, depth: int) -> bool:
 
 
 def _estimator_is_known(estimator, depth: int) -> bool:
-    if type(estimator).__module__.partition(".")[0] != "sklearn":
+    if class_module(type(estimator)).partition(".")[0] != "sklearn":
         return False
     try:
         params = estimator.get_params(deep=True)
@@ -339,7 +342,7 @@ def cross_validation_reads_its_arguments(fn, estimators: Sequence, others: Seque
     and everything else it is handed (``cv``, ``scoring``, ``params``) is
     known (`held_value_is_known`): a scorer or splitter of the user's is
     handed the data."""
-    name = getattr(fn, "__name__", None)
+    name = plain_getattr(fn, "__name__", None)
     if name not in _CROSS_VALIDATION_FUNCTIONS or _sklearn_own("sklearn.model_selection", name) is not fn:
         return False
     if not estimators:
@@ -359,7 +362,7 @@ def estimator_stand_in(callee, args: Sequence, kwargs: Mapping):
     anyone's on the data. What it is built from is what the statement will
     hand it, so `estimator_reads_its_arguments` can read its parameters."""
     if isinstance(callee, type):
-        if callee.__module__.partition(".")[0] != "sklearn" or not callable(getattr(callee, "get_params", None)):
+        if class_module(callee).partition(".")[0] != "sklearn" or not callable(getattr(callee, "get_params", None)):
             return None
     elif not any(_sklearn_own(module, name) is callee for module, name in _ESTIMATOR_FACTORIES):
         return None
@@ -367,4 +370,4 @@ def estimator_stand_in(callee, args: Sequence, kwargs: Mapping):
         built = callee(*args, **kwargs)
     except Exception:  # noqa: BLE001 - not built: not known
         return None
-    return built if type(built).__module__.partition(".")[0] == "sklearn" else None
+    return built if class_module(type(built)).partition(".")[0] == "sklearn" else None

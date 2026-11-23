@@ -12,6 +12,7 @@ from collections.abc import Callable, Mapping
 from typing import Any, TypedDict
 
 from .. import _weak
+from .._type_memo import class_name
 
 logger = logging.getLogger(__name__)
 
@@ -298,7 +299,7 @@ class CacheBackend(ABC):
         """What this tier is called where an entry says where it came from
         (``RAM``, ``SQLITE``). Backends name themselves with a class
         attribute; the default is the class name."""
-        return type(self).__name__
+        return class_name(type(self))
 
     @property
     def default_ttl(self) -> float | None:

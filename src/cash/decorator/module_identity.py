@@ -6,6 +6,8 @@ import sys
 import types
 from typing import Any
 
+from .._type_memo import class_module, class_qualname
+
 _OWN_PACKAGE = __name__.partition(".")[0]
 
 
@@ -36,7 +38,7 @@ def module_ref(module: types.ModuleType) -> str:
     origin = namespace.get("__file__")
     if not isinstance(origin, str):
         origin = getattr(spec, "origin", None) if spec is not None else None
-    name = names[0] if names else f"{type(module).__module__}.{type(module).__qualname__}"
+    name = names[0] if names else f"{class_module(type(module))}.{class_qualname(type(module))}"
     return f"{name}@{origin}" if isinstance(origin, str) else name
 
 

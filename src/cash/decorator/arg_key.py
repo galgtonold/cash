@@ -14,6 +14,8 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Annotated, Any, TypeVar
 
+from .._type_memo import class_name
+from .._user_attrs import plain_getattr, unwrapped
 from ..effects import EffectKind, classify_call
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from .cached_function import follow_passthrough
@@ -81,7 +83,7 @@ def _globals_of(obj: Any) -> dict[str, Any]:
     for _ in range(8):
         if type(obj) is types.FunctionType:
             return obj.__globals__
-        inner = getattr(obj, "__func__", None) or getattr(obj, "func", None)
+        inner = plain_getattr(obj, "__func__", None) or getattr(obj, "func", None)
         if inner is None or inner is obj:
             break
         obj = inner
@@ -135,7 +137,7 @@ def annotated_ignores(func: Any, sig: inspect.Signature) -> frozenset[str]:
                 if re.search(r"\bIgnore\b", ann):
                     raise TypeError(
                         f"@cash.cache on {getattr(func, '__qualname__', func)!r}: the annotation of parameter "
-                        f"{name!r}, {ann!r}, cannot be evaluated ({type(exc).__name__}: {exc}), so cash cannot "
+                        f"{name!r}, {ann!r}, cannot be evaluated ({class_name(type(exc))}: {exc}), so cash cannot "
                         f"tell whether it leaves the parameter out of the key. Make the names in it importable "
                         f"where the function is defined, or use @cash.cache(ignore=[{name!r}]) instead."
                     ) from exc
@@ -151,7 +153,7 @@ def _describe(func: Any, sig: inspect.Signature) -> str:
     """``load(path, debug)``: the function as the user wrote its parameters."""
     prefix = {inspect.Parameter.VAR_POSITIONAL: "*", inspect.Parameter.VAR_KEYWORD: "**"}
     names = ", ".join(prefix.get(p.kind, "") + p.name for p in sig.parameters.values())
-    return f"{getattr(func, '__name__', type(func).__name__)}({names})"
+    return f"{getattr(func, '__name__', class_name(type(func)))}({names})"
 
 
 def _ignore_names(ignore: Any) -> tuple[str, ...]:
@@ -159,11 +161,11 @@ def _ignore_names(ignore: Any) -> tuple[str, ...]:
     if isinstance(ignore, str):
         return (ignore,)
     if not isinstance(ignore, Iterable) or isinstance(ignore, (bytes, dict)):
-        raise TypeError(f"@cash.cache: ignore= takes a list of parameter names, not {type(ignore).__name__}")
+        raise TypeError(f"@cash.cache: ignore= takes a list of parameter names, not {class_name(type(ignore))}")
     names = tuple(ignore)
     for name in names:
         if not isinstance(name, str):
-            raise TypeError(f"@cash.cache: ignore= takes parameter names as strings, not {type(name).__name__}")
+            raise TypeError(f"@cash.cache: ignore= takes parameter names as strings, not {class_name(type(name))}")
     return names
 
 
@@ -182,7 +184,7 @@ def arg_key_spec(func: Any, sig: inspect.Signature | None, key: Any, ignore: Any
     """
     if key is not None:
         if not callable(key):
-            raise TypeError(f"@cash.cache: key= takes a function, not {type(key).__name__}")
+            raise TypeError(f"@cash.cache: key= takes a function, not {class_name(type(key))}")
         if inspect.iscoroutinefunction(key) or inspect.isasyncgenfunction(key) or inspect.isgeneratorfunction(key):
             raise TypeError(
                 "@cash.cache: key= takes a plain function that returns the key, not an async or generator "
@@ -251,7 +253,7 @@ def keyed_arguments(
         except Exception as exc:  # the user's key function can raise anything
             raise KeyBuildFailed(
                 "KEY-FUNCTION-RAISED",
-                f"@cash.cache on {func_name}: the key= function raised {type(exc).__name__} ({exc}), so the call "
+                f"@cash.cache on {func_name}: the key= function raised {class_name(type(exc))} ({exc}), so the call "
                 f"ran uncached.",
                 "make the key function handle every call the function accepts.",
             ) from exc
@@ -409,14 +411,14 @@ def key_function_impurities(key_fn: Callable[..., Any]) -> list[str]:
     from ..analysis.purity_analyzer import get_analyzer
     from ..analysis.purity_report import ISSUE_AMBIENT_READ, ISSUE_IMPURE_CALL, ISSUE_NETWORK_READ
 
-    fn = inspect.unwrap(key_fn) if type(key_fn) is types.FunctionType else key_fn
+    fn = unwrapped(key_fn) if type(key_fn) is types.FunctionType else key_fn
     namespace = _globals_of(fn)
     text = _own_text(fn)
     found: list[str] = []
     analyzed: list[Any] = []
     if text is not None:
         found.extend(_scan_text(text, namespace))
-        if getattr(fn, "__name__", "") == "<lambda>":
+        if plain_getattr(fn, "__name__", "") == "<lambda>":
             analyzed = _named_functions(text, namespace)
         else:
             analyzed = [fn]

@@ -16,6 +16,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from . import _active, _log
+from ._type_memo import class_name
 from .backends.factory import apply_persistence_settings, build_backend_from_config, built_from_config, tier_specs
 from .config.resolve import validated_overrides
 
@@ -46,7 +47,7 @@ def apply_overrides(cash: Cash, overrides: dict[str, Any]) -> None:
     if tiers_change and running is not None and not built_from_config(running):
         raise ValueError(
             f"cash.configure({', '.join(sorted(checked))}=...) changes the storage tiers, but this "
-            f"Cash was given its backend ({type(running).__name__}) as an object, and cash does not "
+            f"Cash was given its backend ({class_name(type(running))}) as an object, and cash does not "
             f"rebuild a backend it did not build. Configure that backend, or pass a new one."
         )
     # Built from a copy before the config is touched: if it raises, nothing

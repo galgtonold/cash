@@ -51,6 +51,8 @@ from cash.install_paths import is_user_code_file, is_user_module
 from cash.value_hash import compute_hash
 
 from .. import _weak as cash_weak
+from .._type_memo import class_name
+from .._user_attrs import static_attr
 
 __all__ = [
     "FILLED",
@@ -541,7 +543,7 @@ def _items(memo: Any) -> list[tuple[Any, Any]] | None:
         return None
     keys, answers = nodes[0::step], nodes[1::step]
     try:
-        if any(type(node).__name__ != "_lru_list_elem" for node in cache.values()):
+        if any(class_name(type(node)) != "_lru_list_elem" for node in cache.values()):
             return None
         if {id(k) for k in keys} != {id(k) for k in cache}:
             return None
@@ -1292,7 +1294,7 @@ def _canonical_key(key: Any, depth: int) -> Any:
     if kind is complex:
         return _canonical_key(key.real, depth) if key.imag == 0 else ("c", repr(key))
     if kind is str or kind is bytes:
-        return (kind.__name__, key)
+        return (class_name(kind), key)
     if key is None:
         return ("n",)
     if kind is object:
@@ -1342,7 +1344,7 @@ def _portable_key(key: Any, depth: int = 4) -> bool:
         if module is None or not isinstance(qualname, str) or "<locals>" in qualname:
             return False
         for part in qualname.split("."):
-            value = attribute_or(value, part, None)
+            value = attribute_or(value, part, None, asked=True)
         return value is key
     return False
 
@@ -1389,7 +1391,6 @@ def _memos_cleared_by(code: str | None, ns: Mapping[str, Any] | None, fn: Any = 
     (``holder.memo.cache_clear``), read without running a property."""
     import ast
     import dis
-    import inspect
 
     from cash.decorator.closure_fold import iter_code_scopes
     from cash.notebook.callee_reach import reached_user_code
@@ -1399,7 +1400,7 @@ def _memos_cleared_by(code: str | None, ns: Mapping[str, Any] | None, fn: Any = 
     def memo_id(value: Any, attrs: list[str] = ()) -> None:
         for attr in attrs:
             try:
-                value = inspect.getattr_static(value, attr)
+                value = static_attr(value, attr)
             except Exception:  # noqa: BLE001 - not there: no memo named
                 return
         if type(value) is _LRU_WRAPPER:

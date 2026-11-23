@@ -17,7 +17,7 @@ stay in memory, and results under 10 ms are not stored at all. The
 [cost model](../../cost-model.md) has the exact rules and the settings that tune
 them.
 
-<!-- claim: cash/backends/memory_backend.py:_hit_no_faster @5532d7f8, cash/backends/memory_backend.py:_slower_than_its_compute @b7818725, cash/backends/memory_backend.py:restored_no_faster @cdf958e0 -->
+<!-- claim: cash/backends/memory_backend.py:_hit_no_faster @5532d7f8, cash/backends/memory_backend.py:_slower_than_its_compute @baa0aba7, cash/backends/memory_backend.py:restored_no_faster @cdf958e0 -->
 An object that takes as long to load as to compute is not kept at all. Some
 objects rebuild their data when they are loaded: a fitted statsmodels result,
 for example, rebuilds its design matrix. cash keeps such an object as the

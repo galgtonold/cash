@@ -25,6 +25,7 @@ import textwrap
 import types
 from typing import Any
 
+from .._type_memo import mro_of
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_reading import own_source
 from . import tree_memo
@@ -47,7 +48,7 @@ def decides_checks_itself(cls: type) -> bool:
     answer reads what the class holds."""
     return any(
         "__instancecheck__" in vars(meta) or "__subclasscheck__" in vars(meta)
-        for meta in type(cls).__mro__
+        for meta in mro_of(type(cls))
         if meta not in (type, object)
     )
 

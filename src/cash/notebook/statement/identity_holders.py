@@ -71,6 +71,8 @@ from cash.install_paths import is_user_code_module
 from cash.notebook.shared_objects import library_exact_values, walk_budget, walk_time_left
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
+from ..._type_memo import class_dict, class_flags, class_mro, class_name
+
 __all__ = [
     "ID_KIND",
     "IdentityHeld",
@@ -130,10 +132,10 @@ def _plain_user_class(kind: type) -> bool:
             return False
         if slot_readers(kind) or attribute_or(kind, "__getattribute__") is not object.__getattribute__:
             return False
-        for klass in kind.__mro__[:-1]:
-            if not klass.__flags__ & _HEAPTYPE:
+        for klass in class_mro(kind)[:-1]:
+            if not class_flags(klass) & _HEAPTYPE:
                 return False
-            own = vars(klass)
+            own = class_dict(klass)
             if "__class__" in own or "__getattr__" in own or "__slots__" in own:
                 return False
             held = own.get("__dict__")
@@ -407,7 +409,7 @@ def identity_held_reason(
         # Not known whether it holds an id(): not stored, and said so.
         what = (
             f"cash could not look through '{name}' for an object it points at by identity "
-            f"({type(error).__name__}: {error}), so this statement runs every time instead."
+            f"({class_name(type(error))}: {error}), so this statement runs every time instead."
         )
         return IdentityHeld(f"'{name}' could not be looked through", name, ID_KIND, what)
 
@@ -452,7 +454,7 @@ def _held_by_id(
     its *walk*."""
     if walk.unread or walk.cut:
         what = (
-            f"a {type(walk.unread[0]).__name__} cash cannot look inside"
+            f"a {class_name(type(walk.unread[0]))} cash cannot look inside"
             if walk.unread
             else "more objects than cash looks through"
         )
@@ -534,7 +536,7 @@ def _held_by_id(
     if walk.closed and (candidates or in_arrays or walk.refs):
         # A value that keeps ids or weak references, next to a library's
         # object cash does not look inside: that object could keep one too.
-        what = f"a {type(walk.closed[0]).__name__} cash does not look inside"
+        what = f"a {class_name(type(walk.closed[0]))} cash does not look inside"
         return IdentityHeld(
             f"'{name}' holds {what}; it could hold a weak reference or an id(), so the statement re-runs every time",
             name,
@@ -1490,7 +1492,7 @@ def _finalized(targets: list[Any]) -> str | None:
 def _callback_name(func: Any) -> str:
     """*func* as a finalizer's refusal names it."""
     name = attribute_or(func, "__qualname__", None)
-    return f"{name}()" if isinstance(name, str) else type(func).__name__
+    return f"{name}()" if isinstance(name, str) else class_name(type(func))
 
 
 def _weakly_found_by_others(targets: list[Any]) -> bool:
@@ -1596,12 +1598,12 @@ def _code_parts(item: Any) -> list[Any]:
     """What a class or a function of the user's code holds: a class's own
     attributes but Python's ``__dunder__`` ones, a function's closure cells
     and defaults, a bound method's object. Nothing for a library's."""
-    if isinstance(item, types.MethodType):
+    if issubclass(type(item), types.MethodType):
         return [item.__self__] if _users_code(item.__func__) else []
     if not _users_code(item):
         return []
     if isinstance(item, type):
-        return [v for k, v in vars(item).items() if not (k.startswith("__") and k.endswith("__"))]
+        return [v for k, v in class_dict(item).items() if not (k.startswith("__") and k.endswith("__"))]
     if type(item) is types.FunctionType:
         held: list[Any] = []
         for cell in item.__closure__ or ():
@@ -1626,11 +1628,11 @@ def _type_tells(kind: type) -> bool:
     it asks ``isinstance``, which an object can answer apart from its type
     through a ``__class__`` of its own (a proxy's); a NumPy array's answer
     is its dtype's."""
-    return not _numpy_array(kind) and not any("__class__" in vars(base) for base in kind.__mro__[:-1])
+    return not _numpy_array(kind) and not any("__class__" in vars(base) for base in class_mro(kind)[:-1])
 
 
 def _numpy_array(kind: type) -> bool:
-    return kind.__name__ == "ndarray" and attribute_or(kind, "__module__") == "numpy"
+    return class_name(kind) == "ndarray" and attribute_or(kind, "__module__") == "numpy"
 
 
 def _nodes_read(items: list[Any]) -> set[int]:

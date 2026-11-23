@@ -40,7 +40,7 @@ from typing import Any
 
 from .. import _weak, kept_state
 from .._paths import is_pseudo_filename
-from .._type_memo import mro_of
+from .._type_memo import class_flags, mro_of
 from .._user_attrs import attribute_or, own_dict
 from ..analysis.analysis_budget import ANALYSIS_BUDGET_FLOOR_S
 from ..diagnostics import log_diagnostic, warn_diagnostic
@@ -1093,7 +1093,7 @@ def _looked_through(kind: type) -> bool:
         return False
     if kind in _CONTAINERS or kind is types.SimpleNamespace or _container_base(kind) is not None:
         found = True
-    elif issubclass(kind, (type, types.ModuleType)) or not kind.__flags__ & _HEAPTYPE:
+    elif issubclass(kind, (type, types.ModuleType)) or not class_flags(kind) & _HEAPTYPE:
         found = False
     else:
         found = _is_users_class(kind) or _pickles_its_attributes(kind)

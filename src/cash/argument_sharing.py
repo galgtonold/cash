@@ -34,7 +34,8 @@ import weakref
 from collections.abc import Callable, Iterator
 from typing import Any
 
-from ._user_attrs import from_family, module_file
+from ._type_memo import class_dict, class_name
+from ._user_attrs import from_family, module_file, plain_getattr
 from .value_types import IMMUTABLE_LEAF_TYPES, class_module
 
 __all__ = ["Unknown", "Targets", "memory_of", "reads_of", "read_values", "shared_in"]
@@ -127,7 +128,7 @@ class Targets:
             mgr = getattr(changed, "_mgr", None)
             blocks = getattr(mgr, "blocks", None)
             if mgr is None or blocks is None:
-                raise Unknown(f"cash cannot find the memory of a {type(changed).__name__}")
+                raise Unknown(f"cash cannot find the memory of a {class_name(type(changed))}")
             self.ids.add(id(mgr))
             for block in blocks:
                 self.ids.add(id(block))
@@ -232,7 +233,7 @@ class _Walk:
                 continue
             if isinstance(obj, type):
                 if _user_class(obj):
-                    pending.extend(vars(obj).values())
+                    pending.extend(class_dict(obj).values())
                 continue
             if isinstance(obj, (types.FunctionType, types.MethodType)):
                 pending.extend(_held_by_function(obj))
@@ -259,7 +260,7 @@ def _held_by_function(fn: Any) -> list:
     if getattr(fn, "_cash_cached", False):
         # A cached function: what it hands back on a hit is a copy, and
         # what it holds is cash's; the function it wraps holds the rest.
-        wrapped = getattr(fn, "__wrapped__", None)
+        wrapped = plain_getattr(fn, "__wrapped__", None)
         return [wrapped] if wrapped is not None else []
     held = list(fn.__defaults__ or ())
     held += list((fn.__kwdefaults__ or {}).values())
@@ -319,7 +320,7 @@ def reads_of(unit: Any, func: Callable) -> tuple[tuple, ...]:
     for code, (namespace, module) in codes.items():
         qualname = code.co_qualname
         held = sys.modules.get(module)
-        if held is None or getattr(held, "__dict__", None) is not namespace:
+        if held is None or plain_getattr(held, "__dict__", None) is not namespace:
             raise Unknown(f"it ran {qualname}, whose module cash cannot find again")
         table = name_table(code)
         by_string = sorted(BY_STRING & table.reads)

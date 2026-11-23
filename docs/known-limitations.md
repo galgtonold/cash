@@ -137,7 +137,7 @@ warnings.filterwarnings("ignore", category=cash.CashRandomnessWarning)
 **Symptom:** a statement that calls one of your functions runs on every run,
 with a KEY-AMBIENT-READ warning.
 
-<!-- claim: cash/analysis/cacheability_decision.py:_helper_ambient_reasons @5edc872e, cash/notebook/lineage_formula.py:helper_ambient_reads @63c0d1e5 -->
+<!-- claim: cash/analysis/cacheability_decision.py:_helper_ambient_reasons @4b025f14, cash/notebook/lineage_formula.py:helper_ambient_reads @63c0d1e5 -->
 A clock read written in the statement itself (`t = datetime.now()`) runs every
 time, and so does a statement that calls a function of yours which reads the
 clock, a fresh UUID or random bytes from the system (`time.time()`,
@@ -237,7 +237,7 @@ rows.append(expensive(df))             # cached: a hit refills rows
 df.insert(1, "rank", expensive(df))
 ```
 
-<!-- claim: cash/rewrite_in_place.py:refusal @cece1b9e, cash/rewrite_in_place.py:mismatch @a0f73ac9, cash/notebook/statement/in_place.py:refusal @8cccfaec -->
+<!-- claim: cash/rewrite_in_place.py:refusal @abbcccec, cash/rewrite_in_place.py:mismatch @acd2d3f2, cash/notebook/statement/in_place.py:refusal @45c1fe59 -->
 A new column assigned to a frame from an earlier cell (`df["score"] = ...`) is
 cached like any other statement. So is a statement that changes such an object
 through a method, when the object is a NumPy array (not of objects), a pandas
@@ -682,7 +682,7 @@ it, or when the statement's code, or a function of yours it calls, reads it
 through a module (an attribute, of the module or of a class or object it
 holds, or an item of a dict, list or tuple held there).
 
-<!-- claim: cash/tracking/lookups_seen.py:_note_within @686b554a, cash/tracking/lookups_seen.py:_looked_through @ea99e79a, cash/tracking/lookups_seen.py:_pure_data @04355022, cash/tracking/lookups_seen.py:_on_return @42581e94 -->
+<!-- claim: cash/tracking/lookups_seen.py:_note_within @686b554a, cash/tracking/lookups_seen.py:_looked_through @1c4aa52e, cash/tracking/lookups_seen.py:_pure_data @04355022, cash/tracking/lookups_seen.py:_on_return @42581e94 -->
 A container is looked through at any depth: the items of a dict (its keys
 too), list, tuple or set a module holds (`mod.CFG["a"]["log"].level`), and
 of what a library's function returns (`lib.settings()["log"].level`), and
@@ -816,7 +816,7 @@ that stops the stream, and use the copy.
 
 ### A class whose pickling changes other values
 
-<!-- claim: cash/notebook/statement/reducer_writes.py:refuses @899c820d, cash/notebook/statement/reducer_writes.py:_handed_to_libraries @00ebddef, cash/notebook/statement/reducer_writes.py:_changed_through_copies @5918fc8e, cash/notebook/statement/reducer_writes.py:reach @70dbe7da -->
+<!-- claim: cash/notebook/statement/reducer_writes.py:refuses @899c820d, cash/notebook/statement/reducer_writes.py:_handed_to_libraries @be072955, cash/notebook/statement/reducer_writes.py:_changed_through_copies @5918fc8e, cash/notebook/statement/reducer_writes.py:reach @70dbe7da -->
 cash pickles values to hash and store them, and pickling runs a class's own
 `__getstate__` or `__reduce__`. One that changes something else (a module's
 list, a global array, the object being pickled) would change it where plain
@@ -1017,7 +1017,7 @@ one file (a Parquet or `.npz` file) and read that.
 
 ### A long `for`-append loop can stop caching
 
-<!-- claim: cash/notebook/statement/in_place.py:refusal @8cccfaec, cash/notebook/control_structures/single_unit_policy.py:should_run_as_single_unit @54928083, cash/notebook/control_structures/single_unit_policy.py:MIN_ITERATIONS_FOR_SINGLE_UNIT == 50, cash/notebook/control_structures/single_unit_policy.py:PER_STMT_OVERHEAD_SEC == 0.008, cash/notebook/control_structures/single_unit_policy.py:MIN_OVERHEAD_SEC == 1.0, cash/notebook/control_structures/single_unit_policy.py:ASSUMED_INNER_ITERATIONS == 10 -->
+<!-- claim: cash/notebook/statement/in_place.py:refusal @45c1fe59, cash/notebook/control_structures/single_unit_policy.py:should_run_as_single_unit @54928083, cash/notebook/control_structures/single_unit_policy.py:MIN_ITERATIONS_FOR_SINGLE_UNIT == 50, cash/notebook/control_structures/single_unit_policy.py:PER_STMT_OVERHEAD_SEC == 0.008, cash/notebook/control_structures/single_unit_policy.py:MIN_OVERHEAD_SEC == 1.0, cash/notebook/control_structures/single_unit_policy.py:ASSUMED_INNER_ITERATIONS == 10 -->
 cash caches a `for` loop per iteration. A long loop is run as one unit instead
 when all three hold: more than about 50 iterations of known length (a loop
 inside the body counts each iteration ten times, as it usually runs about that

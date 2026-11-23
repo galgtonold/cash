@@ -15,6 +15,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from ..._clock import perf_counter as _perf_counter
+from ..._type_memo import class_module, class_name
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...diagnostics import warn_diagnostic
 from ...exceptions import (
@@ -348,8 +349,8 @@ class UpstreamResolution:
             # code cash wrote, with the real failure nowhere in sight. repr()
             # also handles the newlines this message routinely carries.
             error_code = (
-                f"raise __import__({cls.__module__!r}, fromlist=[{cls.__name__!r}])"
-                f".{cls.__name__}({str(caught)!r}) from None"
+                f"raise __import__({class_module(cls)!r}, fromlist=[{class_name(cls)!r}])"
+                f".{class_name(cls)}({str(caught)!r}) from None"
             )
             self._badges.close(badge_display_id)
             return RunInstead(error_code, caught)
@@ -368,7 +369,7 @@ class UpstreamResolution:
                 "NOTEBOOK-BAILOUT",
                 what=(
                     f"cash hit an internal error and stepped aside: "
-                    f"{type(caught).__name__}: {caught}. This cell ran normally "
+                    f"{class_name(type(caught))}: {caught}. This cell ran normally "
                     f"but was NOT cached, and neither were its results."
                 ),
                 fix=(

@@ -13,7 +13,6 @@ Functions only; nothing here hashes or stores a value.
 
 from __future__ import annotations
 
-import dataclasses
 import functools
 import gc
 import io
@@ -27,7 +26,17 @@ import weakref
 from typing import Any
 
 from . import _native, _plain_data, _weak
-from ._user_attrs import attribute_or, builtin_items, from_family, instance_of, metadata_attribute, own_dict
+from ._type_memo import class_dict, class_mro, class_name, mro_of
+from ._user_attrs import (
+    attribute_or,
+    builtin_items,
+    class_attr,
+    dataclass_fields,
+    from_family,
+    instance_of,
+    metadata_attribute,
+    own_dict,
+)
 from .live_state import is_live_stream
 from .value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, PLAIN_SEQS, library_scalar_types
 
@@ -170,10 +179,10 @@ def _arrow_backing(values: Any) -> Any:
     base = getattr(arrow, "ArrowExtensionArray", None)
     if base is None or pa is None or not isinstance(values, base):
         return None
-    for kind in type(values).__mro__:
+    for kind in mro_of(type(values)):
         if kind is base:
             break
-        if "nbytes" in kind.__dict__:
+        if "nbytes" in class_dict(kind):
             return None
     chunked = getattr(values, "_pa_array", None)
     return chunked if type(chunked) is pa.ChunkedArray else None
@@ -193,7 +202,7 @@ def _column_bytes(col: Any, seen: set[int]) -> int:
 
 def _index_bytes(index: Any, seen: set[int]) -> int:
     """The index's own ``nbytes``: a RangeIndex is a few numbers, not n of them."""
-    if type(index).__name__ != "MultiIndex" and _holds_python_objects(index.dtype):
+    if class_name(type(index)) != "MultiIndex" and _holds_python_objects(index.dtype):
         return _sampled_bytes(_python_objects(index, held_values(index)), seen)
     return int(index.nbytes)
 
@@ -216,7 +225,7 @@ def _python_objects(values: Any, held: Any) -> Any:
     copies: 75 ms per 900,000-row column, paid on every size check of the
     frame. *held* is `held_values` of it."""
     array = getattr(held, "_ndarray", held)
-    if type(array).__name__ == "ndarray" and array.dtype == object and array.ndim == 1:
+    if class_name(type(array)) == "ndarray" and array.dtype == object and array.ndim == 1:
         return array
     return values.to_numpy(dtype=object)
 
@@ -252,7 +261,7 @@ def pandas_nbytes(obj: Any, _seen: set[int] | None = None) -> int | None:
     if not from_family(type(obj), "pandas"):
         return None
     seen = {id(obj)} if _seen is None else _seen
-    kind = type(obj).__name__
+    kind = class_name(type(obj))
     try:
         if kind == "DataFrame":
             fast = _arrays_bytes(obj)
@@ -329,7 +338,7 @@ def _array_estimate(arr: Any, seen: set[int]) -> int:
     seen.add(id(arr))
     if str(getattr(arr, "dtype", "")) == "category":
         return _array_estimate(arr.codes, seen) + _array_estimate(arr.categories.to_numpy(dtype=object), seen)
-    if type(arr).__name__ == "ndarray":
+    if class_name(type(arr)) == "ndarray":
         if arr.dtype.kind != "O":
             return int(arr.nbytes)
         # pandas 2 hands out its 2-D blocks: a column of strings is one row
@@ -339,7 +348,7 @@ def _array_estimate(arr: Any, seen: set[int]) -> int:
         # The array's own object ndarray when it has one: ``to_numpy`` copies
         # every reference, 50 ms for two million strings, to sample 64.
         held = getattr(arr, "_ndarray", None)
-        if type(held).__name__ != "ndarray" or held.dtype.kind != "O":
+        if class_name(type(held)) != "ndarray" or held.dtype.kind != "O":
             held = arr.to_numpy(dtype=object)
         return _objects_estimate(held, seen)
     chunked = _arrow_backing(arr)
@@ -358,7 +367,7 @@ def _index_estimate(index: Any, seen: set[int]) -> int:
     collector tracks for as long as the frame lived (each later
     collection and heap read went through them; the closure check walked
     them, 0.3 s), and counted twice what pickle writes."""
-    kind = type(index).__name__
+    kind = class_name(type(index))
     if kind == "RangeIndex":
         return 0
     if kind == "MultiIndex":
@@ -379,7 +388,7 @@ def _multi_index_parts(index: Any) -> tuple[list, list] | None:
         levels, codes = list(index.levels), list(index.codes)
     except Exception:  # noqa: BLE001 - not pandas': its values, as before
         return None
-    if len(levels) != len(codes) or not all(type(code).__name__ == "ndarray" for code in codes):
+    if len(levels) != len(codes) or not all(class_name(type(code)) == "ndarray" for code in codes):
         return None
     return levels, codes
 
@@ -410,7 +419,7 @@ def pickled_size_estimate(value: Any, _depth: int = 0, _seen: set[int] | None = 
                 value, _depth + 1, _ESTIMATE_DEPTH, _NO_ARRAYS, _NO_ARRAYS_AT_LIMIT, pickled_size_estimate, seen
             )
         return _items_estimate(value.values() if type(value) is dict else value, _depth + 1, seen)
-    kind = type(value).__name__
+    kind = class_name(type(value))
     try:
         if kind in ("DataFrame", "Series") and from_family(type(value), "polars"):
             # Its Arrow buffers, which is what the store pickles
@@ -556,7 +565,7 @@ def own_size(obj: Any) -> int:
     or prints left the kernel changed by cash's own sizing. Such an object
     is sized as Python sizes any object of its layout."""
     kind = type(obj)
-    if type(kind.__sizeof__) is not _C_METHOD and _users_sizeof(kind):
+    if type(class_attr(kind, "__sizeof__")) is not _C_METHOD and _users_sizeof(kind):
         return object.__sizeof__(obj) + (_GC_HEADER if gc.is_tracked(obj) else 0)
     return sys.getsizeof(obj)
 
@@ -587,7 +596,7 @@ def _data_size(obj: Any, _seen: set[int] | None = None) -> int | None:
     kind = type(obj)
     if kind in CODELESS_PRIMS or kind in BUILTIN_CONTAINERS:
         return None
-    type_name = kind.__name__
+    type_name = class_name(kind)
     if type_name in ("DataFrame", "Series", "LazyFrame") and from_family(kind, "polars"):
         # Not a pandas frame: no block manager and no ``memory_usage``. Its
         # Arrow buffers are what ``estimated_size`` counts.
@@ -598,7 +607,7 @@ def _data_size(obj: Any, _seen: set[int] | None = None) -> int | None:
         except BaseException as exc:
             # Polars 1 panics on an Object column, and a panic derives from
             # BaseException: it failed every RAM store of such a frame.
-            if type(exc).__name__ != "PanicException":
+            if class_name(type(exc)) != "PanicException":
                 raise
             return None
     if type_name in ("DataFrame", "Series") and from_family(kind, "pandas"):
@@ -620,7 +629,7 @@ def _data_size(obj: Any, _seen: set[int] | None = None) -> int | None:
     # own: a ``__getattribute__`` of the user's was run for every value a
     # store sized. Any failure means "does not say".
     nbytes = metadata_attribute(obj, "nbytes", None)
-    if isinstance(nbytes, int) or type(nbytes).__name__.startswith(("int", "uint")):
+    if isinstance(nbytes, int) or class_name(type(nbytes)).startswith(("int", "uint")):
         try:
             return int(nbytes)
         except (TypeError, ValueError):
@@ -643,7 +652,7 @@ def estimate_object_size(obj: Any, _depth: int = 0) -> int:
     if _depth >= _MAX_ESTIMATE_DEPTH:
         return own_size(obj)
     try:
-        type_name = type(obj).__name__
+        type_name = class_name(type(obj))
         size = _data_size(obj)
         if size is not None:
             return size
@@ -651,9 +660,10 @@ def estimate_object_size(obj: Any, _depth: int = 0) -> int:
         # ``__class__`` (``isinstance``), which a lookup of the user's answers.
         # Its fields read as pickle reads them, from its ``__dict__`` and
         # slots, never through its own ``__getattribute__``.
-        if not instance_of(obj, type) and dataclasses.is_dataclass(type(obj)):
+        fields = None if instance_of(obj, type) else dataclass_fields(type(obj))
+        if fields is not None:
             base = own_size(obj)
-            held = _field_values(obj, [f.name for f in dataclasses.fields(type(obj))])
+            held = _field_values(obj, [f.name for f in fields])
             return base + sum(estimate_object_size(value, _depth + 1) for value in held)
         if issubclass(type(obj), tuple) and attribute_or(type(obj), "_fields", None) is not None:  # namedtuple
             base = own_size(obj)
@@ -825,7 +835,7 @@ def _own_footprint(obj: Any, seen: set[int], stack: list) -> int:
             # (``self._d``), its builtin storage empty, read as 80 bytes.
             size += _attrs_footprint(obj, seen, held)
     except Exception:
-        logger.debug("Could not estimate size of %s object", type(obj).__name__, exc_info=True)
+        logger.debug("Could not estimate size of %s object", class_name(type(obj)), exc_info=True)
         return 0
     held.reverse()  # the first popped first
     stack += held
@@ -845,7 +855,7 @@ def _held_as_a_name(obj: Any) -> bool:
     variables, for bytes the stored bar never holds.
     """
     kind = type(obj)
-    return (issubclass(kind, io.IOBase) or hasattr(kind, "_cash_wrapped_stream")) and is_live_stream(obj)
+    return (issubclass(kind, io.IOBase) or class_attr(kind, "_cash_wrapped_stream") is not None) and is_live_stream(obj)
 
 
 #: What a copy of a value refers to rather than holds: pickled by name.
@@ -911,8 +921,8 @@ def slot_value(obj: Any, name: str, missing: Any = None) -> Any:
     """*obj*'s slot *name*, read through the slot's own descriptor as pickle
     reads it (never the object's ``__getattribute__``); *missing* when unset
     or not a slot."""
-    for klass in type(obj).__mro__:
-        found = klass.__dict__.get(name)
+    for klass in mro_of(type(obj)):
+        found = class_dict(klass).get(name)
         if found is not None:
             if type(found) is not types.MemberDescriptorType:
                 return missing
@@ -981,15 +991,15 @@ def slot_names(cls: type) -> tuple[str, ...]:
     except TypeError:  # a class whose metaclass makes it unhashable
         return ()
     names: list[str] = []
-    for klass in cls.__mro__:
-        declared = klass.__dict__.get("__slots__", ())
+    for klass in class_mro(cls):
+        declared = class_dict(klass).get("__slots__", ())
         if isinstance(declared, str):
             declared = (declared,)
         for name in declared:
             if name in ("__dict__", "__weakref__"):
                 continue
             if name.startswith("__") and not name.endswith("__"):
-                name = f"_{klass.__name__.lstrip('_')}{name}"  # as Python mangles it
+                name = f"_{class_name(klass).lstrip('_')}{name}"  # as Python mangles it
             names.append(name)
     found = _SLOTS[cls] = tuple(names)
     return found

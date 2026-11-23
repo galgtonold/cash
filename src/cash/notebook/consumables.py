@@ -52,6 +52,8 @@ from typing import Any
 from cash import _weak
 from cash._user_attrs import attribute_or, has_attribute, instance_of
 
+from .._type_memo import class_dict, class_mro
+from .._user_attrs import static_attr
 from ..analysis.ast_util import walk_tree
 from ..analysis.mutation_effects import captured_call_receivers
 from ..analysis.mutations import NON_CONSUMING_FUNCS, consumed_input_names
@@ -446,7 +448,7 @@ def _chain_meets_stream(value: Any, chain: list[ast.AST], drawn: bool, known: Ma
     for step in chain:
         if isinstance(step, ast.Attribute):
             try:
-                found = inspect.getattr_static(value, step.attr)
+                found = static_attr(value, step.attr)
             except (AttributeError, TypeError):
                 return None
             if has_attribute(type(found), "__get__") and not instance_of(value, type):
@@ -621,10 +623,10 @@ def _held_items(obj: Any) -> Iterable[Any] | None:
         held.extend(dict.values(object.__getattribute__(obj, "__dict__")))
     except (AttributeError, TypeError):
         pass
-    for klass in cls.__mro__:
-        slots = klass.__dict__.get("__slots__", ())
+    for klass in class_mro(cls):
+        slots = class_dict(klass).get("__slots__", ())
         for slot in (slots,) if isinstance(slots, str) else slots:
-            member = klass.__dict__.get(slot)
+            member = class_dict(klass).get(slot)
             if isinstance(member, types.MemberDescriptorType):
                 try:
                     held.append(member.__get__(obj, cls))

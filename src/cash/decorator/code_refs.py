@@ -11,6 +11,8 @@ from typing import Any
 
 from .._annotation_refs import annotation_referents
 from .._memo import CODE_OBJECTS, LruMemo
+from .._type_memo import class_dict, class_mro, class_qualname
+from .._user_attrs import attribute_or, plain_getattr
 from ..code_swaps import settable
 from ..install_paths import is_user_module
 from .arg_hashing import is_opaque
@@ -66,15 +68,15 @@ class CodeRefs:
         each ``(function, its code)`` read goes on *read_from*."""
         carriers: list[Any] = []
         if isinstance(obj, type):
-            for base in obj.__mro__:
+            for base in class_mro(obj):
                 if base is object or is_opaque(base):
                     continue
                 if not is_user_code_object(base):
                     continue
-                carriers.extend(vars(base).values())
+                carriers.extend(class_dict(base).values())
                 # Same blind spot as class_surface_parts: a field declaring
                 # default_factory has no class attribute to find in vars().
-                fields_map = getattr(base, "__dataclass_fields__", None)
+                fields_map = plain_getattr(base, "__dataclass_fields__", None)
                 if isinstance(fields_map, dict):
                     for fld in fields_map.values():
                         factory = getattr(fld, "default_factory", None)
@@ -94,8 +96,8 @@ class CodeRefs:
                 # Every layer: a function under two decorators was read one
                 # layer down, and what its body names was never reached.
                 for layer in (accessor, *user_layers(accessor)):
-                    code = getattr(layer, "__code__", None)
-                    glb = getattr(layer, "__globals__", None)
+                    code = plain_getattr(layer, "__code__", None)
+                    glb = plain_getattr(layer, "__globals__", None)
                     if isinstance(code, types.CodeType) and isinstance(glb, dict):
                         if read_from is not None and settable(layer):
                             read_from.append((layer, code))
@@ -121,7 +123,7 @@ class CodeRefs:
             cached = self._code_refs_cache.get(obj)
         except TypeError:
             cached = None  # unhashable - recompute each time rather than fail
-        if cached is not None and all(getattr(fn, "__code__", None) is code for fn, code in cached[0]):
+        if cached is not None and all(plain_getattr(fn, "__code__", None) is code for fn, code in cached[0]):
             pairs = cached[1]
         if pairs is None:
             read_from: list = []
@@ -241,7 +243,7 @@ class CodeRefs:
                     seen.add(id(target))
                     keep.append(target)
                     if len(keep) > MAX_CODE_REF_TARGETS:
-                        name = getattr(obj, "__qualname__", None) or type(obj).__qualname__
+                        name = attribute_or(obj, "__qualname__", None) or class_qualname(type(obj))
                         raise KeyBuildFailed(
                             "KEY-HELPERS-UNWALKABLE",
                             f"cash cannot key the code {name} reaches: it does not end (over "

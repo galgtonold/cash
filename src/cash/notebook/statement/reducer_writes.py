@@ -64,6 +64,8 @@ from cash.kept_state import next_mark, set_reducer_veto, user_state_runs, user_s
 from cash.source_reading import getsourcelines
 
 from ... import _weak
+from ..._type_memo import class_dict
+from ..._user_attrs import static_attr
 
 __all__ = ["Writer", "reach", "refused_since", "refuses", "runs_now", "unwatch", "watch", "writers", "writes_into"]
 
@@ -614,7 +616,7 @@ def _handed_to_libraries(function: Any, body: ast.AST) -> set[str]:
                 if node.func.value.id not in local and node.func.value.id in g and type(holder) in _NEVER_CHANGED:
                     continue  # ``SEP.join(PARTS)``: a method of a str (``list.append(LST, 1)`` is not)
                 if instance_of(holder, types.ModuleType) and _only_reads(
-                    attribute_or(holder, node.func.attr, None), node, g
+                    attribute_or(holder, node.func.attr, None, asked=True), node, g
                 ):
                     continue
         for arg in [*node.args, *(k.value for k in node.keywords)]:
@@ -687,7 +689,7 @@ def _changes_its_first(fn: ast.expr, g: Mapping[str, Any]) -> bool:
     if isinstance(fn, ast.Name):
         value = g.get(fn.id)
     elif isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name):
-        value = attribute_or(g.get(fn.value.id), fn.attr, None)
+        value = attribute_or(g.get(fn.value.id), fn.attr, None, asked=True)
     name = attribute_or(value, "__name__", "")
     return attribute_or(value, "__module__", None) not in ("operator", "_operator") or name.startswith("i")
 
@@ -898,7 +900,7 @@ def _globals_read(
                 return set().union(*(items(a.value if isinstance(a, ast.Starred) else a, local) for a in args))
             callee = g.get(func.id)
         elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id not in local:
-            callee = attribute_or(g.get(func.value.id), func.attr, None)
+            callee = attribute_or(g.get(func.value.id), func.attr, None, asked=True)
         if callee is copy.deepcopy or any(callee is fresh for fresh in _FRESH_FROM_TEXT):
             return set()
         if callee is copy.copy or _is_numpy_array(callee) and not node.keywords:
@@ -1086,7 +1088,7 @@ def _reducers_of(t: type) -> list[Any]:
         if klass is object:
             continue
         for name in _REDUCERS:
-            method = _function(klass.__dict__.get(name))
+            method = _function(class_dict(klass).get(name))
             if method is not None and _users(method):
                 found.append(method)
     return found
@@ -1163,13 +1165,13 @@ def _users_callees(function: Any, body: ast.AST, t: type) -> list[tuple[Any, ast
             callee = g.get(node.func.id)
         elif isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
             if node.func.value.id in ("self", "cls"):
-                callee = inspect.getattr_static(t, node.func.attr, None)
+                callee = static_attr(t, node.func.attr, None)
             else:
                 holder = g.get(node.func.value.id)
                 if instance_of(holder, type):
-                    callee = inspect.getattr_static(holder, node.func.attr, None)
+                    callee = static_attr(holder, node.func.attr, None)
         if instance_of(callee, type):
-            callee = _function(callee.__dict__.get("__init__"))
+            callee = _function(class_dict(callee).get("__init__"))
         callee = _function(callee)
         if callee is not None and _users(callee):
             found.append((callee, node))

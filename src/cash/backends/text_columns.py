@@ -38,6 +38,7 @@ from itertools import compress, repeat
 from typing import Any
 
 from .. import _weak
+from .._type_memo import class_module, class_name
 from . import block_digests
 
 __all__ = ["Encoded", "decode", "encode", "encode_column"]
@@ -107,7 +108,7 @@ _MISSING_KINDS = frozenset({str, type(None), float})
 
 def _na_type(kind: type) -> bool:
     """Is *kind* pandas' ``NAType``?"""
-    return kind.__name__ == "NAType" and kind.__module__.startswith("pandas")
+    return class_name(kind) == "NAType" and class_module(kind).startswith("pandas")
 
 
 def _is_missing(item: Any) -> bool:

@@ -36,7 +36,8 @@ from collections.abc import Mapping
 from typing import Any
 
 from . import _weak
-from ._type_memo import per_type
+from ._type_memo import class_dict, class_module, class_name, class_qualname, per_type
+from ._user_attrs import plain_getattr
 from .install_paths import is_user_code_module
 
 #: The registry's settings that change what a quantity computes or prints.
@@ -68,7 +69,7 @@ def _pint_kind(t: type) -> str | None:
     (the ones it builds per registry included), else None. A subclass of the
     user's may hold state of its own and is keyed as any other object."""
     pint = sys.modules.get("pint")
-    if pint is None or (getattr(t, "__module__", None) or "").partition(".")[0] != "pint":
+    if pint is None or (plain_getattr(t, "__module__", None) or "").partition(".")[0] != "pint":
         return None
     try:
         from pint.facets.plain import GenericPlainRegistry, PlainQuantity, PlainUnit
@@ -92,7 +93,7 @@ def _class_registry(cls: type) -> bool:
     """Is *cls* a quantity or unit class pint built for one registry
     (``ureg.Quantity``)? It names its module ``pint`` and pickles by that
     name, which finds pint's own class: two registries' classes keyed alike."""
-    return "_REGISTRY" in vars(cls) and _pint_kind(cls) in ("quantity", "unit")
+    return "_REGISTRY" in class_dict(cls) and _pint_kind(cls) in ("quantity", "unit")
 
 
 #: `_class_registry`, per class.
@@ -111,7 +112,7 @@ def quantity_parts(value: Any) -> tuple[str, Any, tuple]:
 def _unwrapped(registry: Any) -> Any:
     """The registry an application-registry wrapper stands for now."""
     get = getattr(type(registry), "get", None)
-    if type(registry).__name__ == "ApplicationRegistry" and callable(get):
+    if class_name(type(registry)) == "ApplicationRegistry" and callable(get):
         return registry.get()
     return registry
 
@@ -245,7 +246,7 @@ def _own(obj: Any, name: str) -> Any:
 def _setting(reg: Any, name: str) -> Any:
     value = getattr(reg, name, None)
     if isinstance(value, type):
-        return f"{value.__module__}.{value.__qualname__}"
+        return f"{class_module(value)}.{class_qualname(value)}"
     if isinstance(value, dict):
         return tuple(sorted(value.items()))
     if isinstance(value, list):
@@ -266,7 +267,7 @@ def _function_form(fn: Any, where: str) -> tuple:
     preprocessor. pint's own, built from a definition, by its name and what
     it closes over (the parsed relation, an equation's text); any other by
     its code and every value it can read (`_code_form`)."""
-    module = getattr(fn, "__module__", None) or ""
+    module = plain_getattr(fn, "__module__", None) or ""
     if isinstance(fn, types.FunctionType) and module.partition(".")[0] == "pint":
         cells = tuple(_value_repr(c.cell_contents, where) for c in fn.__closure__ or ())
         return (module, fn.__qualname__, fn.__code__.co_code, cells)
@@ -331,7 +332,7 @@ def _held_form(value: Any, where: str, walking: set[int]) -> Any:
         )
     if isinstance(value, types.ModuleType):
         return ("module", value.__name__)
-    bound = getattr(value, "__self__", None) if isinstance(value, types.BuiltinMethodType) else None
+    bound = plain_getattr(value, "__self__", None) if isinstance(value, types.BuiltinMethodType) else None
     if bound is not None and not isinstance(bound, types.ModuleType):
         # A C method bound to an object (``re.compile(...).sub``): what it
         # does is its name on that object's built-in class, read from the
@@ -344,11 +345,13 @@ def _held_form(value: Any, where: str, walking: set[int]) -> Any:
         finally:
             walking.discard(id(bound))
     if isinstance(value, (type, types.BuiltinFunctionType, types.MethodDescriptorType, types.WrapperDescriptorType)):
-        owner = getattr(value, "__module__", None) or getattr(getattr(value, "__objclass__", None), "__module__", None)
+        owner = plain_getattr(value, "__module__", None) or getattr(
+            getattr(value, "__objclass__", None), "__module__", None
+        )
         if owner is None or is_user_code_module(sys.modules.get(owner)):
-            name = getattr(value, "__qualname__", repr(value))
+            name = plain_getattr(value, "__qualname__", repr(value))
             raise TypeError(f"the pint registry's {where} reads {name}, which cash cannot key by value")
-        return ("named", owner, value.__qualname__)
+        return ("named", owner, class_qualname(value))
     t = type(value)
     if t in _PLAIN_LEAVES:
         return (t.__name__, repr(value))

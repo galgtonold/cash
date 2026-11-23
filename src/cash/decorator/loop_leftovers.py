@@ -12,6 +12,8 @@ from typing import Any
 
 from cash import _weak
 
+from .._type_memo import class_dict
+
 __all__ = ["leftover_value", "set_loop_leftovers"]
 
 #: Per class: ``(size of its namespace, its data names, what was found)``.
@@ -48,7 +50,7 @@ def set_loop_leftovers(base: type, names: tuple[str, ...]) -> dict[str, str]:
     (`_is_loop_leftover`) is checked on every read: rebound to anything
     else, it is keyed by value. Without source, keyed by value.
     """
-    size = len(vars(base))
+    size = len(class_dict(base))
     try:
         known = _FOUND.get(base)
     except TypeError:
@@ -64,7 +66,7 @@ def set_loop_leftovers(base: type, names: tuple[str, ...]) -> dict[str, str]:
 
 
 def _find(base: type, names: tuple[str, ...]) -> dict[str, str]:
-    namespace = vars(base)
+    namespace = class_dict(base)
     sets = {
         n
         for n in names

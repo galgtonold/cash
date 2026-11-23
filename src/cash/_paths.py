@@ -16,6 +16,8 @@ import sys
 import time
 from typing import Any
 
+from ._user_attrs import plain_getattr
+
 __all__ = [
     "CELL_NAME_PREFIX",
     "CELL_ROOT",
@@ -217,7 +219,7 @@ def resolve_main_module(func: Any) -> str:
     (``python pkg/pipeline.py``, with ``pkg/__init__.py``) is named as
     ``import pkg.pipeline`` names it (`script_module_name`).
     """
-    return main_namespace_name(getattr(func, "__globals__", None) or {})
+    return main_namespace_name(plain_getattr(func, "__globals__", None) or {})
 
 
 def main_namespace_name(g: Any) -> str:

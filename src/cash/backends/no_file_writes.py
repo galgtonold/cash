@@ -55,6 +55,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 from .._gc_context import collecting
+from .._user_attrs import plain_getattr
 from ..tracking import io_watch
 from ..tracking.process_registries import IMPORT_STEP_CODE
 
@@ -290,7 +291,7 @@ def _importlib_files() -> frozenset[str]:
     for name in ("_bootstrap", "_bootstrap_external"):
         found.add(f"<frozen importlib.{name}>")
         module = sys.modules.get(f"importlib.{name}")
-        path = getattr(module, "__file__", None)
+        path = plain_getattr(module, "__file__", None)
         if isinstance(path, str):
             found.add(path)
     return frozenset(found)

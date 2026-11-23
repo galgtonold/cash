@@ -13,6 +13,7 @@ from collections.abc import Callable
 from typing import NoReturn
 
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
+from .._user_attrs import plain_getattr
 from ..tracking.tracker_context import untracked
 
 logger = logging.getLogger(__name__)
@@ -95,14 +96,14 @@ def expose_script_function(func: Callable, wrapper: Callable) -> None:
     already, or would import a different file: registering it would shadow
     that module.
     """
-    g = getattr(func, "__globals__", None)
+    g = plain_getattr(func, "__globals__", None)
     if not isinstance(g, dict) or g.get("__name__") not in MAIN_MODULE_NAMES:
         return
     path = g.get("__file__")
     if not isinstance(path, str) or not path:
         return
     module = sys.modules.get(g["__name__"])
-    if module is None or getattr(module, "__dict__", None) is not g:
+    if module is None or plain_getattr(module, "__dict__", None) is not g:
         return
     name = resolve_main_module(func)
     # A script inside a package is keyed by its dotted name; a worker can

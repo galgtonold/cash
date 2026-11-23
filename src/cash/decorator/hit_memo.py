@@ -76,6 +76,8 @@ from typing import TYPE_CHECKING, Any
 from .. import _native, _weak
 from .._clock import perf_counter as _perf_counter
 from .._memo import CODE_OBJECTS, LruMemo
+from .._type_memo import class_flags, class_mro, class_name
+from .._user_attrs import named_attr, plain_getattr
 from ..analysis import text_store
 from ..analysis.helper_code import own_code_is_user
 from ..jit_functions import is_jit_type, jit_python_function
@@ -341,7 +343,7 @@ _DEF_LINE = re.compile(r"\s*(async\s+)?def\s")
 def _is_cash(v: Any, t: type) -> bool:
     """An object of cash's own (`Cash`, its decorator, its modules)."""
     owner = v if t is types.FunctionType or isinstance(v, type) else t
-    module = getattr(owner, "__module__", None)
+    module = plain_getattr(owner, "__module__", None)
     return isinstance(module, str) and (module == "cash" or module.startswith("cash."))
 
 
@@ -543,7 +545,7 @@ class _Scan:
         if t in _ATOMS:
             return
         if t is types.ModuleType:
-            name = getattr(v, "__name__", "")
+            name = plain_getattr(v, "__name__", "")
             if name == "cash" or (isinstance(name, str) and name.startswith("cash.")):
                 return
             if self._first(("module", id(v), id(names)), v):
@@ -601,7 +603,7 @@ class _Scan:
                 if part is not None:
                     self.value(part, names)
         elif t is functools.partial:
-            if getattr(v, "__dict__", None):
+            if plain_getattr(v, "__dict__", None):
                 raise Ineligible("a partial with attributes")
             self.value(v.func, names)
             self.value(v.args, names)
@@ -621,7 +623,7 @@ class _Scan:
             # ``@functools.lru_cache``: the function it calls is fixed when
             # it is made; what it remembers is no part of any key. Its
             # attributes (``__wrapped__``, set by ``update_wrapper``) are.
-            attrs = getattr(v, "__dict__", None)
+            attrs = plain_getattr(v, "__dict__", None)
             if type(attrs) is not dict:
                 raise Ineligible("an lru_cache without attributes")
             self.watch(attrs, True)
@@ -677,7 +679,7 @@ class _Scan:
         if not t.__flags__ & _HEAPTYPE:
             return False
         if type(t) is enum.EnumMeta and isinstance(v, enum.Enum):
-            held = getattr(v, "__dict__", None)
+            held = plain_getattr(v, "__dict__", None)
             if type(held) is not dict:
                 return False
             self.value(t, names)
@@ -693,7 +695,7 @@ class _Scan:
                 slots = (slots,)
             if slots and any(name not in ("__dict__", "__weakref__") for name in slots):
                 return False
-        held = getattr(v, "__dict__", None)
+        held = plain_getattr(v, "__dict__", None)
         if held is not None:
             if type(held) is not dict:
                 return False
@@ -736,7 +738,7 @@ class _Scan:
         if not t.__flags__ & _HEAPTYPE or not is_jit_type(t):
             return False
         fn = jit_python_function(v)
-        held = getattr(v, "__dict__", None)
+        held = plain_getattr(v, "__dict__", None)
         if fn is None or type(held) is not dict or held.get("py_func") is not fn or "targetoptions" not in held:
             return False
         for k in t.__mro__:
@@ -864,7 +866,7 @@ class _Scan:
 
     def _typing(self, v: Any, names: frozenset) -> None:
         """A typing form or alias: fixed, but for what it was built from."""
-        held = getattr(v, "__dict__", None)
+        held = plain_getattr(v, "__dict__", None)
         for name in _TYPING_PARTS:
             # From the instance itself: an alias forwards other attributes
             # to its origin, and a type variable evaluates its bound lazily.
@@ -894,7 +896,7 @@ class _Scan:
         return True
 
     def module(self, mod: types.ModuleType, names: frozenset) -> None:
-        md = getattr(mod, "__dict__", None)
+        md = plain_getattr(mod, "__dict__", None)
         if type(md) is not dict:
             raise Ineligible("a module without a plain namespace")
         self.watch(md, False)
@@ -937,7 +939,7 @@ class _Scan:
         from ..install_paths import is_user_code_module
 
         root_pkg = (self.root_module or "").partition(".")[0]
-        name = getattr(mod, "__name__", None)
+        name = plain_getattr(mod, "__name__", None)
         if not isinstance(name, str) or (root_pkg and name.partition(".")[0] == root_pkg):
             return False
         return not is_user_code_module(mod)
@@ -1007,10 +1009,10 @@ class _Scan:
         if is_cash_wrapper(f):
             # Another cached function, or this one called by name: its own
             # state is cash's (a registration, a setting) or its code.
-            callee = _STATE_OF.get(getattr(f, "__func__", f))
+            callee = _STATE_OF.get(plain_getattr(f, "__func__", f))
             if callee is not None:
                 self.callees.append(callee)
-            inner = getattr(f, "__wrapped__", None)
+            inner = plain_getattr(f, "__wrapped__", None)
             if inner is not None:
                 self.value(inner, frozenset())
             return
@@ -1095,11 +1097,11 @@ class _Scan:
             self.shallow = shallow
 
     def _klass(self, cls: type) -> None:
-        if not (cls.__flags__ & _HEAPTYPE) or cls is typing.Any:
+        if not (class_flags(cls) & _HEAPTYPE) or cls is typing.Any:
             return  # a builtin class, or ``typing.Any``: nothing in it changes
         if type(cls) not in _METACLASSES and not (self.content and self._metaclass_ok(cls)):
             raise Ineligible("a class with a metaclass of its own")
-        for k in cls.__mro__:
+        for k in class_mro(cls):
             if not (k.__flags__ & _HEAPTYPE) or id(k) in self.types:
                 continue
             tag = _cw.world_watch_type(k)
@@ -1320,7 +1322,7 @@ def _quiet_warnings() -> None:
     twice, and no helper fold was served again."""
     if _QUIET_DONE[0] or _warnings is None or not hasattr(_cw, "world_quiet"):
         return
-    md = getattr(_warnings, "__dict__", None)
+    md = plain_getattr(_warnings, "__dict__", None)
     if type(md) is dict:
         _cw.world_quiet(md, _WARNING_HOOKS)
         _QUIET_DONE[0] = True
@@ -1336,7 +1338,7 @@ def _watch_modules() -> None:
         modules = sys.modules
         _cw.world_watch_dict(modules, True)
         for mod in list(modules.values()):
-            md = getattr(mod, "__dict__", None)
+            md = plain_getattr(mod, "__dict__", None)
             if type(md) is dict and id(md) not in _WATCHED_MODULES:
                 _cw.world_watch_dict(md, False)
                 _WATCHED_MODULES.add(id(md))
@@ -1349,7 +1351,7 @@ def _resolve(mod_name: str, chain: tuple) -> Any:
     for attr in chain:
         if obj is None:
             return None
-        obj = getattr(obj, attr, None)
+        obj = named_attr(obj, attr, None)
     return obj
 
 
@@ -1365,7 +1367,7 @@ def scan(
     state memo too) a list or an array met is read again on every reuse
     (`ContentProbe`) instead of making it ineligible."""
     func, name = spec.func, spec.name
-    s = _Scan(getattr(func, "__module__", None), func)
+    s = _Scan(plain_getattr(func, "__module__", None), func)
     s.content = content
     s.value(func, frozenset())
     graph = registry.graph
@@ -1408,7 +1410,7 @@ def scan_trace(spec: CachedFunction, registry: Any, items: list) -> tuple[tuple,
     """Watch what a stored trace (`code_trace`) names, as `scan` watches the
     key's world: while none of it moves, the trace still holds, and a fast
     hit needs no check of its own. Raises `Ineligible`."""
-    s = _Scan(getattr(spec.func, "__module__", None))
+    s = _Scan(plain_getattr(spec.func, "__module__", None))
     for item in items:
         kind = item[0]
         if kind in ("code", "class", "surface", "global", "held", "attr"):
@@ -1653,7 +1655,7 @@ def _library_cython(v: Any, t: type) -> bool:
         return False
     from ..install_paths import is_user_code_module
 
-    name = getattr(v, "__module__", None)
+    name = plain_getattr(v, "__module__", None)
     mod = sys.modules.get(name) if isinstance(name, str) else None
     if mod is None or name == "cash" or name.startswith("cash."):
         return False
@@ -1741,7 +1743,7 @@ def watch_class(cls: type, reports: Any = (), reached: list | None = None) -> tu
     unless *reached* is given: the cached functions' states met are then
     added to it, and the caller answers for them."""
     reports = tuple(reports)
-    s = _ProbingScan(getattr(cls, "__module__", None))
+    s = _ProbingScan(plain_getattr(cls, "__module__", None))
     s.content = True
     s.value(cls, frozenset())
     for report in reports:
@@ -1825,7 +1827,7 @@ class _ProbingScan(_Scan):
             try:
                 probe = ContentProbe(v, lambda value: _deep_content(value, met))
             except Exception as e:  # noqa: BLE001 - what cannot be pickled cannot be probed
-                raise Ineligible(f"data that cannot be read whole ({type(e).__name__})") from None
+                raise Ineligible(f"data that cannot be read whole ({class_name(type(e))})") from None
             self.probes[probe] = probe.digest
             # A pickle names code: what that code is and reads is watched.
             for code in met:

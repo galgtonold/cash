@@ -36,6 +36,8 @@ from .. import (
 )
 from .._clock import fine_thread_clock
 from .._lazy_module import LazyModule
+from .._type_memo import class_module, class_name, class_qualname, module_of_class
+from .._user_attrs import class_attr, plain_getattr
 from ..cost_model import GENERIC_FAMILY
 from ..sizing import memory_footprint, pickled_size_estimate, slot_values
 from ..source_reading import read_code_file
@@ -229,7 +231,7 @@ def _snapshot(value: Any) -> _Pickled | None:
     try:
         part = stored_pickle.pickle_value(value, keep=True, digest=False)
     except Exception:  # copied the usual way, which says why it cannot be
-        logger.debug("could not keep a %s as pickle bytes", type(value).__name__, exc_info=True)
+        logger.debug("could not keep a %s as pickle bytes", class_name(type(value)), exc_info=True)
         return None
     return _pickled(value, part)
 
@@ -262,7 +264,7 @@ def _snapshot_nesting(value: dict, inner: Any, part: stored_pickle.Part) -> _Pic
             kept_buffers=lambda data: ours.get(id(data)) is data,
         )
     except Exception:  # pickled the usual way
-        logger.debug("could not nest a kept pickle in a %s", type(value).__name__, exc_info=True)
+        logger.debug("could not nest a kept pickle in a %s", class_name(type(value)), exc_info=True)
         return None
     return _pickled(value, made)
 
@@ -320,7 +322,7 @@ def premade_snapshot(value: Any) -> stored_pickle.Part | None:
     try:
         part = stored_pickle.pickle_value(value, keep=True)
     except Exception:  # copied the usual way, which says why it cannot be
-        logger.debug("could not keep a %s as pickle bytes", type(value).__name__, exc_info=True)
+        logger.debug("could not keep a %s as pickle bytes", class_name(type(value)), exc_info=True)
         _PREMADE.entry = None
         return None
     _PREMADE.entry = (value, _pickled(value, part))
@@ -358,7 +360,7 @@ def _at_least(value: Any, nbytes: int, nodes: int = 2048, items: int = 64) -> bo
                 return True
             seen.add(id(obj))
             kind = type(obj)
-            if kind.__sizeof__ is not object.__sizeof__ and kind not in _SIZED_CHEAPLY:
+            if class_attr(kind, "__sizeof__") is not object.__sizeof__ and kind not in _SIZED_CHEAPLY:
                 continue  # its own __sizeof__ may read it all (pandas: every string)
             try:
                 total += sys.getsizeof(obj)
@@ -554,7 +556,7 @@ class _TableWithBytes:
             rest = InMemoryBackend._copy_frame(rest, {id(rest): False}, record_cells)
             return _TableWithBytes(rest, tuple(positions[n] for n in writable), data)
         except Exception:
-            logger.debug("could not keep a %s's cells as bytes", type(frame).__name__, exc_info=True)
+            logger.debug("could not keep a %s's cells as bytes", class_name(type(frame)), exc_info=True)
             return None
 
     def read_out(self, known_cells: dict | None) -> Any:
@@ -904,7 +906,7 @@ class InMemoryBackend(CacheBackend):
                 # not stored -- and it is unpicklable too, so no disk tier
                 # could hold it either.
                 raise CacheBackendError(
-                    f"the result could not be copied ({type(exc).__name__}: {exc}), "
+                    f"the result could not be copied ({class_name(type(exc))}: {exc}), "
                     f"so caching it would hand every caller the same object"
                 ) from exc
             logger.debug("Could not deep-copy value for key %r, returning reference", key)
@@ -992,7 +994,7 @@ class InMemoryBackend(CacheBackend):
                     copied = _round_trip(frame)
                     full = True
                 except Exception:  # noqa: BLE001 - cells that cannot be copied are shared
-                    logger.debug("could not copy the cells of a %s", type(frame).__name__)
+                    logger.debug("could not copy the cells of a %s", class_name(type(frame)))
                     # Recorded as None: a store that must isolate its value
                     # refuses it (`set`), as it does a bare uncopiable object.
                     mutable = None
@@ -1033,7 +1035,7 @@ class InMemoryBackend(CacheBackend):
                 copied = _round_trip(frame)
                 full = True
             except Exception:  # noqa: BLE001 - shared: recorded so, as uncopiable cells are
-                logger.debug("could not copy the attributes of a %s", type(frame).__name__)
+                logger.debug("could not copy the attributes of a %s", class_name(type(frame)))
                 mutable = None
                 full = False
         if record_cells is not None:
@@ -1141,7 +1143,7 @@ class InMemoryBackend(CacheBackend):
                 memo[key] = obj.read_out(known_cells)
                 alive.append(obj)
                 return key
-            if record_cells is not None and getattr(obj_type, "_cash_stored_as_is", False):
+            if record_cells is not None and class_attr(obj_type, "_cash_stored_as_is", False):
                 # Stored as it is: an immutable stand-in whose copy is
                 # something else (a closed file's `ClosedStream` copies into
                 # the closed file, which no disk tier can write). A hit
@@ -1211,7 +1213,7 @@ class InMemoryBackend(CacheBackend):
             except pickle.PicklingError:
                 if refused() is not None:
                     raise TypeError(f"copying it would {refused()}") from WouldWriteAFile(refused())
-                logger.debug("could not copy a %s by pickle", type(value).__name__, exc_info=True)
+                logger.debug("could not copy a %s by pickle", class_name(type(value)), exc_info=True)
             except Exception as exc:
                 if refused() is not None:
                     raise TypeError(f"copying it would {refused()}") from WouldWriteAFile(refused())
@@ -1221,7 +1223,7 @@ class InMemoryBackend(CacheBackend):
                     # Deeper than the pickler may recurse: deepcopy recurses
                     # deeper still, so the copy keeps its own stack.
                     return iterative_copy.deep_copy(value, memo, persistent_id)
-                logger.debug("could not copy a %s by pickle; deepcopy instead", type(value).__name__, exc_info=True)
+                logger.debug("could not copy a %s by pickle; deepcopy instead", class_name(type(value)), exc_info=True)
                 break
         if by_deepcopy is not None:
             by_deepcopy.append(True)
@@ -1337,7 +1339,7 @@ class InMemoryBackend(CacheBackend):
                 copied.isetitem(positions[n], values)
             return copied
         except Exception:
-            logger.debug("could not copy the cells of a %s cell by cell", type(frame).__name__, exc_info=True)
+            logger.debug("could not copy the cells of a %s cell by cell", class_name(type(frame)), exc_info=True)
             return None
 
     @staticmethod
@@ -2519,7 +2521,7 @@ def _memory_reading() -> Any | None:
             _READING_FAILURE_LOGGED.append(True)
             logger.warning(
                 "cash: could not read the machine's memory (%s: %s); the RAM tier skips its memory-pressure check",
-                type(exc).__name__,
+                class_name(type(exc)),
                 exc,
             )
         return None
@@ -2647,7 +2649,7 @@ def _cheap_to_keep(value: Any, depth: int = 0) -> bool:
         # buffers: no copy. Not with an Object column, whose Python objects
         # are copied.
         return not _has_object_column(value)
-    if kind.__name__ == "ndarray" and kind is getattr(sys.modules.get("numpy"), "ndarray", None):
+    if class_name(kind) == "ndarray" and kind is getattr(sys.modules.get("numpy"), "ndarray", None):
         return not value.dtype.hasobject and value.nbytes <= _CHEAP_ARRAY_BYTES
     if kind in (dict, list, tuple) and depth < _CHEAP_DEPTH and len(value) <= _CHEAP_ITEMS:
         items = value.values() if kind is dict else value
@@ -2666,7 +2668,7 @@ def _write_copyable(value: Any, depth: int = 0) -> bool:
         return True
     if _is_pandas_frame(kind):
         return _copies_in_full(value)
-    if kind.__name__ == "ndarray" and kind is getattr(sys.modules.get("numpy"), "ndarray", None):
+    if class_name(kind) == "ndarray" and kind is getattr(sys.modules.get("numpy"), "ndarray", None):
         return not value.dtype.hasobject
     if kind in (dict, list, tuple):
         if _of_atoms(value):
@@ -2727,7 +2729,9 @@ def _full_copy_values(values: Any) -> bool:
     if type(values) is pd.Categorical:
         # Its codes and its categories are copied (`frame_sharing._owned_categories`).
         return _full_copy_values(values.categories._data)
-    return isinstance(values, (BaseMaskedArray, ArrowExtensionArray)) and type(values).__module__.startswith("pandas.")
+    return isinstance(values, (BaseMaskedArray, ArrowExtensionArray)) and class_module(type(values)).startswith(
+        "pandas."
+    )
 
 
 def _write_copy(value: Any, memo: dict[int, Any], depth: int = 0) -> Any:
@@ -2848,7 +2852,7 @@ def _metadata_held(frame: Any) -> list[str]:
     names = getattr(type(frame), "_metadata", None)
     if not names:
         return []
-    own = getattr(frame, "__dict__", {})
+    own = plain_getattr(frame, "__dict__", {})
     return [name for name in names if name in own and type(own[name]) not in _ATOMS]
 
 
@@ -2864,7 +2868,7 @@ def _own_metadata(frame: Any, copied: Any) -> bool:
     try:
         fresh = {name: copy.deepcopy(frame.__dict__[name], memo) for name in names}
     except Exception:
-        logger.debug("could not deep-copy the attributes of a %s", type(frame).__name__, exc_info=True)
+        logger.debug("could not deep-copy the attributes of a %s", class_name(type(frame)), exc_info=True)
         return False
     for name, value in fresh.items():
         object.__setattr__(copied, name, value)
@@ -3087,11 +3091,11 @@ def store_copy_seconds(value: Any) -> float | None:
             if _STORE_COPY_SPEED:
                 return nbytes / max(_STORE_COPY_SPEED)
             return copy_seconds(nbytes)
-        if kind.__name__ == "ndarray" and kind is getattr(sys.modules.get("numpy"), "ndarray", None):
+        if class_name(kind) == "ndarray" and kind is getattr(sys.modules.get("numpy"), "ndarray", None):
             if not value.dtype.hasobject:
                 return copy_seconds(value.nbytes)
     except Exception:
-        logger.debug("no store cost for a %s", kind.__name__, exc_info=True)
+        logger.debug("no store cost for a %s", class_name(kind), exc_info=True)
     return None
 
 
@@ -3114,11 +3118,11 @@ def hit_seconds(value: Any, size_bytes: int) -> float | None:
             if frame_sharing.enabled() and frame_sharing.freezable(value):
                 return SHARED_HIT_SECONDS
             return copy_seconds(size_bytes)
-        if kind.__name__ == "ndarray" and kind is getattr(sys.modules.get("numpy"), "ndarray", None):
+        if class_name(kind) == "ndarray" and kind is getattr(sys.modules.get("numpy"), "ndarray", None):
             if not value.dtype.hasobject:
                 return copy_seconds(size_bytes)
     except Exception:
-        logger.debug("no measured hit cost for a %s", kind.__name__, exc_info=True)
+        logger.debug("no measured hit cost for a %s", class_name(kind), exc_info=True)
     return round_trip_seconds(value, size_bytes)
 
 
@@ -3173,7 +3177,7 @@ _ROUND_TRIP_CLASSES = 256
 
 def class_key(kind: type) -> str:
     """The name `round_trip_seconds` remembers a class's readings under."""
-    return f"{getattr(kind, '__module__', '')}.{getattr(kind, '__qualname__', kind.__name__)}"
+    return f"{module_of_class(kind, '')}.{class_qualname(kind)}"
 
 
 def _note_round_trip(value: Any, nbytes: int, seconds: float) -> None:
@@ -3245,7 +3249,7 @@ def _slower_than_its_compute(value: Any, size: int, metadata: MetadataDict) -> b
         # No object of its class read back here yet: the fitted cost model's
         # price of reading one of its size into RAM. Not put on the entry as
         # a reading: nothing was read.
-        return cost_model.estimated_restore_time(kind.__name__, size, "ram") >= _saved_seconds(metadata)
+        return cost_model.estimated_restore_time(class_name(kind), size, "ram") >= _saved_seconds(metadata)
     if predicted < _saved_seconds(metadata):
         return False
     metadata[MEASURED_ROUND_TRIP] = predicted
@@ -3335,7 +3339,7 @@ def _copied_as_data(kind: type) -> bool:
     of an object of a class of its own?"""
     if kind in _COPIED_AS_DATA:
         return True
-    return _is_pandas_frame(kind) or _is_polars_frame(kind) or kind.__name__ == "ndarray"
+    return _is_pandas_frame(kind) or _is_polars_frame(kind) or class_name(kind) == "ndarray"
 
 
 def note_round_trip(key: str, nbytes: int, seconds: float) -> None:

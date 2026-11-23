@@ -22,7 +22,7 @@ list(records("data.txt"))   # first call: reads, stores the items
 list(records("data.txt"))   # cache hit: replays the stored items
 ```
 
-<!-- claim: cash/decorator/iterators.py:is_one_shot_iterator @0ce938f7 -->
+<!-- claim: cash/decorator/iterators.py:is_one_shot_iterator @2374533e -->
 cash treats a result as an iterator when `iter(result) is result`: generators,
 generator expressions, `map`, `filter`, `zip`, most of `itertools`, and your own
 iterator classes. Lists, tuples, dicts and ranges can be read many times and
@@ -108,7 +108,7 @@ own; it is never split. To opt out of chunking, return a list.
   result is stored anyway, with a warning
   ([`CACHE-IF-BYPASSED`](../../warnings.md#cache-if-bypassed)). Raise the
   chunk limits if you need the predicate.
-- <!-- claim: cash/decorator/store.py:ResultStore._write_one_chunk @26c3e252 -->
+- <!-- claim: cash/decorator/store.py:ResultStore._write_one_chunk @b0f0271d -->
   **A chunk that fails to store** warns
   ([`STORE-CHUNK-FAILED`](../../warnings.md#store-chunk-failed)). The result is
   then incomplete, so the next call recomputes it rather than serving part of

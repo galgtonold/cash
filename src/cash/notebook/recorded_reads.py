@@ -31,6 +31,7 @@ from typing import Any, NamedTuple
 
 from .. import _weak
 from .._memo import CODE_OBJECTS, LruMemo
+from .._type_memo import class_dict
 from .._user_attrs import attribute_or
 from ..analysis.ast_util import parse_cached
 from ..effects import environment_digests, environment_entry_digest, environment_parts_component
@@ -466,7 +467,10 @@ def _module_value(label: str) -> tuple[bool, Any]:
         return False, None
     obj: Any = _loaded_module(name)
     for attr in label[len(name) + 1 :].split("."):
-        namespace = vars(obj) if issubclass(type(obj), (types.ModuleType, type)) else None
+        kind = type(obj)
+        namespace = (
+            vars(obj) if issubclass(kind, types.ModuleType) else class_dict(obj) if issubclass(kind, type) else None
+        )
         if namespace is None or attr not in namespace:
             return False, None
         obj = namespace[attr]

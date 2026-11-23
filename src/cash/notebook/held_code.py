@@ -21,6 +21,7 @@ from typing import Any
 
 from cash._user_attrs import attribute_or
 
+from .._type_memo import class_dict, class_mro, class_qualname
 from ..code_digest import callable_identity
 from ..install_paths import is_user_code_file, is_user_code_module
 from ..value_types import LEAF_TYPES
@@ -151,7 +152,7 @@ def _user_class(cls: type) -> bool:
     module = sys.modules.get(attribute_or(cls, "__module__", None) or "")
     if module is not None:
         return is_user_code_module(module)
-    return any(_user_function(fn) for member in vars(cls).values() for fn in _member_functions(member))
+    return any(_user_function(fn) for member in class_dict(cls).values() for fn in _member_functions(member))
 
 
 def _class_code(cls: type, classes: dict[type, str | None]) -> str | None:
@@ -163,13 +164,13 @@ def _class_code(cls: type, classes: dict[type, str | None]) -> str | None:
     code: str | None = None
     if _user_class(cls):
         parts = []
-        for klass in cls.__mro__:
+        for klass in class_mro(cls):
             if klass is object or not _user_class(klass):
                 continue
-            for name, member in sorted(vars(klass).items(), key=lambda item: item[0]):
+            for name, member in sorted(class_dict(klass).items(), key=lambda item: item[0]):
                 for fn in _member_functions(member):
                     if _user_function(fn):
-                        parts.append(f"{klass.__qualname__}.{name}:{callable_identity(fn)}")
+                        parts.append(f"{class_qualname(klass)}.{name}:{callable_identity(fn)}")
         code = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
     classes[cls] = code
     return code

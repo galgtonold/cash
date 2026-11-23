@@ -16,6 +16,7 @@ from typing import Any
 
 from cash._user_attrs import attribute_or, instance_of
 
+from .._user_attrs import named_attr
 from .ast_util import walk_tree
 from .mutations import A_HELD_WRITER, MUTATING_METHODS, THE_NAMESPACE, WRITER_ROOTS, WRITER_SPELLINGS, WRITES_INTO
 
@@ -30,7 +31,7 @@ def _writer_objects() -> dict[int, tuple[Any, str]]:
         root, *rest = spelling.split(".")
         value: Any = {"operator": operator, "builtins": builtins}.get(root) or getattr(builtins, root, None)
         for attr in rest:
-            value = getattr(value, attr, None)
+            value = named_attr(value, attr, None)
         if value is not None:
             found.setdefault(id(value), (value, spelling))
     return found

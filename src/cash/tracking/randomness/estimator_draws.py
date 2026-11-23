@@ -22,6 +22,9 @@ import ast
 import inspect
 from typing import Any, NamedTuple
 
+from ..._type_memo import class_name
+from ..._user_attrs import plain_getattr, static_attr
+
 __all__ = ["call_draws", "draw_condition", "estimator_draws"]
 
 
@@ -82,9 +85,9 @@ _UNREAD = object()
 def _rule(cls: Any) -> _Rule | None:
     """The rule for scikit-learn's own class *cls*; None for any other class,
     a subclass of one included (its ``fit`` may draw)."""
-    if not isinstance(cls, type) or not (getattr(cls, "__module__", "") or "").startswith("sklearn."):
+    if not isinstance(cls, type) or not (plain_getattr(cls, "__module__", "") or "").startswith("sklearn."):
         return None
-    return _RULES.get(cls.__name__)
+    return _RULES.get(class_name(cls))
 
 
 def _verdict(rule: _Rule, value: Any) -> bool | None:
@@ -111,7 +114,7 @@ def estimator_draws(estimator: Any) -> bool | None:
     value: Any = _UNREAD
     for name in rule.fitted:
         try:
-            value = inspect.getattr_static(estimator, name)
+            value = static_attr(estimator, name)
         except AttributeError:
             continue
         if isinstance(value, str):
@@ -158,4 +161,4 @@ def draw_condition(cls: Any) -> str | None:
     rule = _rule(cls)
     if rule is None:
         return None
-    return f"{cls.__name__} uses random_state {rule.when}"
+    return f"{class_name(cls)} uses random_state {rule.when}"

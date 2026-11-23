@@ -24,6 +24,8 @@ from .. import _weak, argument_sharing, rewrite_in_place
 from .. import phase_times as _phases
 from .._active import EXPLAINING as _EXPLAINING
 from .._clock import perf_counter as _perf_counter
+from .._type_memo import class_dictoffset, class_name, class_qualname
+from .._user_attrs import plain_getattr, unwrapped
 from ..analysis.handed_callables import hands_a_state_changing_callable
 from ..analysis.helper_walk import shared_nodes
 from ..analysis.out_arguments import attribute_bound_parameter, mutated_parameter
@@ -333,7 +335,7 @@ def _resolution_of(
     func_name = spec.name
     expected = [(source.get_id(), token) for source, token in sources]
     func = spec.func
-    module, qualname = getattr(func, "__module__", None), getattr(func, "__qualname__", "")
+    module, qualname = plain_getattr(func, "__module__", None), plain_getattr(func, "__qualname__", "")
     owner = (module, qualname) if module and "<locals>" not in qualname else None
     key = (
         func_name,
@@ -972,7 +974,7 @@ class KeyBuilder:
                     *carrier_args,
                     state_hash,
                     func_name=func_name,
-                    owner_code=getattr(func, "__code__", None),
+                    owner_code=plain_getattr(func, "__code__", None),
                     func=func,
                     report=self._registry.report_for(func, func_name),
                 )
@@ -1099,7 +1101,7 @@ class KeyBuilder:
             raise KeyBuildFailed(
                 "KEY-ITERATOR-CONSUMED",
                 f"@cash.cache on {spec.name}: building the key {what} the iterator passed as "
-                f"{label!r} ({type(value).__name__}), so the body sees what is left of it and the "
+                f"{label!r} ({class_name(type(value))}), so the body sees what is left of it and the "
                 f"call ran uncached.",
                 "pass a list or a tuple instead of an iterator, or key the call by something "
                 "that does not read the iterator.",
@@ -1139,10 +1141,12 @@ class KeyBuilder:
         else:
             parts = [f"{func_key(key_fn)}:{hash_callable_source(key_fn)}", self._closures.key_function_part(key_fn)]
             parts.extend(
-                self._code_args.carrier_parts(key_fn, spec.name, "key", owner_code=getattr(spec.func, "__code__", None))
+                self._code_args.carrier_parts(
+                    key_fn, spec.name, "key", owner_code=plain_getattr(spec.func, "__code__", None)
+                )
             )
             part = "keyfn:" + hashlib.sha256(":".join(parts).encode("utf-8")).hexdigest()
-            ledger_note(("key= function", getattr(key_fn, "__qualname__", type(key_fn).__name__)), part)
+            ledger_note(("key= function", plain_getattr(key_fn, "__qualname__", class_name(type(key_fn)))), part)
         return hashlib.sha256(f"{state_hash}:{part}".encode("utf-8")).hexdigest()
 
     def _keyed_args_hash(self, keyed: tuple[tuple, dict], failure: list) -> str | None:
@@ -1691,7 +1695,7 @@ class CallRunner:
                 # it stands for goes in that call's trace.
                 code_trace.note_cached_hit(
                     func_name,
-                    getattr(spec.func, "__code__", None),
+                    plain_getattr(spec.func, "__code__", None),
                     self._cached_state(func_name),
                     call.metadata.code_trace,
                 )
@@ -2062,7 +2066,7 @@ class CallRunner:
         attribute (``self.history.append (line 12)``): what keeps a hit from
         replaying the attributes the call bound."""
         report = self._registry.report_for(spec.func, spec.name)
-        own = {spec.name, getattr(spec.func, "__qualname__", None)}
+        own = {spec.name, plain_getattr(spec.func, "__qualname__", None)}
         found = []
         for issue in getattr(report, "issues", None) or ():
             if getattr(issue, "where", None) not in own or mutated_parameter(issue) not in params:
@@ -2425,7 +2429,9 @@ class CallRunner:
         func, func_name, args, kwargs = spec.func, spec.name, call.args, call.kwargs
         pt = _phases.CURRENT.get() if _phases.ON else None
         run = BodyRun()
-        run.tracker = FileAccessTracker(getattr(func, "__globals__", None), propagate_to_parent=True, hash_on_read=True)
+        run.tracker = FileAccessTracker(
+            plain_getattr(func, "__globals__", None), propagate_to_parent=True, hash_on_read=True
+        )
         # Watch for side effects the STATIC analyzer cannot see, which is
         # anything happening inside an installed library. Only on this
         # (missing) path: a hit runs no body, so there is nothing to observe
@@ -2633,7 +2639,7 @@ class CallRunner:
         self._files.credit_remembered_reads(func_name, run.tracker, args, kwargs)
         self._files.warn_unrecorded_reads(func_name, run.tracker)
         self._files.warn_unseen_native_reads(func_name, run.tracker)
-        auto_file_deps = snapshot_tracked_deps(run.tracker, getattr(func, "__module__", None))
+        auto_file_deps = snapshot_tracked_deps(run.tracker, plain_getattr(func, "__module__", None))
         execution_time = _perf_counter() - call.call_start
 
         # A result that IS an argument the call changed and a hit writes
@@ -2910,7 +2916,7 @@ class CallRunner:
         if owner is None:
             self._code_swaps.pop(spec.name, None)
             return None
-        what = getattr(owner, "__qualname__", None) or type(owner).__qualname__
+        what = plain_getattr(owner, "__qualname__", None) or class_qualname(type(owner))
         times = self._code_swaps[spec.name] = self._code_swaps.get(spec.name, 0) + 1
         if times > 1:
             self._notices.warn_once(
@@ -2969,7 +2975,7 @@ class CallRunner:
             return False
         for fn in self._registry.code_functions(spec.func, spec.name):
             try:
-                code = getattr(inspect.unwrap(fn), "__code__", None)
+                code = plain_getattr(unwrapped(fn), "__code__", None)
             except ValueError:  # a cycle of __wrapped__
                 continue
             if isinstance(code, types.CodeType) and code_carries_waiver(code):
@@ -3159,7 +3165,7 @@ class CallRunner:
 def _replays_attributes(value: Any) -> bool:
     """Whether a change to *value*'s attributes can be replayed by a hit
     (`rewrite_in_place.attribute_refusal`): an instance of a plain class."""
-    return bool(getattr(type(value), "__dictoffset__", 0)) and rewrite_in_place.attribute_refusal(value) is None
+    return bool(class_dictoffset(type(value))) and rewrite_in_place.attribute_refusal(value) is None
 
 
 def _takes_state(value: Any) -> bool:

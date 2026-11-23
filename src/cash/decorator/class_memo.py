@@ -46,6 +46,7 @@ from typing import Any
 
 from .. import _native, _weak
 from .._memo import LruMemo
+from .._type_memo import class_module, class_qualname
 from . import hit_memo, state_memo
 
 __all__ = [
@@ -289,7 +290,7 @@ class ClassMemo:
         cls = proof.cls
         if cls is None or not proof.holds():
             return
-        named = (cls.__module__, cls.__qualname__, key[1:])
+        named = (class_module(cls), class_qualname(cls), key[1:])
         before = self._named.get(named)
         if before is not None and before != key:
             self._entries.pop(before)

@@ -31,6 +31,8 @@ from cash._referents import get_referents
 from cash._user_attrs import attribute_or, has_attribute, instance_of, is_routine
 
 from .._memo import NOTEBOOK_STATEMENTS
+from .._type_memo import class_dict, class_flags, class_mro, class_qualname, module_of_class
+from .._user_attrs import static_attr, unwrapped
 from ..analysis.analysis_budget import AnalysisBudgetExceeded
 from ..analysis.ast_util import parse_cached, plain_statement, walk_tree
 from ..analysis.bytecode import NAME_LOADS, argvals
@@ -621,13 +623,13 @@ def _as_handed_callee(value: Any) -> tuple[Any, str, Any]:
         return value.__func__, "classmethod" if isinstance(receiver, type) else "method", receiver
     if isinstance(value, type):
         try:
-            return inspect.getattr_static(value, "__init__"), "method", value
+            return static_attr(value, "__init__"), "method", value
         except AttributeError:
             return None, "function", None
     if type(value) is types.FunctionType:
         return value, "function", None
     try:
-        return inspect.getattr_static(type(value), "__call__"), "method", value
+        return static_attr(type(value), "__call__"), "method", value
     except AttributeError:
         return None, "function", None
 
@@ -954,7 +956,7 @@ def _parts_held(value: Any, kind: type) -> Iterable[Any] | None:
             # item is there all the same, in its data.
             value = masked.getdata(value)
         return value.ravel(order="K")
-    if not kind.__flags__ & _HAVE_GC:
+    if not class_flags(kind) & _HAVE_GC:
         return () if top in _OWN_GC_MODULES or top in sys.stdlib_module_names else None
     try:
         held = get_referents(value)
@@ -1083,7 +1085,7 @@ def _resolve_call(func: ast.expr, namespace: Mapping[str, Any]) -> tuple[Any, st
     owner, instance_of = _static_value(func.value, namespace)
     if instance_of is not None:
         try:
-            member = inspect.getattr_static(instance_of, func.attr)
+            member = static_attr(instance_of, func.attr)
         except AttributeError:
             return None, "function", None
         return _as_callee(member, instance_of, True)
@@ -1092,7 +1094,7 @@ def _resolve_call(func: ast.expr, namespace: Mapping[str, Any]) -> tuple[Any, st
     if issubclass(type(owner), types.ModuleType):
         return _as_callee(vars(owner).get(func.attr), None, False)
     try:
-        member = inspect.getattr_static(owner, func.attr)
+        member = static_attr(owner, func.attr)
     except Exception:  # noqa: BLE001 - an object's attribute lookup
         return None, "function", None
     if isinstance(owner, type):
@@ -1101,10 +1103,10 @@ def _resolve_call(func: ast.expr, namespace: Mapping[str, Any]) -> tuple[Any, st
 
 
 def _as_callee(member: Any, owner: Any, on_instance: bool) -> tuple[Any, str, Any]:
-    if isinstance(member, classmethod):
+    if instance_of(member, classmethod):
         cls = owner if isinstance(owner, type) else type(owner)
         return member.__func__, "classmethod", cls
-    if isinstance(member, staticmethod):
+    if instance_of(member, staticmethod):
         return member.__func__, "function", None
     if type(member) is types.MethodType:
         receiver = member.__self__
@@ -1136,7 +1138,7 @@ def _static_value(expr: ast.expr, namespace: Mapping[str, Any]) -> tuple[Any, ty
         if not isinstance(value, type) and not _of_a_local_class(value):
             return None, None
         try:
-            value = inspect.getattr_static(value, attr)
+            value = static_attr(value, attr)
         except Exception:  # noqa: BLE001 - an object's attribute lookup
             return None, None
         if isinstance(value, (classmethod, staticmethod, property)) or not _plain_attribute(value):
@@ -1348,7 +1350,7 @@ def _function_body(fn: types.FunctionType) -> list[ast.stmt]:
     notebook function walks its body, for the module state and again for
     the process state it sets, and reading the source is what costs."""
     try:
-        target = inspect.unwrap(fn)
+        target = unwrapped(fn)
     except ValueError:  # a __wrapped__ cycle
         target = fn
     code = attribute_or(target, "__code__", None)
@@ -1668,7 +1670,7 @@ class _Found:
     def _wrapped(self, value: Any) -> None:
         """The function *value* wraps (``functools.wraps``' ``__wrapped__``)."""
         try:
-            wrapped = inspect.getattr_static(value, "__wrapped__", None)
+            wrapped = static_attr(value, "__wrapped__", None)
         except Exception:  # noqa: BLE001 - an object's attribute lookup
             return
         if type(wrapped) is types.FunctionType:
@@ -1704,7 +1706,7 @@ class _Found:
 
     def _walk_class(self, cls: type) -> None:
         if not self._users_class(cls):
-            self.value(vars(cls).get("__init__"))
+            self.value(class_dict(cls).get("__init__"))
             return
         if id(cls) in self._function_ids:
             return
@@ -1712,13 +1714,13 @@ class _Found:
         home = _loaded(attribute_or(cls, "__module__", None))
         if home is not None and _is_local(home):
             self.modules.add(home.__name__)
-            for attr, attr_value in list(vars(cls).items()):
+            for attr, attr_value in list(class_dict(cls).items()):
                 if not attr.startswith("__") and _is_data(attr_value):
-                    self.data.setdefault(f"{home.__name__}.{cls.__qualname__}.{attr}", attr_value)
-        for klass in cls.__mro__:
+                    self.data.setdefault(f"{home.__name__}.{class_qualname(cls)}.{attr}", attr_value)
+        for klass in class_mro(cls):
             if not self._users_class(klass):
                 continue
-            for attr_value in list(vars(klass).values()):
+            for attr_value in list(class_dict(klass).values()):
                 for fn in _class_member_functions(attr_value):
                     self.value(fn)
 
@@ -1751,7 +1753,7 @@ class _Found:
         # per member was a fifth of a short cell's analysis.
         namespace = self.namespace
         function = types.FunctionType
-        for member in list(vars(cls).values()):
+        for member in list(class_dict(cls).values()):
             if type(member) is function:
                 if member.__globals__ is namespace:
                     return True
@@ -1985,7 +1987,7 @@ def _local_homes(value: Any) -> Iterable[str]:
             yield value.__name__
         return
     if issubclass(type(value), (types.FunctionType, type)):
-        home = value.__globals__.get("__name__") if type(value) is types.FunctionType else value.__module__
+        home = value.__globals__.get("__name__") if type(value) is types.FunctionType else module_of_class(value)
         module = _loaded(home)
         if module is not None and _is_local(module):
             yield module.__name__

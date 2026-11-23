@@ -74,6 +74,9 @@ from cash.live_state import is_live_stream, stream_kind
 from cash.tracking.function_tracker import is_local_module
 from cash.value_types import LEAF_TYPES
 
+from .._type_memo import class_dict, class_flags, class_module, class_mro, class_name
+from .._user_attrs import dataclass_fields, static_attr
+
 __all__ = [
     "GaveUp",
     "Leaves",
@@ -240,10 +243,14 @@ def _user_attributes(value: Any) -> bool:
     own = _OWN_NAMES_BY_TYPE.get(kind)
     if own is None:
         own = next(
-            (_OWN_SCALAR_NAMES.get(base.__name__, frozenset()) for base in kind.__mro__ if base in _ATTRIBUTED_SCALARS),
+            (
+                _OWN_SCALAR_NAMES.get(base.__name__, frozenset())
+                for base in class_mro(kind)
+                if base in _ATTRIBUTED_SCALARS
+            ),
             frozenset(),
         )
-    if kind.__flags__ & _INLINE_VALUES:
+    if class_flags(kind) & _INLINE_VALUES:
         # Attributes kept in the object itself (``NA``, a subclass of the
         # user's): its referents are their values, not a dict.
         attrs = own_dict(value)
@@ -309,10 +316,10 @@ def _hook_pandas_scalars(pd: Any) -> None:
     global _ATTRIBUTED_SCALARS, _SCALAR_KINDS
     kinds = (pd.Timestamp, pd.Timedelta, pd.Period, type(pd.NaT), type(pd.NA))
     for kind in kinds:
-        if "__setattr__" in vars(kind) or "__delattr__" in vars(kind):
+        if "__setattr__" in class_dict(kind) or "__delattr__" in class_dict(kind):
             continue
         set_attr, del_attr = kind.__setattr__, kind.__delattr__
-        its_own = _OWN_SCALAR_NAMES.get(kind.__name__, frozenset())
+        its_own = _OWN_SCALAR_NAMES.get(class_name(kind), frozenset())
 
         def noting_set(obj: Any, name: str, value: Any, _set: Any = set_attr, _own: frozenset = its_own) -> None:
             _set(obj, name, value)
@@ -328,7 +335,7 @@ def _hook_pandas_scalars(pd: Any) -> None:
         kind.__delattr__ = noting_del
         _SCALAR_HOOKS.append((kind, noting_set, noting_del))
     _ATTRIBUTED_SCALARS, _SCALAR_KINDS = frozenset(kinds), kinds
-    _OWN_NAMES_BY_TYPE.update((kind, _OWN_SCALAR_NAMES.get(kind.__name__, frozenset())) for kind in kinds)
+    _OWN_NAMES_BY_TYPE.update((kind, _OWN_SCALAR_NAMES.get(class_name(kind), frozenset())) for kind in kinds)
     if _SCALAR_IDENTITY:
         _unhook_pandas_scalars()
 
@@ -448,7 +455,7 @@ def _unhook_pandas_scalars() -> None:
     """Give each hooked type its own ``__setattr__`` and ``__delattr__`` back."""
     while _SCALAR_HOOKS:
         kind, noting_set, noting_del = _SCALAR_HOOKS.pop()
-        own = vars(kind)
+        own = class_dict(kind)
         with contextlib.suppress(AttributeError, TypeError):
             if own.get("__setattr__") is noting_set:
                 del kind.__setattr__
@@ -624,7 +631,7 @@ def _found_by_name(fn: types.FunctionType) -> bool:
         if target is None or part.startswith("<"):
             return False
         try:
-            target = inspect.getattr_static(target, part, None)
+            target = static_attr(target, part, None)
         except Exception:  # noqa: BLE001 - an object that cannot be asked holds no such name
             return False
     return target is fn
@@ -711,7 +718,7 @@ def _is_local_module_class(cls: type) -> bool:
     known = _LOCAL_MODULE_CLASSES.get(type_key(cls))
     if known is None:
         try:
-            module = sys.modules.get(cls.__module__)
+            module = sys.modules.get(class_module(cls))
             known = instance_of(module, types.ModuleType) and is_local_module(module)
         except Exception:  # noqa: BLE001 - a class that cannot be asked is a leaf
             known = False
@@ -730,7 +737,7 @@ def attributes_of(value: Any) -> dict[str, Any] | None:
     if not (
         attribute_or(cls, "__module__", None) == "__main__"
         or cls is types.SimpleNamespace
-        or dataclasses.is_dataclass(cls)
+        or dataclass_fields(cls) is not None
         or _is_estimator_class(cls)
         or _is_local_module_class(cls)
     ):
@@ -765,15 +772,15 @@ def _slot_members(cls: type) -> tuple[tuple[str, Any], ...]:
     known = _SLOT_MEMBERS.get_for(cls)
     if known is None:
         found: list[tuple[str, int]] = []
-        for at, klass in enumerate(cls.__mro__):
-            for name, member in vars(klass).items():
-                if instance_of(member, types.MemberDescriptorType) and "__slots__" in vars(klass):
+        for at, klass in enumerate(class_mro(cls)):
+            for name, member in class_dict(klass).items():
+                if instance_of(member, types.MemberDescriptorType) and "__slots__" in class_dict(klass):
                     found.append((name, at))
         known = tuple(found)
         _SLOT_MEMBERS.put(cls, known)
     if not known:
         return ()
-    mro = cls.__mro__
+    mro = class_mro(cls)
     return tuple((name, vars(mro[at])[name]) for name, at in known)
 
 
@@ -906,7 +913,7 @@ def _pandas_objects(value: Any) -> list[Any]:
         categories = attribute_or(attribute_or(values, "categories", None), "_data", None)
         arrays.append(values if categories is None else categories)
     for axis in axes:
-        levels = attribute_or(axis, "levels", None) if type(axis).__name__ == "MultiIndex" else None
+        levels = attribute_or(axis, "levels", None) if class_name(type(axis)) == "MultiIndex" else None
         arrays.extend((own_dict(level) or {}).get("_data") for level in levels or ())
         if levels is None:
             arrays.append((own_dict(axis) or {}).get("_data"))
@@ -3057,7 +3064,7 @@ def _holds_only_values(obj: Any, value_types: tuple[type, ...], depth: int = 3) 
 
 def _is_cash_own(obj: Any) -> bool:
     """Whether *obj* is one of cash's own records (its type is cash's)."""
-    module = type(obj).__module__
+    module = class_module(type(obj))
     return instance_of(module, str) and (module == "cash" or module.startswith("cash."))
 
 
@@ -3426,7 +3433,7 @@ def _class_constants(cls: type, inside: Mapping[int, Any]) -> set[int]:
     library's class, holds as its own attributes (in its ``__dict__``): the
     library's constants, as its module's globals are."""
     try:
-        held = {id(value) for value in list(vars(cls).values())}
+        held = {id(value) for value in list(class_dict(cls).values())}
     except Exception:  # noqa: BLE001 - a metaclass's own ``__dict__``
         return set()
     return {key for key, obj in inside.items() if key in held and _is_library_own(obj)}
@@ -3437,7 +3444,7 @@ def _is_library_own(obj: Any) -> bool:
     (`_is_library_class`), read as one (not pandas or numpy data). A list,
     a dict or the notebook's own object is not."""
     cls = type(obj)
-    if cls.__module__ == "builtins" or not _is_library_class(cls):
+    if class_module(cls) == "builtins" or not _is_library_class(cls):
         return False
     return (_LIBRARY_KINDS.get(type_key(cls)) or _library_kind(cls)) is _LEAF
 
@@ -4228,7 +4235,7 @@ def _untracked_defaults_holding(level_ids: set[int], user_ns: Mapping[str, Any],
         if type(value) is types.FunctionType:
             functions.append(value)
         elif instance_of(value, type) and attribute_or(value, "__module__", None) == user_ns.get("__name__"):
-            functions.extend(item for item in list(vars(value).values()) if type(item) is types.FunctionType)
+            functions.extend(item for item in list(class_dict(value).values()) if type(item) is types.FunctionType)
     found = []
     for fn in functions:
         stack = [held for held in (fn.__defaults__, fn.__kwdefaults__) if held]
@@ -5034,15 +5041,15 @@ def _flat_record_class(kind: type, children: list[Any], value_types: tuple[type,
             return False
         if own_lookup(kind) or _slot_members(kind):
             return False
-        for klass in kind.__mro__[:-1]:
+        for klass in class_mro(kind)[:-1]:
             if klass is types.SimpleNamespace:
                 # A C class that looks attributes up as Python does, in the
                 # ``__dict__`` its member descriptor hands back: a million
                 # ``SimpleNamespace`` records were walked one at a time.
                 continue
-            if not klass.__flags__ & _HEAPTYPE:
+            if not class_flags(klass) & _HEAPTYPE:
                 return False  # a C base may look attributes up its own way
-            own = vars(klass)
+            own = class_dict(klass)
             if "__class__" in own or "__getattr__" in own:
                 return False
             held = own.get("__dict__")

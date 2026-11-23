@@ -17,7 +17,8 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 from .._memo import CODE_OBJECTS, LruMemo
-from .._user_attrs import importable_attr
+from .._type_memo import class_dict
+from .._user_attrs import importable_attr, plain_getattr
 from ..analysis import text_store
 from ..analysis.annotations import line_assumes_safe, may_hold_waiver_block
 from ..analysis.bytecode import GLOBAL_WRITES, argvals, instructions
@@ -354,7 +355,7 @@ def reaches_namespace_by_name(scopes: tuple, module_globals: dict[str, Any]) -> 
             return True
         for name in loads:
             value = module_globals.get(name)
-            members = vars(value).values() if isinstance(value, type) else (value,)
+            members = class_dict(value).values() if isinstance(value, type) else (value,)
             for member in members:
                 member = importable_attr(member, "__func__", member)
                 member = importable_attr(member, "__wrapped__", member)  # a cached helper
@@ -449,10 +450,10 @@ class GlobalReads:
         it is AST-based, and ``ast.walk`` over the function's source already
         descends into comprehension and lambda bodies.
         """
-        code = getattr(func, "__code__", None)
+        code = plain_getattr(func, "__code__", None)
         if code is None:
             return ()
-        g = getattr(func, "__globals__", {}) or {}
+        g = plain_getattr(func, "__globals__", {}) or {}
         cached = self._current_entry(code, g)
         if cached is not None:
             return cached[0]
@@ -528,10 +529,10 @@ class GlobalReads:
         it, for its global *name*; None when it is not read only that way,
         or its code can reach the namespace by a string. Cached per code
         object and name."""
-        code = getattr(func, "__code__", None)
+        code = plain_getattr(func, "__code__", None)
         if code is None:
             return None
-        g = getattr(func, "__globals__", None) or {}
+        g = plain_getattr(func, "__globals__", None) or {}
         per_code = self._attr_chains.get(code)
         if per_code is None:
             per_code = self._attr_chains[code] = {}
@@ -550,7 +551,7 @@ class GlobalReads:
         (``m.settings``); None when it is not read only that way, or its
         code can reach a namespace by a string. Cached per code object and
         path."""
-        code = getattr(func, "__code__", None)
+        code = plain_getattr(func, "__code__", None)
         if code is None:
             return None
         per_code = self._attr_chains.get(code)
@@ -559,7 +560,7 @@ class GlobalReads:
         slot = ("module", path)
         if slot not in per_code:
             scopes = tuple(iter_code_scopes(code))
-            g = getattr(func, "__globals__", None) or {}
+            g = plain_getattr(func, "__globals__", None) or {}
             per_code[slot] = (
                 None if reaches_namespace_by_name(scopes, g) else module_attr_chains(scopes, tuple(path.split(".")))
             )
@@ -589,7 +590,7 @@ class GlobalReads:
                 if (
                     type(value) is types.FunctionType
                     and value is not func
-                    and own_code_is_user(value, getattr(func, "__module__", None))
+                    and own_code_is_user(value, plain_getattr(func, "__module__", None))
                 ):
                     found.append(value)
         return found
@@ -603,7 +604,7 @@ class GlobalReads:
         code = fn.__code__
         # Re-checks the pending names first: a False remembered before the
         # module bound a global the code loads is no longer true.
-        self._current_entry(code, getattr(fn, "__globals__", None) or {})
+        self._current_entry(code, plain_getattr(fn, "__globals__", None) or {})
         cached = self._reads_anything.get(code)
         if cached is None:
             cached = bool(
@@ -625,7 +626,7 @@ class GlobalReads:
         decorator); the values are folded like any other read global, so
         modules and callables among them are skipped there. Cached per code.
         """
-        code = getattr(fn, "__code__", None)
+        code = plain_getattr(fn, "__code__", None)
         if code is None:
             return ()
         cached = self._decorator_names_cache.get(code)
@@ -636,7 +637,7 @@ class GlobalReads:
             tree = ast.parse(textwrap.dedent(getsource(code)))
             node = next((n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))), None)
             if node is not None and node.decorator_list:
-                g = getattr(fn, "__globals__", None) or {}
+                g = plain_getattr(fn, "__globals__", None) or {}
                 names = tuple(
                     dict.fromkeys(
                         n.id
@@ -672,14 +673,14 @@ class GlobalReads:
 
         Nested scopes count: a read inside a genexp is a read of the body.
         """
-        code = getattr(func, "__code__", None)
+        code = plain_getattr(func, "__code__", None)
         if code is None:
             return ()
         cached = self._module_attr_cache.get(code)
         if cached is not None:
             return cached
 
-        g = getattr(func, "__globals__", None) or {}
+        g = plain_getattr(func, "__globals__", None) or {}
         pairs: set[tuple[str, str]] = set()
         whole: set[str] = set()
         names: set[str] = set()
@@ -720,7 +721,7 @@ class GlobalReads:
         ``name.ATTR`` reads of any local or closure name, the bare reads of
         local names, and the dotted modules ``import pkg.sub`` loads.
         """
-        code = getattr(func, "__code__", None)
+        code = plain_getattr(func, "__code__", None)
         if code is None:
             return None
         cached = self._local_binding_cache.get(code, _NO_PLAN)
@@ -734,9 +735,9 @@ class GlobalReads:
             # The text, the package a relative import resolves in and the
             # code's free names are all the plan reads: kept across
             # processes with them (`text_store`).
-            g = getattr(func, "__globals__", None)
+            g = plain_getattr(func, "__globals__", None)
             package = g.get("__package__") if isinstance(g, dict) else None
-            module = getattr(func, "__module__", "") or ""
+            module = plain_getattr(func, "__module__", "") or ""
             freevars = tuple(code.co_freevars or ())
             plan = text_store.kept(
                 "local-binding-plan",

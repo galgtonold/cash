@@ -30,7 +30,8 @@ import types
 
 from ._memo import COMPILED_MODULES, LruMemo
 from ._paths import is_pseudo_filename
-from ._user_attrs import module_file
+from ._type_memo import class_dict, class_module, class_name, class_qualname
+from ._user_attrs import module_file, plain_getattr
 from .process_start import process_start_time
 from .source_norm import bytecode_identity
 from .source_reading import (
@@ -381,7 +382,7 @@ def loaded_code_matches_disk(fn: object) -> bool:
         # A class has no code of its own; its methods do, and an edit to any
         # of them is an edit to the class.
         return all(loaded_code_matches_disk(m) for m in class_functions(fn))
-    code = getattr(fn, "__code__", None)
+    code = plain_getattr(fn, "__code__", None)
     if not isinstance(code, types.CodeType):
         return True
     path = code.co_filename
@@ -441,8 +442,8 @@ def loaded_code_matches_disk(fn: object) -> bool:
 def class_functions(cls: type) -> list[types.FunctionType]:
     """The plain functions defined directly in *cls*, unwrapping descriptors."""
     found = []
-    for value in vars(cls).values():
-        func = getattr(value, "__func__", value)  # staticmethod / classmethod
+    for value in class_dict(cls).values():
+        func = plain_getattr(value, "__func__", value)  # staticmethod / classmethod
         if isinstance(value, property):
             func = value.fget
         if type(func) is types.FunctionType and getattr(func, "_cash_cached", False):
@@ -450,7 +451,7 @@ def class_functions(cls: type) -> list[types.FunctionType]:
             # are cash's own: walked as the class's code, it reported
             # KEY-UNHASHABLE-GLOBAL for `Model.fit.ACTIVE_CONFIG`, a name in
             # no file of the user's. The user's function is inside.
-            func = getattr(func, "__wrapped__", func)
+            func = plain_getattr(func, "__wrapped__", func)
         if type(func) is types.FunctionType:
             found.append(func)
     return found
@@ -478,7 +479,7 @@ def code_objects_of(owner: object, *, follow_wrapped: bool = True, accessors: li
     elif isinstance(owner, type):
         found = []
         try:
-            for value in vars(owner).values():
+            for value in class_dict(owner).values():
                 kind = type(value)
                 if kind is types.FunctionType:
                     func = value
@@ -497,7 +498,7 @@ def code_objects_of(owner: object, *, follow_wrapped: bool = True, accessors: li
                 elif kind in _PLAIN_ATTRIBUTE_TYPES:
                     continue
                 else:
-                    func = getattr(value, "__func__", value)
+                    func = plain_getattr(value, "__func__", value)
                 if type(func) is types.FunctionType:
                     attrs = func.__dict__
                     if not attrs or "__wrapped__" not in attrs:
@@ -526,11 +527,11 @@ def code_objects_of(owner: object, *, follow_wrapped: bool = True, accessors: li
     seen: set[int] = set()
     while owner is not None and id(owner) not in seen:
         seen.add(id(owner))
-        code = getattr(owner, "__code__", None)
+        code = plain_getattr(owner, "__code__", None)
         if not isinstance(code, types.CodeType):
             break
         found.append(code)
-        owner = getattr(owner, "__wrapped__", None) if type(owner) is types.FunctionType else None
+        owner = plain_getattr(owner, "__wrapped__", None) if type(owner) is types.FunctionType else None
     return tuple(found)
 
 
@@ -549,7 +550,7 @@ def _member_functions(value: object) -> list[tuple[str, types.FunctionType]]:
     elif kind is property:
         pairs = [("get", value.fget), ("set", value.fset), ("del", value.fdel)]
     elif kind is staticmethod or kind is classmethod:
-        pairs = [(kind.__name__, value.__func__)]
+        pairs = [(class_name(kind), value.__func__)]
     elif kind is functools.cached_property:
         pairs = [("cached", value.func)]
     else:
@@ -568,11 +569,11 @@ def foreign_members(cls: type) -> list[tuple[str, str, types.FunctionType]]:
     own (a dataclass's generated methods are named so too); one the body
     bound under another name (``prop = property(_get)``) is listed, which
     is stable."""
-    prefix = f"{cls.__qualname__}."
-    module = cls.__module__
+    prefix = f"{class_qualname(cls)}."
+    module = class_module(cls)
     found = []
     try:
-        members = sorted(((k, v) for k, v in vars(cls).items() if isinstance(k, str)), key=lambda kv: kv[0])
+        members = sorted(((k, v) for k, v in class_dict(cls).items() if isinstance(k, str)), key=lambda kv: kv[0])
     except TypeError:
         return []
     for name, value in members:
@@ -586,7 +587,7 @@ def foreign_members(cls: type) -> list[tuple[str, str, types.FunctionType]]:
 def loaded_class_identity(cls: type) -> str | None:
     """A digest of *cls* from its LOADED methods, for when disk is not them."""
     try:
-        parts = [cls.__qualname__]
+        parts = [class_qualname(cls)]
         for func in sorted(class_functions(cls), key=lambda f: f.__qualname__):
             parts.append(f"{func.__qualname__}={bytecode_identity(func)}")
         return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()

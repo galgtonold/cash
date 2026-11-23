@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 
 from ._paths import is_pseudo_filename
+from ._user_attrs import plain_getattr
 from .install_paths import is_installed_path
 
 logger = logging.getLogger(__name__)
@@ -90,7 +91,7 @@ def _running_script_dir() -> Path | None:
     if interactive_shell_is_running() or _running_cash_cli():
         return None
     main = sys.modules.get("__main__")
-    raw = getattr(main, "__file__", None)
+    raw = plain_getattr(main, "__file__", None)
     if _pool_launcher_main():
         # A joblib (loky) worker runs ``python -m ...popen_loky_posix``: its
         # ``__main__`` is joblib's launcher, an installed module, while
@@ -261,7 +262,7 @@ def _running_installed_module() -> bool:
         return False
     if _running_cash_cli():
         return True
-    raw = getattr(main, "__file__", None)
+    raw = plain_getattr(main, "__file__", None)
     if not raw:
         return False
     try:

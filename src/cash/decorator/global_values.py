@@ -13,7 +13,8 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from .._memo import CODE_OBJECTS, TABLES, LruMemo
-from .._user_attrs import NOT_HELD, held_attribute
+from .._type_memo import class_module, class_name, class_qualname
+from .._user_attrs import NOT_HELD, held_attribute, plain_getattr
 from ..analysis.helper_bindings import UNRESOLVED, resolve_binding
 from ..analysis.helper_code import callable_layers, is_mock, own_code_is_user, qualname_of
 from ..analysis.purity_analyzer import get_analyzer
@@ -155,7 +156,7 @@ class GlobalValues:
                 # out the globals it reads, and one on another instance was
                 # not in this registry at all.
                 return "cached:" + state()
-            fn = getattr(fn, "__wrapped__", fn)
+            fn = plain_getattr(fn, "__wrapped__", fn)
         if isinstance(fn, type):
             # A class: its code, what it inherits and its metaclass.
             return self._helpers.identity(fn)
@@ -167,7 +168,7 @@ class GlobalValues:
             return hash_callable_source(fn)
         own = self._helpers.identity(fn)
 
-        if not own_code_is_user(fn, getattr(fn, "__module__", None)):
+        if not own_code_is_user(fn, plain_getattr(fn, "__module__", None)):
             return own
         report = _walked_or_refused(fn)
         if not report.helper_source_hashes:
@@ -212,7 +213,7 @@ class GlobalValues:
         found: dict[str, str] = {}
         own = {qualname_of(fn) for fn in functions}
         for fn in functions:
-            if not own_code_is_user(fn, getattr(fn, "__module__", None)):
+            if not own_code_is_user(fn, plain_getattr(fn, "__module__", None)):
                 continue
             report = _walked_or_refused(fn)
             for qual, digest in report.helper_source_hashes.items():
@@ -344,7 +345,7 @@ class GlobalValues:
 
     @staticmethod
     def _calls_no_helper(fn: Any) -> bool:
-        if not own_code_is_user(fn, getattr(fn, "__module__", None)):
+        if not own_code_is_user(fn, plain_getattr(fn, "__module__", None)):
             return True
         try:
             report = get_analyzer().analyze_reached(fn)
@@ -398,7 +399,7 @@ class GlobalValues:
         except Exception:  # noqa: BLE001 - undecidable: hash it below
             pass
         cls_ref = code_ref(type(value))
-        if cls_ref is not None and not getattr(value, "__dict__", None) and reduced_state(value) is None:
+        if cls_ref is not None and not plain_getattr(value, "__dict__", None) and reduced_state(value) is None:
             # Pickled as a global name (`typing.Any`): that name is what it is.
             try:
                 reduced = value.__reduce_ex__(4)
@@ -413,7 +414,7 @@ class GlobalValues:
                 func_name,
                 label,
                 f"@cash.cache on {func_name}: reads '{label}', a callable "
-                f"{type(value).__qualname__} that could not be hashed, so changes "
+                f"{class_qualname(type(value))} that could not be hashed, so changes "
                 f"to it will NOT invalidate the cache.",
                 code="KEY-UNHASHABLE-GLOBAL",
                 fix=UNHASHABLE_GLOBAL_FIX,
@@ -497,10 +498,10 @@ class GlobalValues:
             if isinstance(value, functools.partial):
                 payload: Any = ("partial", value.func, value.args, dict(value.keywords))
             elif issubclass(type(value), (types.MethodType, types.BuiltinMethodType)):
-                owner = getattr(value, "__self__", None)
+                owner = plain_getattr(value, "__self__", None)
                 if owner is None or issubclass(type(owner), (type, types.ModuleType)):
                     return None
-                method = getattr(value, "__name__", "")
+                method = plain_getattr(value, "__name__", "")
 
                 if method in REPORTED_METHODS or method in LOG_METHOD_NAMES:
                     # `record = RESULTS.append`, `log = logger.info`: what the
@@ -508,10 +509,10 @@ class GlobalValues:
                     return None
                 payload = ("method", method, owner)
             else:
-                state = getattr(value, "__dict__", None)
+                state = plain_getattr(value, "__dict__", None)
                 cls = type(value)
                 if isinstance(state, dict) and state:
-                    payload = ("instance", cls.__module__, cls.__qualname__, state)
+                    payload = ("instance", class_module(cls), class_qualname(cls), state)
                 else:
                     # A C callable keeps what it was built with where only
                     # `__reduce__` reaches it: `operator.itemgetter("n")`,
@@ -521,7 +522,7 @@ class GlobalValues:
                     reduced = reduced_state(value)
                     if reduced is None:
                         return None
-                    payload = ("reduce", cls.__module__, cls.__qualname__, reduced)
+                    payload = ("reduce", class_module(cls), class_qualname(cls), reduced)
             if verdict is None:
                 runs_user_code = any(own_code_is_user(layer, root_module) for layer in callable_layers(value))
                 if runs_user_code:
@@ -558,7 +559,7 @@ class GlobalValues:
             # one, so it is keyed by its kind, as when a closure, a default
             # or a class attribute holds it.
             cls = type(value)
-            return f"sync:{cls.__module__}.{cls.__qualname__}"
+            return f"sync:{class_module(cls)}.{class_qualname(cls)}"
         try:
             return self.data_digest(value)
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
@@ -584,7 +585,7 @@ def _walked_or_refused(fn: Any) -> Any:
     try:
         report = get_analyzer().analyze_reached(fn)
     except Exception as e:  # noqa: BLE001 - no report means no key, not a partial one
-        reason = f"cash could not find the helpers it calls ({type(e).__name__}: {e})"
+        reason = f"cash could not find the helpers it calls ({class_name(type(e))}: {e})"
     else:
         if not report.unwalkable:
             return report

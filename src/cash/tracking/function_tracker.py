@@ -7,7 +7,6 @@ import contextlib
 import functools
 import hashlib
 import importlib
-import inspect
 import logging
 import os
 import shutil
@@ -17,9 +16,11 @@ import types
 from collections.abc import Callable
 from typing import Any
 
-from cash._user_attrs import module_file
+from cash._type_memo import module_of_class
+from cash._user_attrs import attribute_or, module_file
 
 from .._memo import NOTEBOOK_FUNCTIONS, LruMemo
+from .._user_attrs import plain_getattr, unwrapped
 from ..analysis.ast_util import parse_cached, walk_tree
 from ..code_digest import callable_identity, source_digest
 from ..install_paths import is_user_module
@@ -86,7 +87,7 @@ def imports_of(module_name: str) -> frozenset[str] | None:
     """The module names *module_name*'s source file imports, or None when it
     is not loaded, has no source file, or the file cannot be read or parsed."""
     mod = sys.modules.get(module_name)
-    mod_file = getattr(mod, "__file__", None) if mod is not None else None
+    mod_file = plain_getattr(mod, "__file__", None) if mod is not None else None
     if not mod_file or not os.path.isfile(mod_file):
         return None
     try:
@@ -164,7 +165,7 @@ def _with_wrapped_chain(func: Any) -> set[int]:
     current = func
     while type(current) is types.FunctionType and id(current) not in ids:
         ids.add(id(current))
-        current = getattr(current, "__wrapped__", None)
+        current = plain_getattr(current, "__wrapped__", None)
     return ids
 
 
@@ -199,16 +200,16 @@ def _with_layers(func: Any, digest: str | None) -> str | None:
     # namespace has no module to judge), or in a module of theirs. Not the
     # library machinery a wrapper carries (`singledispatch`'s `register`).
     try:
-        base = inspect.unwrap(func)
+        base = unwrapped(func)
     except ValueError:  # a `__wrapped__` cycle
         base = func
-    home = getattr(base, "__globals__", None)
+    home = plain_getattr(base, "__globals__", None)
     parts = [
         callable_identity(layer)
         for layer in layers
         if id(layer) not in covered and (layer.__globals__ is home or own_code_is_user(layer, None))
     ]
-    registry = getattr(func, "registry", None)
+    registry = plain_getattr(func, "registry", None)
     if parts and isinstance(registry, (dict, types.MappingProxyType)):
         # Which type each implementation is for: `register(int, f)` moved to
         # `register(str, f)` runs the same code for other arguments.
@@ -257,7 +258,7 @@ class FunctionTracker:
         module_obj = sys.modules.get(func_module)
         if not module_obj:
             return False
-        file_path = getattr(module_obj, "__file__", None)
+        file_path = plain_getattr(module_obj, "__file__", None)
         if not file_path or not os.path.isfile(file_path):
             return False
         try:
@@ -290,20 +291,22 @@ class FunctionTracker:
         # Skip built-in functions, C extensions, and special objects
         if type(func) is types.BuiltinFunctionType:
             return None
-        if isinstance(func, type) and func.__module__ == "builtins":
+        if isinstance(func, type) and module_of_class(func) == "builtins":
             return None
 
-        # Skip lambda (anonymous, can't get reliable source)
-        if hasattr(func, "__name__") and func.__name__ == "<lambda>":
+        # Skip lambda (anonymous, can't get reliable source). Read as
+        # `attribute_or` reads: a class's by ``type``'s lookup, never by
+        # its metaclass's hook.
+        if attribute_or(func, "__name__") == "<lambda>":
             return None
 
         # Check if this function is from a tracked module — if so, bypass id-cache
         # to ensure we always read fresh source from disk
-        func_module = getattr(func, "__module__", None)
+        func_module = attribute_or(func, "__module__")
         use_cache = not self._tracked_module_file_changed(func_module)
 
         # id alone is not enough: a freed function's address is reused.
-        cache_key = (id(func), func_module, getattr(func, "__qualname__", ""))
+        cache_key = (id(func), func_module, plain_getattr(func, "__qualname__", ""))
         if use_cache:
             cached = self._source_cache.get(cache_key, _UNCACHED)
             if cached is not _UNCACHED:
@@ -459,7 +462,7 @@ class FunctionTracker:
                 continue
             if not is_local_module(sub_mod):
                 continue
-            sub_file = getattr(sub_mod, "__file__", None)
+            sub_file = plain_getattr(sub_mod, "__file__", None)
             if not sub_file or not os.path.isfile(sub_file):
                 continue
             self._register_sub_dependency(sub_name, sub_file, module_name, visited, stack)
@@ -572,7 +575,7 @@ class FunctionTracker:
             mod = sys.modules.get(mod_name)
             if mod is None:
                 continue
-            mod_file = getattr(mod, "__file__", None)
+            mod_file = plain_getattr(mod, "__file__", None)
             if mod_file and os.path.isfile(mod_file):
                 self._discover_transitive_dependencies(mod_name)
 
@@ -994,7 +997,7 @@ class FunctionTracker:
             mod = sys.modules.get(mod_name)
             if mod is None:
                 continue
-            mod_file = getattr(mod, "__file__", None)
+            mod_file = plain_getattr(mod, "__file__", None)
             if not mod_file or not os.path.isfile(mod_file):
                 continue
             old_mtime = pre_check_mtimes.get(mod_name)
@@ -1080,7 +1083,7 @@ class FunctionTracker:
         imports_map = self._build_imports_map_for_set(modules_to_reload)
         for mod_name in reload_order:
             module = sys.modules.get(mod_name)
-            file_path = getattr(module, "__file__", "unknown") if module else "unknown"
+            file_path = plain_getattr(module, "__file__", "unknown") if module else "unknown"
 
             if mod_name in owed:
                 # It imports a module whose reload failed: reloading it now
@@ -1194,9 +1197,9 @@ class FunctionTracker:
                 continue
 
             # Check if this value came from the reloaded module
-            value_module = getattr(var_value, "__module__", None)
+            value_module = plain_getattr(var_value, "__module__", None)
             if value_module and (value_module == module_name or value_module.startswith(module_name + ".")):
-                obj_name = getattr(var_value, "__name__", None) or getattr(var_value, "__qualname__", None)
+                obj_name = plain_getattr(var_value, "__name__", None) or plain_getattr(var_value, "__qualname__", None)
                 if obj_name:
                     # Try to get the fresh version from the reloaded module
                     fresh = getattr(module, obj_name, None)

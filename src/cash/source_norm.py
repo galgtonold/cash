@@ -47,6 +47,8 @@ import types
 from typing import Any
 
 from ._memo import NOTEBOOK_STATEMENTS
+from ._type_memo import class_name
+from ._user_attrs import plain_getattr
 from .analysis.annotations import ANNOTATION_PATTERN, waiver_items
 from .value_types import IMMUTABLE_PRIMS
 
@@ -641,7 +643,7 @@ def _stabilize_const(const: object) -> str:
     # Anything else (a rare exotic const) contributes its TYPE only: its repr
     # may carry an address, and a wrong-but-stable digest beats a right-but-
     # unstable one, which would miss forever.
-    return f"<{type(const).__name__}>"
+    return f"<{class_name(type(const))}>"
 
 
 def _code_atoms(code: types.CodeType) -> str:
@@ -680,10 +682,10 @@ def bytecode_identity(fn: object) -> str | None:
     dropped, which is the other way to stay safe but hides any edit made
     inside a nested function or lambda.
     """
-    code = getattr(fn, "__code__", None)
+    code = plain_getattr(fn, "__code__", None)
     if code is None:
         # A callable instance: its behaviour lives in __call__.
-        code = getattr(getattr(fn, "__call__", None), "__code__", None)
+        code = getattr(plain_getattr(fn, "__call__", None), "__code__", None)
     if not isinstance(code, types.CodeType):
         return None
     try:

@@ -53,6 +53,7 @@ from dataclasses import dataclass
 
 from cash._user_attrs import attribute_or
 
+from .._user_attrs import static_attr
 from ..analysis.ast_util import copy_tree as _copy_tree
 from .call_key import global_names_reached
 from .lineage_formula import is_cash_instrumentation
@@ -296,9 +297,9 @@ def _static_callee(node: ast.AST, namespace) -> object:
         base = _static_callee(node.value, namespace)
         try:
             if issubclass(type(base), types.ModuleType):
-                return attribute_or(base, node.attr, _NOT_FOUND)
+                return attribute_or(base, node.attr, _NOT_FOUND, asked=True)
             if isinstance(base, type):
-                found = inspect.getattr_static(base, node.attr, _NOT_FOUND)
+                found = static_attr(base, node.attr, _NOT_FOUND)
                 return found.__func__ if isinstance(found, staticmethod) else found
         except Exception:  # noqa: BLE001 - a lookup is never worth an error
             return _NOT_FOUND

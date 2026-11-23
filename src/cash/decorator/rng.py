@@ -14,7 +14,7 @@ import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from .._user_attrs import module_file
+from .._user_attrs import module_file, plain_getattr, static_attr
 from ..analysis.annotations import parse_annotation_line
 from ..analysis.ast_util import walk_tree
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -146,7 +146,7 @@ def _random_state_param(callee: Any) -> tuple[int | None, inspect.Parameter | No
     else, the user's own code included."""
     from ..install_paths import is_user_path
 
-    module = sys.modules.get((getattr(callee, "__module__", None) or "").split(".")[0])
+    module = sys.modules.get((plain_getattr(callee, "__module__", None) or "").split(".")[0])
     file = module_file(module)
     if not file or is_user_path(file):
         return None
@@ -305,7 +305,7 @@ def read_seed(value: Any, path: tuple) -> Any:
     for kind, key in path:
         if kind == "attr":
             try:
-                value = inspect.getattr_static(value, key)
+                value = static_attr(value, key)
             except AttributeError:
                 return _SEED_UNREADABLE
             if hasattr(type(value), "__get__") and not isinstance(
@@ -791,7 +791,7 @@ class RngWatch:
         ``seed=None`` parameter warned.
         """
         bound = None
-        g = getattr(func, "__globals__", None) or {}
+        g = plain_getattr(func, "__globals__", None) or {}
         for expr, (call, root, is_param, path) in sorted(
             getattr(self._registry.cached.get(func_name), "seed_params", {}).items()
         ):
@@ -935,7 +935,7 @@ def _unseeded_estimator(result: Any) -> bool | None:
     (`estimator_draws`), None when it is no such estimator: no
     ``random_state`` parameter, a seed, settings that rule a draw out
     (``Ridge()``), or ``get_params`` failing."""
-    get_params = getattr(result, "get_params", None)
+    get_params = plain_getattr(result, "get_params", None)
     if get_params is None or not callable(get_params):
         return None
     try:

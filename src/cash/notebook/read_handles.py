@@ -31,6 +31,8 @@ from typing import Any
 
 from cash._user_attrs import attribute_or, instance_of
 
+from .._type_memo import class_name
+
 __all__ = ["is_read_handle", "reaches_read_handle", "read_handle_digest"]
 
 _FILE_TYPES = (io.TextIOWrapper, io.BufferedReader, io.FileIO)
@@ -61,7 +63,7 @@ def read_handle_digest(value: Any) -> str | None:
         return None
     text = isinstance(value, io.TextIOWrapper)
     parts = (
-        type(value).__name__,
+        class_name(type(value)),
         os.path.realpath(value.name),
         str(stat.st_size),
         str(stat.st_mtime_ns),

@@ -58,6 +58,7 @@ from cash.live_state import is_live_stream
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
 from ... import _weak
+from ..._type_memo import class_dict, class_dictoffset, class_flags, class_module, class_mro, class_name
 from .identity_holders import IdentityHeld, library_parts
 
 __all__ = [
@@ -93,14 +94,14 @@ _HEAP_TYPE = 1 << 9
 def _default_object(kind: type) -> bool:
     """An object of a class of Python code, with a ``__dict__``, no slots of
     its own and pickled the default way: its ``__dict__`` is its state."""
-    if not kind.__flags__ & _HEAP_TYPE or not kind.__dictoffset__:
+    if not class_flags(kind) & _HEAP_TYPE or not class_dictoffset(kind):
         return False
-    for klass in kind.__mro__:
+    for klass in class_mro(kind):
         if klass is object:
             continue
-        if not klass.__flags__ & _HEAP_TYPE or "__slots__" in vars(klass):
+        if not class_flags(klass) & _HEAP_TYPE or "__slots__" in class_dict(klass):
             return False
-        if any(name in vars(klass) for name in _OWN_PICKLING):
+        if any(name in class_dict(klass) for name in _OWN_PICKLING):
             return False
     return True
 
@@ -116,7 +117,7 @@ def refusal(obj: Any, namespace: Mapping[str, Any] | None = None) -> str | None:
         # identity, and what it holds is plain values (`rewrite_in_place`).
         return rewrite_in_place.refusal(obj)
     if not restorable_kind(obj):
-        why = f"a {kind.__name__} is not restored into the object it is, and a new one would not be that object"
+        why = f"a {class_name(kind)} is not restored into the object it is, and a new one would not be that object"
         # Only a loop's assignments into it (``arr[i] = v``) bring it here,
         # when the notebook holds it by identity (`bound_as_a_copy`): say
         # so, and warn.
@@ -296,7 +297,7 @@ def identity_kept(
         if why is not None:
             # A loop writing into it is routed afresh too (`routed_as_a_copy`).
             forget_routed(live)
-            kind = type(live).__name__
+            kind = class_name(type(live))
             return into, f"{why}; a {kind} is not written into, and a copy would not be that object"
     return into, None
 
@@ -660,14 +661,14 @@ def _gc_reads_it_all(kind: type) -> bool:
         return True
     found = _GC_READS.get(kind)
     if found is None:
-        found = kind.__mro__[-1] is object and all(_written_in_python(klass) for klass in kind.__mro__[:-1])
+        found = class_mro(kind)[-1] is object and all(_written_in_python(klass) for klass in class_mro(kind)[:-1])
         _GC_READS[kind] = found
     return found
 
 
 def _written_in_python(klass: type) -> bool:
     """Whether *klass* was made by a ``class`` statement in a ``.py`` file."""
-    if not klass.__flags__ & _HEAPTYPE:
+    if not class_flags(klass) & _HEAPTYPE:
         return False
     module = sys.modules.get(type.__dict__["__module__"].__get__(klass))
     path = attribute_or(module, "__file__", None) if module is not None else None
@@ -863,8 +864,8 @@ def _what_it_holds(value: Any, ids: _Ids) -> list[Any] | str | None:
         return [value.__self__] if _users_function(value.__func__) else None
     if (
         (isinstance(value, _OPAQUE) and not _users_class(value))
-        or type(kind.__module__) is not str
-        or (kind.__module__.partition(".")[0] in _NOT_THE_NOTEBOOKS)
+        or type(class_module(kind)) is not str
+        or (class_module(kind).partition(".")[0] in _NOT_THE_NOTEBOOKS)
     ):
         return None
     held: list[Any] = []
@@ -881,7 +882,7 @@ def _what_it_holds(value: Any, ids: _Ids) -> list[Any] | str | None:
         state = own_dict(value)
         if state:
             held.extend(state.values())
-    elif kind.__name__ == "ndarray" and kind.__module__ == "numpy":
+    elif class_name(kind) == "ndarray" and class_module(kind) == "numpy":
         if value.dtype.names and not value.dtype.hasobject:
             return [value[field] for field in value.dtype.names]
         if value.dtype.hasobject:
@@ -1101,10 +1102,10 @@ def _read_mode(kind: type, item: Any = None, pandas: Any = None) -> int:
     """How `_typed_referents` reads an object of *kind*: as an array, a
     frame, a series, an index (*item* tested with ``isinstance`` when
     given, *kind* with ``issubclass`` when not), or through the collector."""
-    if kind.__name__ == "ndarray" and from_family(kind, "numpy"):
+    if class_name(kind) == "ndarray" and from_family(kind, "numpy"):
         return _ARRAY
-    if from_family(kind, "pandas") and kind.__name__ in ("DataFrame", "Series"):
-        return _FRAME if kind.__name__ == "DataFrame" else _SERIES
+    if from_family(kind, "pandas") and class_name(kind) in ("DataFrame", "Series"):
+        return _FRAME if class_name(kind) == "DataFrame" else _SERIES
     if item is not None:
         return _INDEX if _pandas_index(item) else _GC
     return _INDEX if pandas is not None and issubclass(kind, pandas.Index) else _GC
@@ -1118,11 +1119,11 @@ def _reach_mode(kind: type, streams: tuple[type, ...], pandas: Any) -> int:
     if issubclass(kind, _OPAQUE):
         return _SKIP
     try:
-        lookup = next(klass for klass in kind.__mro__ if "__getattribute__" in vars(klass))
+        lookup = next(klass for klass in class_mro(kind) if "__getattribute__" in class_dict(klass))
         plain = lookup in _PLAIN_LOOKUP and _static_class(kind) is _OBJECTS_CLASS
         if plain and (
             kind in streams
-            or (kind.__name__ == "OutStream" and str(kind.__module__).startswith("ipykernel."))
+            or (class_name(kind) == "OutStream" and str(class_module(kind)).startswith("ipykernel."))
             or attribute_or(kind, "_cash_wrapped_stream") is not None
         ):
             plain = False
@@ -1136,8 +1137,8 @@ def _reach_mode(kind: type, streams: tuple[type, ...], pandas: Any) -> int:
 def _static_class(kind: type) -> Any:
     """What ``__class__`` resolves to on *kind*'s objects, read off the MRO
     without running a descriptor."""
-    for klass in kind.__mro__:
-        found = vars(klass).get("__class__")
+    for klass in class_mro(kind):
+        found = class_dict(klass).get("__class__")
         if found is not None:
             return found
     return None

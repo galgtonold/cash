@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any
 from cash._user_attrs import instance_of
 
 from ..._paths import normalize_path
+from ..._type_memo import class_name
 from ...remote_source import RemoteFileDataSource
 from ...tracking.file_dep_snapshot import file_content_hash, probe_state_parts, realpath_of_read_this_run
 from ...tracking.file_versions import content_version
@@ -249,7 +250,7 @@ class StatementFileDeps:
             logger.debug(
                 "[FILE_DEPS] Skipping file dep propagation for scalar '%s' (type: %s)",
                 var_name,
-                type(value).__name__,
+                class_name(type(value)),
             )
 
 

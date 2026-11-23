@@ -21,7 +21,17 @@ from typing import TYPE_CHECKING, Any
 from .. import _plain_data, identity_refs, value_watch
 from .._clock import perf_counter as _perf_counter
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
-from .._user_attrs import from_family, is_routine
+from .._type_memo import class_dict, class_dictoffset, class_module, class_mro, class_name, module_of_class, mro_of
+from .._user_attrs import (
+    dataclass_fields,
+    from_family,
+    instance_of,
+    is_routine,
+    named_attr,
+    plain_getattr,
+    plain_hasattr,
+    static_attr,
+)
 from ..analysis.bytecode import GLOBAL_WRITES, argvals
 from ..analysis.cacheability_decision import identity_coupled_reason
 from ..analysis.helper_bindings import resolve_binding
@@ -97,9 +107,11 @@ def is_mutable(value) -> bool:
     through the name at all, so handing back a copy of one is the same value --
     warning about those made `return sum(rows), as_of` a finding.
     """
+    if issubclass(type(value), type):
+        return True  # a class takes attributes; asked, its metaclass's hook would answer
     if isinstance(value, writable_types()):
         return True
-    return getattr(type(value), "__dictoffset__", 0) != 0 and hasattr(value, "__dict__")
+    return class_dictoffset(type(value)) != 0 and plain_hasattr(value, "__dict__")
 
 
 def compared_by_identity(value) -> bool:
@@ -166,7 +178,7 @@ def _comes_back_as_itself(value) -> bool:
     frame, whose reduce would copy what they hold."""
     kind = type(value)
     if (
-        kind.__name__ in _BUFFER_TYPES
+        class_name(kind) in _BUFFER_TYPES
         or isinstance(value, (dict, list, tuple, set, frozenset, collections.deque, bytearray))
         or (
             getattr(kind, "__reduce__", None) is object.__reduce__
@@ -186,7 +198,7 @@ def _comes_back_as_itself(value) -> bool:
             module = sys.modules.get(pickle.whichmodule(value, rv))
             found: Any = module
             for part in rv.split("."):
-                found = getattr(found, part)
+                found = named_attr(found, part)
             return found is value
         if not isinstance(rv, tuple) or len(rv) < 2 or not callable(rv[0]):
             return False
@@ -268,9 +280,9 @@ def _unwritable(value) -> bool:
     if isinstance(value, enum.Enum):
         return True
     kind = type(value)
-    if kind.__name__ in _PANDAS_SCALARS and from_family(kind, "pandas"):
+    if class_name(kind) in _PANDAS_SCALARS and from_family(kind, "pandas"):
         return True  # a ``__dict__`` only for attributes set by hand
-    if any(k.__name__ == "ExtensionDtype" and from_family(k, "pandas") for k in kind.__mro__):
+    if any(k.__name__ == "ExtensionDtype" and from_family(k, "pandas") for k in class_mro(kind)):
         return True  # a dtype (``Int64Dtype()``, ``CategoricalDtype([...])``): immutable
     params = getattr(kind, "__dataclass_params__", None)
     if params is not None and getattr(params, "frozen", False):
@@ -288,8 +300,9 @@ def _items_of(value):
         return (((False, k), v) for k, v in items)
     if isinstance(value, (list, tuple, set, frozenset, collections.deque)):
         return (((False, i), v) for i, v in enumerate(itertools.islice(value, SHARED_ITEMS)))
-    if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        fields = dataclasses.fields(value)[:SHARED_ITEMS]
+    fields = None if issubclass(type(value), type) else dataclass_fields(type(value))
+    if fields is not None:
+        fields = fields[:SHARED_ITEMS]
         return (((True, f.name), getattr(value, f.name, None)) for f in fields)
     return None
 
@@ -335,20 +348,20 @@ def _outside_objects(func):
         named.append(("the default argument", name, "the function", value))
     for name, value in (getattr(func, "__kwdefaults__", None) or {}).items():
         named.append(("the default argument", name, "the function", value))
-    for name, value in list((getattr(func, "__dict__", None) or {}).items()):
+    for name, value in list((plain_getattr(func, "__dict__", None) or {}).items()):
         if not name.startswith("__"):
             named.append(("the function attribute", f"{func.__name__}.{name}", "the function", value))
     reached: list[tuple[str, Any, str, Any]] = []
     for what, name, keeper, value in named:
         if isinstance(value, (type, types.ModuleType)):
-            module = value if isinstance(value, types.ModuleType) else sys.modules.get(value.__module__)
-            if not (is_user_code_module(module) or getattr(module, "__name__", None) in MAIN_MODULE_NAMES):
+            module = sys.modules.get(module_of_class(value)) if isinstance(value, type) else value
+            if not (is_user_code_module(module) or plain_getattr(module, "__name__", None) in MAIN_MODULE_NAMES):
                 continue
-            if isinstance(value, enum.EnumMeta):
+            if issubclass(type(value), enum.EnumMeta):
                 continue  # its members come back as themselves (pickled by name)
             kind = "the class attribute" if isinstance(value, type) else "the module global"
             owner = "the class" if isinstance(value, type) else "its module"
-            for attr, held in list(vars(value).items()):
+            for attr, held in list((class_dict(value) if isinstance(value, type) else vars(value)).items()):
                 if not attr.startswith("__"):
                     reached.append((kind, f"{name}.{attr}", owner, held))
             continue
@@ -386,9 +399,9 @@ def held_sentinels(func) -> dict[int, list]:
 def _sentinel_like(value) -> bool:
     if type(value) is object:
         return True
-    if isinstance(value, enum.Enum) or not compared_by_identity(value):
+    if instance_of(value, enum.Enum) or not compared_by_identity(value):
         return False
-    return is_user_code_module(sys.modules.get(type(value).__module__))
+    return is_user_code_module(sys.modules.get(class_module(type(value))))
 
 
 def shares_memory(result, value) -> bool:
@@ -416,9 +429,9 @@ def _buffers(value) -> list:
     column), an extension array's own ndarray included (``Int64``'s values
     and mask, a datetime's)."""
     kind = type(value)
-    if kind.__name__ == "ndarray" and from_family(kind, "numpy"):
+    if class_name(kind) == "ndarray" and from_family(kind, "numpy"):
         return [value]
-    if kind.__name__ not in ("Series", "DataFrame") or not from_family(kind, "pandas"):
+    if class_name(kind) not in ("Series", "DataFrame") or not from_family(kind, "pandas"):
         return []
     if is_cow_pandas(value):
         return []
@@ -426,7 +439,7 @@ def _buffers(value) -> list:
         found = []
         for block in value._mgr.blocks:
             data = block.values
-            if type(data).__name__ == "ndarray":
+            if class_name(type(data)) == "ndarray":
                 found.append(data)
                 continue
             for part in ("_ndarray", "_data", "_mask"):
@@ -441,12 +454,12 @@ def _extension_values(value) -> list:
     frame without copy-on-write hold: a column taken from a frame holds the
     very object its frame's block does."""
     kind = type(value)
-    if kind.__name__ not in ("Series", "DataFrame") or not from_family(kind, "pandas"):
+    if class_name(kind) not in ("Series", "DataFrame") or not from_family(kind, "pandas"):
         return []
     if is_cow_pandas(value):
         return []
     try:
-        return [block.values for block in value._mgr.blocks if type(block.values).__name__ != "ndarray"]
+        return [block.values for block in value._mgr.blocks if class_name(type(block.values)) != "ndarray"]
     except Exception:  # noqa: BLE001 - a frame that cannot be read: nothing said
         return []
 
@@ -458,7 +471,7 @@ def _block_arrays(value) -> list:
     ``.array`` of a numpy column one over the block's own writable ndarray.
     A write through either reaches the frame."""
     kind = type(value)
-    if kind.__name__ not in ("Series", "DataFrame") or not from_family(kind, "pandas"):
+    if class_name(kind) not in ("Series", "DataFrame") or not from_family(kind, "pandas"):
         return []
     try:
         return [block.values for block in value._mgr.blocks]
@@ -490,7 +503,7 @@ def _exposes(frame, exposed: set[int], exposed_parts: list) -> bool:
         for values in blocks
         for array in (
             [values]
-            if type(values).__name__ == "ndarray"
+            if class_name(type(values)) == "ndarray"
             else [a for part in _EXTENSION_PARTS for a in _array_slot(values, part)]
         )
     ]
@@ -503,7 +516,7 @@ def _exposes(frame, exposed: set[int], exposed_parts: list) -> bool:
 
 def _is_extension_array(value) -> bool:
     """A pandas ExtensionArray itself (``DF['c'].array``), not a column."""
-    return any(k.__name__ == "ExtensionArray" and from_family(k, "pandas") for k in type(value).__mro__)
+    return any(k.__name__ == "ExtensionArray" and from_family(k, "pandas") for k in mro_of(type(value)))
 
 
 def _held_arrays(result, depth: int | None = None) -> list:
@@ -515,7 +528,7 @@ def _held_arrays(result, depth: int | None = None) -> list:
     pending = [(result, SHARED_RESULT_DEPTH if depth is None else depth)]
     while pending:
         value, left = pending.pop()
-        name = type(value).__name__
+        name = class_name(type(value))
         if name in _BUFFER_TYPES or _is_extension_array(value):
             found.append(value)
             continue
@@ -526,7 +539,7 @@ def _held_arrays(result, depth: int | None = None) -> list:
         elif isinstance(value, (list, tuple, set, frozenset, collections.deque)):
             members = value
         else:
-            state = getattr(value, "__dict__", None)
+            state = plain_getattr(value, "__dict__", None)
             if not isinstance(state, dict):
                 continue
             members = state.values()
@@ -546,10 +559,10 @@ def _quiet(value, cheap: bool = False) -> bool:
 def _own_attributes(value):
     """``(name, attribute)`` of the first `SHARED_ITEMS` attributes of an
     object of the user's class that something could be written through."""
-    module = sys.modules.get(type(value).__module__)
-    if not (is_user_code_module(module) or getattr(module, "__name__", None) in MAIN_MODULE_NAMES):
+    module = sys.modules.get(class_module(type(value)))
+    if not (is_user_code_module(module) or plain_getattr(module, "__name__", None) in MAIN_MODULE_NAMES):
         return []
-    state = getattr(value, "__dict__", None)
+    state = plain_getattr(value, "__dict__", None)
     if not isinstance(state, dict):
         return []
     return [
@@ -568,7 +581,7 @@ def _root(array):
     object (a ``bytearray``, an ``mmap``) it was built over. Two arrays that
     share memory share it, so comparing roots first spares a bounds check
     per array a function names."""
-    while type(array).__name__ == "ndarray" and array.base is not None:
+    while class_name(type(array)) == "ndarray" and array.base is not None:
         array = array.base
     return array
 
@@ -577,12 +590,12 @@ def _array_slot(data: Any, part: str) -> list:
     """The ndarray an extension array keeps in *part*, as a plain attribute
     or a slot of its own; never through a property (``_data`` of
     ``ArrowStringArray`` is a deprecated one that warns)."""
-    held = inspect.getattr_static(data, part, None)
-    if type(held).__name__ == "ndarray":
+    held = static_attr(data, part, None)
+    if class_name(type(held)) == "ndarray":
         return [held]
     if isinstance(held, (types.GetSetDescriptorType, types.MemberDescriptorType)):
         held = getattr(data, part, None)
-        return [held] if type(held).__name__ == "ndarray" else []
+        return [held] if class_name(type(held)) == "ndarray" else []
     return []
 
 
@@ -590,7 +603,7 @@ def _read_only(arrays: list) -> bool:
     """Every one of *arrays*, and every ndarray it views, is read-only: no
     write can reach the memory through any of them or what they came from."""
     for array in arrays:
-        while type(array).__name__ == "ndarray":
+        while class_name(type(array)) == "ndarray":
             if array.flags.writeable:
                 return False
             array = array.base
@@ -676,10 +689,10 @@ def _found_in(value, targets: dict[int, Any], depth: int) -> int | None:
         members = value.values()
     elif isinstance(value, (list, tuple, set, frozenset, collections.deque)):
         members = value
-    elif type(value).__name__ == "ndarray" and getattr(getattr(value, "dtype", None), "kind", None) == "O":
+    elif class_name(type(value)) == "ndarray" and getattr(getattr(value, "dtype", None), "kind", None) == "O":
         members = value.flat
     else:
-        state = getattr(value, "__dict__", None)
+        state = plain_getattr(value, "__dict__", None)
         if not isinstance(state, dict):
             return None
         members = state.values()
@@ -737,7 +750,7 @@ MUTATION_CHECK_BUDGET_S = 0.05
 
 def helper_mutates_global(fn: Any, name: str) -> bool:
     """Does *fn*'s own body rebind *name* or change it in place?"""
-    code = getattr(fn, "__code__", None)
+    code = plain_getattr(fn, "__code__", None)
     if code is None:
         return False
 
@@ -967,7 +980,7 @@ class PurityChecks:
                 return "is the argument", name, caller
             if _found_in(result, {id(value): value}, SHARED_RESULT_DEPTH) is not None:
                 return "holds the argument", name, caller
-            if type(value).__name__ in _BUFFER_TYPES:
+            if class_name(type(value)) in _BUFFER_TYPES:
                 if held_arrays is None:
                     held_arrays = _held_arrays(result)
                 if any(shares_memory(array, value) for array in held_arrays):
@@ -989,7 +1002,7 @@ class PurityChecks:
                 if not _quiet(held):
                     return ("is " if held is result else "holds ") + "an attribute of the argument", label, caller
                 del targets[hit]
-        globals_ = getattr(func, "__globals__", None)
+        globals_ = plain_getattr(func, "__globals__", None)
         if isinstance(globals_, dict):
             # A sentinel the body returns is handed back as itself on a hit.
             if sentinel_ref(func, result) is not None:
@@ -1020,7 +1033,7 @@ class PurityChecks:
             elif entry[1][0] in named_ids:
                 held_by.setdefault(named_ids[entry[1][0]], []).append(id(value))
             outside.setdefault(id(value), entry)
-            if type(value).__name__ in _BUFFER_TYPES:
+            if class_name(type(value)) in _BUFFER_TYPES:
                 arrays.append(entry)
 
         targets = {key: entry[3] for key, entry in outside.items()}
@@ -1074,9 +1087,9 @@ class PurityChecks:
         dict, and each one an earlier call rebound an attribute of, taken
         just before the body runs. The members are held, so an id cannot be
         reused while the call runs (`identity_moved`)."""
-        own_globals = getattr(func, "__globals__", None)
+        own_globals = plain_getattr(func, "__globals__", None)
         sources: dict[str, tuple[Any, str | None]] = {
-            name: (g, None) for name, g in self._identity_written.get(getattr(func, "__code__", None), {}).items()
+            name: (g, None) for name, g in self._identity_written.get(plain_getattr(func, "__code__", None), {}).items()
         }
         for name, entry in (watched or {}).items():
             try:
@@ -1112,7 +1125,7 @@ class PurityChecks:
         Plain Python leaves ``HELD.last = [n]`` holding a new list; a hit
         leaves the old one, so a call that does this is not stored."""
         found: list[str] = []
-        code = getattr(func, "__code__", None)
+        code = plain_getattr(func, "__code__", None)
         for name, snapshot in (identities or {}).items():
             g = snapshot[2]
             if name not in g or not identity_moved(snapshot, g[name]):
@@ -1170,11 +1183,11 @@ class PurityChecks:
         """
         if not watched:
             return False
-        code = getattr(func, "__code__", None)
+        code = plain_getattr(func, "__code__", None)
         if code is None:
             return False
         moved = False
-        own_globals = getattr(func, "__globals__", None)
+        own_globals = plain_getattr(func, "__globals__", None)
         cells = dict(zip(getattr(code, "co_freevars", ()) or (), getattr(func, "__closure__", ()) or ()))
         for name, (before, scope, owner, reader) in watched.items():
             value = None
@@ -1197,7 +1210,7 @@ class PurityChecks:
                     if key not in mapping:
                         continue
                     value = mapping[key]
-                    after = self._values.carried_global_hash(value, getattr(func, "__module__", None))
+                    after = self._values.carried_global_hash(value, plain_getattr(func, "__module__", None))
                 elif scope == "binding":
                     after = self._values.carried_state_digest(resolve_binding(*owner))
                 elif scope == "library":
@@ -1465,7 +1478,9 @@ class PurityChecks:
         snapshot: dict[str, str] = {}
         immutable = IMMUTABLE_VALUE_TYPES
         candidates = [
-            (name, value) for name, value in named if not (is_immutable_capture(value) or isinstance(value, immutable))
+            (name, value)
+            for name, value in named
+            if not (is_immutable_capture(value) or (not issubclass(type(value), type) and isinstance(value, immutable)))
         ]
         if len(candidates) == 1:
             # The only argument that can change is the one that did: named by
@@ -1498,7 +1513,7 @@ class PurityChecks:
         named = [(f"*args[{i}]", v) for i, v in enumerate(canon_args)] + list(canon_kwargs.items())
         held: list[tuple[str, Any]] = []
         for name, value in named:
-            attrs = getattr(value, "__dict__", None)
+            attrs = plain_getattr(value, "__dict__", None)
             if not isinstance(attrs, dict) or not attrs:
                 continue
             if cash_key_method_of_type(type(value)) is None and not self._args.keys_by_registration_only(value):
@@ -1764,10 +1779,10 @@ class PurityChecks:
                 return self._args.hash_payload((value,), {})
         except Exception:  # noqa: BLE001 - fall back to the attributes' identities
             pass
-        attrs = getattr(value, "__dict__", None)
+        attrs = plain_getattr(value, "__dict__", None)
         held = dict(attrs) if isinstance(attrs, dict) else {}
-        for klass in type(value).__mro__:
-            for slot in getattr(klass, "__slots__", ()) or ():
+        for klass in mro_of(type(value)):
+            for slot in plain_getattr(klass, "__slots__", ()) or ():
                 if isinstance(slot, str) and slot not in ("__dict__", "__weakref__"):
                     held.setdefault(slot, getattr(value, slot, None))
         if not held and not isinstance(attrs, dict):
@@ -2084,7 +2099,7 @@ class PurityChecks:
             reader = resolve_binding(*report.helper_resolution_paths[where])
         elif where in report.helper_objects:
             reader = report.helper_objects[where]()
-        module_ns = getattr(reader, "__globals__", None)
+        module_ns = plain_getattr(reader, "__globals__", None)
         if not isinstance(module_ns, dict) or name not in module_ns:
             return False
         if reader is not func and helper_mutates_global(reader, name):
@@ -2191,7 +2206,7 @@ class PurityChecks:
         arg_key = getattr(cf, "arg_key", None)
         if arg_key is None or arg_key.key_fn is not None:
             return issues
-        own = {func_name, getattr(cf.func, "__qualname__", None)}
+        own = {func_name, plain_getattr(cf.func, "__qualname__", None)}
         rewritten = []
         for issue in issues:
             text = getattr(issue, "description", "")

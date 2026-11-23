@@ -39,6 +39,7 @@ from cash.exceptions import CashCacheStoreFailedWarning
 from cash.tracking.tracker_context import untracked
 
 from .. import _weak
+from .._type_memo import class_name
 from ..config.resolve import get_config
 from ..config.schema import CashConfig
 from . import write_cost
@@ -98,7 +99,7 @@ if hasattr(os, "register_at_fork"):  # not on Windows, which cannot fork
 
 def _record_discarded(key: str, exc: BaseException) -> None:
     with _DISCARDED_LOCK:
-        _DISCARDED_WRITES.append((key, f"{type(exc).__name__}: {exc}"))
+        _DISCARDED_WRITES.append((key, f"{class_name(type(exc))}: {exc}"))
 
 
 def discarded_writes() -> list[tuple[str, str]]:
@@ -682,7 +683,7 @@ class PendingWrites:
                 CashCacheStoreFailedWarning,
                 "STORE-FAILED",
                 f"cash could not store the result for {key!r} "
-                f"({type(exc).__name__}: {exc}); compute succeeded, but the "
+                f"({class_name(type(exc))}: {exc}); compute succeeded, but the "
                 f"entry is absent and the work will recompute.",
                 "read the exception: a full disk, a cache_dir you cannot write "
                 "to, or a value that cannot be pickled -- return the data, not "
@@ -791,7 +792,7 @@ class PendingWrites:
             failed[0][1],
         )
         for key, exc in failed:
-            logger.debug("  failed write key=%r: %s: %s", key, type(exc).__name__, exc)
+            logger.debug("  failed write key=%r: %s: %s", key, class_name(type(exc)), exc)
 
     def shutdown(self, wait: bool = True, timeout: float | None = None) -> None:
         """Stop accepting writes; when *wait*, give the in-flight ones until

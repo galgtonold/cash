@@ -15,6 +15,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from .._memo import CODE_OBJECTS, LruMemo
+from .._user_attrs import plain_getattr, static_attr
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_reading import getsource
 from .closure_fold import bound_owner
@@ -48,7 +49,7 @@ class MethodClassDeps:
         Returns ``(first_param_name, attr_names_accessed_on_it, uses_super)``.
         ``first_param_name`` is ``None`` when there is no source / no parameters.
         """
-        code = getattr(func, "__code__", None)
+        code = plain_getattr(func, "__code__", None)
         if code is not None:
             cached = self._method_self_dep_cache.get(code)
             if cached is not None:
@@ -146,11 +147,11 @@ class MethodClassDeps:
         # class itself for a classmethod, else an instance.
         owner_class = owner if isinstance(owner, type) else type(owner)
         try:
-            raw = inspect.getattr_static(owner_class, getattr(func, "__name__", ""))
+            raw = static_attr(owner_class, plain_getattr(func, "__name__", ""))
         except (AttributeError, Exception):  # noqa: BLE001 - never break a call
             return state_hash
         target = raw.__func__ if isinstance(raw, (classmethod, staticmethod)) else raw
-        target = getattr(target, "__wrapped__", target)
+        target = plain_getattr(target, "__wrapped__", target)
         if target is not func:
             # Not this class's method (unbound call, or a look-alike param).
             return state_hash
@@ -171,7 +172,7 @@ class MethodClassDeps:
                 continue
             seen.add(attr)
             try:
-                member = inspect.getattr_static(owner_class, attr)
+                member = static_attr(owner_class, attr)
             except (AttributeError, Exception):  # noqa: BLE001 - never break a call
                 continue  # instance-only attr (already in self's hash) or unresolved
             if isinstance(member, property):

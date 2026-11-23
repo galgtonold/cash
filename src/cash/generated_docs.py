@@ -35,6 +35,8 @@ import weakref
 from typing import Any
 
 from . import _weak
+from ._type_memo import class_dict, class_name, mro_of
+from ._user_attrs import plain_getattr
 
 #: An address in a repr (``<function f at 0x7f...>``).
 _ADDRESS = re.compile(r"\bat 0x([0-9a-fA-F]+)")
@@ -72,7 +74,7 @@ _CLASS_READS: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 def _class_reads_doc(klass: type) -> bool:
     """Does code *klass* itself holds read a docstring? Remembered while
     its members are the same objects: a method replaced is read again."""
-    members = tuple(vars(klass).values())
+    members = tuple(class_dict(klass).values())
     ids = list(map(id, members))
     try:
         entry = _CLASS_READS.get(klass)
@@ -150,7 +152,7 @@ def _sorted_set(text: str, sets: set[frozenset]) -> str:
     if type(shown) is not set or len(shown) < 2 or frozenset(shown) not in sets:
         return text
     try:
-        items = sorted(shown, key=lambda x: (type(x).__name__, x))
+        items = sorted(shown, key=lambda x: (class_name(type(x)), x))
     except TypeError:
         return text
     return "{" + ", ".join(map(repr, items)) + "}"
@@ -168,12 +170,12 @@ def _held(owner: Any) -> tuple[dict[int, str], set[frozenset]]:
     ids: dict[int, str] = {}
     sets: set[frozenset] = set()
     roots: list[Any] = []
-    state = getattr(owner, "__dict__", None)
+    state = plain_getattr(owner, "__dict__", None)
     if isinstance(state, dict):
         roots.append(state)
-    for klass in type(owner).__mro__:
+    for klass in mro_of(type(owner)):
         if klass is not object:
-            roots.append(dict(vars(klass)))
+            roots.append(dict(class_dict(klass)))
     stack = [(r, 0) for r in roots]
     budget = _HELD_BUDGET
     seen: set[int] = set()
@@ -202,7 +204,7 @@ def _held(owner: Any) -> tuple[dict[int, str], set[frozenset]]:
         elif isinstance(value, property):
             stack.extend((f, depth + 1) for f in (value.fget, value.fset, value.fdel) if f is not None)
         elif not callable(value) or t is types.MethodType:
-            inner = getattr(value, "__dict__", None)
+            inner = plain_getattr(value, "__dict__", None)
             if type(inner) is dict:
                 stack.append((inner, depth + 1))
         if t is types.FunctionType:
