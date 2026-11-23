@@ -14,6 +14,7 @@ which objects are looked at, in which order, and so which reason it gives.
 
 from __future__ import annotations
 
+import gc
 import sys
 import time
 import types
@@ -146,12 +147,12 @@ def test_each_value_gets_the_verdict_it_got(small_bounds, case):
 def _loop_shape(count: int):
     logs = [{"uid": k, "actions": [{"t": j, "v": (k * 7 + j) % 11 * 0.5} for j in range(3)]} for k in range(count)]
     frames = []
-    started = time.process_time()
+    started = time.thread_time()
     for i, s in enumerate(logs):
         new = pd.DataFrame(s["actions"])
         new["sid"] = i
         frames.append(new)
-    built = time.process_time() - started
+    built = time.thread_time() - started
     return frames, {"logs": logs, "frames": frames, "new": new, "s": s}, built
 
 
@@ -205,19 +206,32 @@ def test_the_loops_refusal_costs_a_fraction_of_making_its_frames():
     1.1 s), so the same walk was half of it (0.18 s) in CI. Which work it
     skips is pinned by the test above; this bounds what is left.
 
-    Both sides are this process's CPU time, each the least of three rounds
+    Both sides are this thread's CPU time, each the least of three rounds
     that make the frames and then ask: a runner busy with other workers
     took wall time from one side and not the other (0.33 s against 0.44 s
     on macOS 3.10, where the walk reads what it reads on 3.13), and a
-    single making of the frames was the one sample of that side."""
+    single making of the frames was the one sample of that side.
+
+    What the test run held before each round is frozen out of the garbage
+    collector (`gc.freeze`): making the frames leaves a full collection
+    due, which often fell inside the walk, and it read every object of the
+    worker, not of this test. In a worker holding 2 million objects that
+    collection was 0.56 s of a 0.78 s walk (0.24 s without it), and in CI
+    it took the walk to 0.51 of the making. A collection of what the round
+    itself made still counts on either side."""
     built = best = float("inf")
     for _ in range(3):
-        frames, namespace, making = _loop_shape(3000)
-        built = min(built, making)
-        started = time.process_time()
-        assert in_place.refusal(frames, namespace) is None
-        best = min(best, time.process_time() - started)
-        del frames, namespace
+        gc.collect()
+        gc.freeze()
+        try:
+            frames, namespace, making = _loop_shape(3000)
+            built = min(built, making)
+            started = time.thread_time()
+            assert in_place.refusal(frames, namespace) is None
+            best = min(best, time.thread_time() - started)
+            del frames, namespace
+        finally:
+            gc.unfreeze()
     slow_walk = sys.platform in ("win32", "darwin") and sys.version_info < (3, 11)
     share = 0.75 if slow_walk or int(pd.__version__.split(".")[0]) < 3 else 0.5
     assert best < built * share, (best, built)
