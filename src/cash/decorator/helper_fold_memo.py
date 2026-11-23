@@ -16,14 +16,27 @@ watcher sees the environment.
 
 An entry is the fold's whole effect: the state hash it turned *state_in*
 into, and what it left in the key build -- the pairs it marked as folded
-(`LoggedSeen`), its capture watch, ledger, reads-folded and folded-code
-records, the run-time lookups by name it met (`CARRIER_LOOKUPS`), the
-digests it computed for the rest of the build (`KEY_BUILD_DIGESTS`) --
-replayed on reuse. It is looked up by the helper, the cached
-function's code and name, the decorator names folded with it, the state
-hash it started from and what the build had folded before it, so a reuse
-is the same step of the same build. ``CASH_HITPATH_VERIFY=1`` folds again
-behind every reuse and raises `HitMemoMismatch` when anything differs.
+(`LoggedSeen`), and everything `class_memo.captured` takes: its capture
+watch, ledger and folded-code records, the TTLs it reached, the run-time
+lookups by name it met (`CARRIER_LOOKUPS`), the digests it computed for the
+rest of the build (`KEY_BUILD_DIGESTS`), the classes and functions whose
+data it folded (`CLASSES_FOLDED`, `READS_FOLDED`) -- replayed on reuse. Each
+of those it found folded already decided what it folded itself, so an entry
+serves only a build that answers alike (`class_memo.replayable`). Left out,
+a class a helper's fold had folded was folded again by the next step after
+every reuse, and the same call keyed differently from the second time on.
+An entry is looked up by the helper, the cached function's code and name,
+the decorator names folded with it, the state hash it started from and what
+the build had folded before it, so a reuse is the same step of the same
+build. ``CASH_HITPATH_VERIFY=1`` folds again behind every reuse and raises
+`HitMemoMismatch` when anything differs.
+
+A step is watched and recorded only the second time it runs, and not while
+the cached function's state memo captures the whole segment around it
+(`STATE_CAPTURE`), which is then what serves the next call: a watch costs
+about as much as the fold, and in a fresh process the first calls of a
+library's functions move the epochs (each registered, its analysis loaded)
+and dropped most of what was recorded.
 Without the extension nothing is remembered.
 """
 
@@ -34,17 +47,20 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from .._memo import HELPER_FOLDS, LruMemo
-from ..code_swaps import FOLDED_CODE, FoldedCode
-from ..dependency_state import STATE_LEDGER
 from ..effects import ENVIRONMENT_READS
-from . import hit_memo
-from .call_state import CAPTURE_WATCH, CARRIER_LOOKUPS, held_by_name
-from .global_values import KEY_BUILD_DIGESTS
+from . import class_memo, hit_memo
+from .call_state import held_by_name
 
 _MASK = (1 << 64) - 1
 
 #: Counters for tests and profiling.
-STATS = {"served": 0, "recorded": 0, "refused": 0}
+STATS = {"served": 0, "recorded": 0, "refused": 0, "deferred": 0, "left_to_state_memo": 0}
+
+#: Set while a cached function's state memo captures the whole segment it
+#: will serve from the next call on (`state_memo.StateMemo.code_state`):
+#: a helper's fold is then not watched or recorded, as the segment around
+#: it is what gets reused.
+STATE_CAPTURE: contextvars.ContextVar[bool] = contextvars.ContextVar("_cash_state_capture", default=False)
 
 
 def _mix(item: Any) -> int:
@@ -93,52 +109,8 @@ class LoggedSeen(set):
         return self.count, self.total
 
 
-class _ReadThrough(dict):
-    """A key build's reads-folded record as one helper fold sees it: reads
-    fall through to the build's, writes stay here, to be kept."""
-
-    def __init__(self, below: dict) -> None:
-        super().__init__()
-        self.below = below
-
-    def get(self, key: Any, default: Any = None) -> Any:
-        if dict.__contains__(self, key):
-            return dict.__getitem__(self, key)
-        return self.below.get(key, default)
-
-    def __contains__(self, key: object) -> bool:
-        return dict.__contains__(self, key) or key in self.below
-
-    def __getitem__(self, key: Any) -> Any:
-        if dict.__contains__(self, key):
-            return dict.__getitem__(self, key)
-        return self.below[key]
-
-
 class _Entry:
-    __slots__ = (
-        "added",
-        "cells",
-        "digests",
-        "cash",
-        "folded",
-        "helper",
-        "ledger",
-        "lookups",
-        "owners",
-        "reports",
-        "owner",
-        "state_out",
-        "watch",
-        "world",
-    )
-
-
-def _effects() -> tuple:
-    """The key build's records a helper fold writes to."""
-    from .globals_fold import READS_FOLDED
-
-    return CAPTURE_WATCH.get(), STATE_LEDGER.get(), READS_FOLDED.get(), FOLDED_CODE.get(), CARRIER_LOOKUPS.get()
+    __slots__ = ("added", "cap", "cells", "cash", "helper", "owner", "state_out", "world")
 
 
 class HelperFoldMemo:
@@ -148,6 +120,8 @@ class HelperFoldMemo:
         self._entries: LruMemo[tuple, _Entry] = LruMemo(HELPER_FOLDS)
         #: (id(helper), world epoch) of helpers refused at that epoch.
         self._refused: LruMemo[tuple, Any] = LruMemo(HELPER_FOLDS)
+        #: Steps folded once and not watched yet: full key -> the helper.
+        self._once: LruMemo[tuple, Any] = LruMemo(HELPER_FOLDS)
 
     def fold(
         self,
@@ -174,6 +148,7 @@ class HelperFoldMemo:
             and entry.world == world
             and entry.cash == cash
             and hit_memo.cells_hold(entry.cells)
+            and class_memo.replayable(entry.cap)
         ):
             if hit_memo.VERIFY:
                 self._verify(entry, seen, compute)
@@ -181,8 +156,17 @@ class HelperFoldMemo:
                 self._replay(entry, seen)
             STATS["served"] += 1
             return entry.state_out
+        if STATE_CAPTURE.get():
+            STATS["left_to_state_memo"] += 1
+            return compute()
         refused = self._refused.get((id(helper), world))
         if refused is helper:
+            return compute()
+        if self._once.get(full_key) is not helper:
+            # The first time this step runs it is folded, not watched (see
+            # the module doc); the second time, it is.
+            self._once[full_key] = helper
+            STATS["deferred"] += 1
             return compute()
         try:
             cells = hit_memo.watch_helper(helper, root_module)
@@ -194,7 +178,12 @@ class HelperFoldMemo:
         world_before = hit_memo.world_epochs()
         env_before = ENVIRONMENT_READS[0]
         entry, state_out = self._record(helper, seen, compute)
-        if ENVIRONMENT_READS[0] != env_before:
+        if entry is None:
+            # It folded what no watcher sees (a random stream, a file), or
+            # keyed a cached function's whole state: folded every time.
+            self._refused[(id(helper), world)] = helper
+            STATS["refused"] += 1
+        elif ENVIRONMENT_READS[0] != env_before:
             # It keyed an environment value (os.environ, the cwd), which no
             # watcher sees: folded every time while the world stands still.
             self._refused[(id(helper), world)] = helper
@@ -207,86 +196,45 @@ class HelperFoldMemo:
             STATS["recorded"] += 1
         return state_out
 
-    def _record(self, helper: Callable, seen: LoggedSeen, compute: Callable[[], str]) -> tuple[_Entry, str]:
-        """Run the fold with the build's records swapped for empty ones of
-        its own, then hand what it wrote on to the build's."""
-        from .globals_fold import READS_FOLDED
-
-        watch, ledger, folded, code, lookups = _effects()
+    def _record(self, helper: Callable, seen: LoggedSeen, compute: Callable[[], str]) -> tuple[_Entry | None, str]:
+        """Run the fold on records of its own and hand what it wrote on to
+        the build's (`class_memo.captured`): the ledger, capture watch,
+        folded code, TTLs, digests and lookups it left, and what it found
+        the build had folded already -- the classes (`CLASSES_FOLDED`) and
+        the functions' globals (`READS_FOLDED`) -- which decide what it
+        folds itself. The entry is None when the fold cannot be replayed."""
         start = len(seen.log)
-        tokens: list[tuple[contextvars.ContextVar, contextvars.Token]] = []
-        own_watch = {} if watch is not None else None
-        own_ledger = {} if ledger is not None else None
-        own_folded = _ReadThrough(folded) if folded is not None else None
-        own_code = FoldedCode() if code is not None else None
-        # Kept whether or not this build collects them (`explain()` does
-        # not): the entry may be replayed into one that does.
-        own_lookups: list = []
-        # The digests the fold computes for the rest of the build: its own
-        # (it computes what the build held before it again), handed on, so
-        # a reuse leaves what folding again would (`state_memo` compares).
-        build = KEY_BUILD_DIGESTS.get()
-        own_digests = {} if build is not None else None
-        for var, value in (
-            (CAPTURE_WATCH, own_watch),
-            (STATE_LEDGER, own_ledger),
-            (READS_FOLDED, own_folded),
-            (FOLDED_CODE, own_code),
-            (CARRIER_LOOKUPS, own_lookups),
-            (KEY_BUILD_DIGESTS, own_digests),
-        ):
-            tokens.append((var, var.set(value)))
-        try:
-            state_out = compute()
-        finally:
-            for var, token in reversed(tokens):
-                var.reset(token)
+        cap, state_out = class_memo.captured(compute)
+        if cap is None or cap.callee_states:
+            return None, state_out
         entry = _Entry()
         entry.helper = helper
         entry.state_out = state_out
         entry.added = tuple(seen.log[start:])
-        entry.watch = own_watch or {}
-        entry.ledger = own_ledger or {}
-        entry.folded = dict(own_folded) if own_folded else {}
-        entry.owners = dict(own_code.owners) if own_code is not None else {}
-        entry.reports = dict(own_code.reports) if own_code is not None else {}
-        entry.lookups = tuple(own_lookups)
-        entry.digests = own_digests or {}
-        self._replay(entry, None)
+        entry.cap = cap
         return entry, state_out
 
-    def _replay(self, entry: _Entry, seen: LoggedSeen | None) -> None:
+    def _replay(self, entry: _Entry, seen: LoggedSeen) -> None:
         """Leave in the key build what the remembered fold left there."""
-        watch, ledger, folded, code, lookups = _effects()
-        if seen is not None:
-            seen.update(entry.added)
-        if watch is not None and entry.watch:
-            watch.update(entry.watch)
-        if ledger is not None and entry.ledger:
-            ledger.update(entry.ledger)
-        if folded is not None and entry.folded:
-            folded.update(entry.folded)
-        if code is not None:
-            code.owners.update(entry.owners)
-            code.reports.update(entry.reports)
-        if lookups is not None and entry.lookups:
-            lookups.extend(entry.lookups)
-        build = KEY_BUILD_DIGESTS.get()
-        if build is not None and entry.digests:
-            build.update(entry.digests)
+        seen.update(entry.added)
+        class_memo.replay(entry.cap)
 
     def _verify(self, entry: _Entry, seen: LoggedSeen, compute: Callable[[], str]) -> None:
         """Fold again and compare with the entry, as the fast path's verify
         mode compares keys."""
         fresh, state_out = self._record(entry.helper, seen, compute)
+        kept = entry.cap
         same = (
-            state_out == entry.state_out
+            fresh is not None
+            and state_out == entry.state_out
             and fresh.added == entry.added
-            and fresh.watch.keys() == entry.watch.keys()
-            and fresh.ledger == entry.ledger
-            and fresh.folded.keys() == entry.folded.keys()
-            and fresh.owners.keys() == entry.owners.keys()
-            and fresh.lookups == entry.lookups
+            and fresh.cap.watch.keys() == kept.watch.keys()
+            and fresh.cap.ledger == kept.ledger
+            and fresh.cap.reads.keys() == kept.reads.keys()
+            and fresh.cap.classes == kept.classes
+            and fresh.cap.owners.keys() == kept.owners.keys()
+            and fresh.cap.ttls == kept.ttls
+            and fresh.cap.lookups == kept.lookups
         )
         if not same:
             raise hit_memo.HitMemoMismatch(
