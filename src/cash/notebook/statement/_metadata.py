@@ -133,6 +133,11 @@ class StatementCacheMetadata:
     #: The outputs a loop changed in place: a restore gives their live
     #: objects the stored state instead of binding the copies (`in_place`).
     restored_into: list[str] | None = None
+    #: The outputs the statement bound again to the object they held
+    #: (``sales = add(sales)``, ``add`` returning the frame it wrote into):
+    #: a restore gives the live object the stored state, as for what it
+    #: wrote into, or the statement runs (`in_place.identity_kept`).
+    kept_objects: list[str] | None = None
     #: The outputs a loop only assigns into that a restore binds to the
     #: stored copy (``arr[i] = v``): a hit misses when a weak reference or
     #: an ``id()`` the notebook holds points at the live one now

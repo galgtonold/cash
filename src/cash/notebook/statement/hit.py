@@ -126,6 +126,8 @@ class CacheHitServer:
             # was stored still finds it (`in_place.identity_kept`).
             variables = cached_data.get("variables") if isinstance(cached_data, dict) else None
             written = in_place.written_names(run.tree, set(run.analysis.all_mutated_vars) & run.outputs)
+            # Bound again to the object it held: plain Python keeps it too.
+            written |= set(metadata.kept_objects or ()) & run.outputs
             written -= {*(metadata.restored_into or ()), *(metadata.bound_copies or ()), *(metadata.holders or ())}
             if written and isinstance(variables, dict):
                 into, why = in_place.identity_kept(written, variables, self._restorer.shell.user_ns)

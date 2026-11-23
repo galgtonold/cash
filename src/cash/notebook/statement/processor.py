@@ -3038,6 +3038,9 @@ class StatementProcessor:
         run.handed_iterable = handed
         run.class_state_before = self._class_states_around(run)
         run.classes_before = _classes_it_redefines(run.tree, self.shell.user_ns)
+        if not is_one_structure(run.tree):
+            # A loop's own objects are `in_place`'s (``stored_in_place``).
+            run.bound_anew_before = in_place.objects_bound_anew(run.tree, self.shell.user_ns)
         runner = CodeRunner(code, source, tree, run.is_last, self.shell.user_ns)
         execution = runner.execution
         marks = self._calls.cash_time_marks()
@@ -3981,6 +3984,9 @@ class StatementProcessor:
         self._observe_process_state(run)
         self._mutation_routing.observe(run)
         self._mutation_routing.note_module_state(run)
+        if run.bound_anew_before:
+            run.kept_objects = in_place.kept_objects(run.bound_anew_before, self.shell.user_ns)
+            run.bound_anew_before = {}
         if run.metrics.get("stored_in_place"):
             # Before its outputs are captured: what it will not store is
             # left out of them, as before it ran.

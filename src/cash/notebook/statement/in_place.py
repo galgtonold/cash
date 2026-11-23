@@ -199,6 +199,12 @@ def written_names(tree: ast.AST | None, mutated: Iterable[str]) -> set[str]:
     names = set(mutated)
     if tree is None or not names:
         return names
+    return names - _bound_anew(tree)
+
+
+def _bound_anew(tree: ast.AST) -> set[str]:
+    """The names *tree* binds anew: not by augmented assignment
+    (``arr += 1``), which keeps the object."""
     rebound: set[str] = set()
     augmented: set[str] = set()
     for node in ast.walk(tree):
@@ -212,7 +218,38 @@ def written_names(tree: ast.AST | None, mutated: Iterable[str]) -> set[str]:
             rebound.add((node.asname or node.name).split(".")[0])
         elif isinstance(node, ast.Global | ast.Nonlocal):
             rebound.update(node.names)
-    return names - (rebound - augmented)
+    return rebound - augmented
+
+
+def objects_bound_anew(tree: ast.AST | None, namespace: Mapping[str, Any]) -> dict[str, Any]:
+    """``{name: object}`` for each name the statement *tree* binds anew
+    that holds an object before it runs: what `kept_objects` asks of after
+    the run. Not a number or a string, a new object in plain Python too,
+    nor a module, a class or a function, which a restore brings back as
+    itself."""
+    if tree is None:
+        return {}
+    return {
+        name: value
+        for name in _bound_anew(tree)
+        if name in namespace
+        # By its real type: ``isinstance`` asks the object for ``__class__``.
+        and not issubclass(type(value := namespace[name]), _COMES_BACK_ITSELF)
+        and type(value) not in IMMUTABLE_LEAF_TYPES
+    }
+
+
+#: What a restore binds to the very object it was: `objects_bound_anew`.
+_COMES_BACK_ITSELF = (types.ModuleType, type, types.FunctionType, types.BuiltinFunctionType)
+
+
+def kept_objects(before: Mapping[str, Any], namespace: Mapping[str, Any]) -> set[str]:
+    """Of the names in *before* (`objects_bound_anew`), those a statement
+    bound again to the very object they held: ``sales = add(sales)``, where
+    ``add`` writes into the frame and returns it. Plain Python keeps that
+    object, so a restore gives it the stored state (`identity_kept`), as
+    for ``sales['c'] = ...``, rather than binding the copy."""
+    return {name for name, obj in before.items() if name in namespace and namespace[name] is obj}
 
 
 def identity_kept(
