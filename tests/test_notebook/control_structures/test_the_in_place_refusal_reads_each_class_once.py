@@ -14,6 +14,7 @@ which objects are looked at, in which order, and so which reason it gives.
 
 from __future__ import annotations
 
+import gc
 import sys
 import time
 import types
@@ -146,21 +147,26 @@ def test_each_value_gets_the_verdict_it_got(small_bounds, case):
 def _loop_shape(count: int):
     logs = [{"uid": k, "actions": [{"t": j, "v": (k * 7 + j) % 11 * 0.5} for j in range(3)]} for k in range(count)]
     frames = []
-    started = time.perf_counter()
+    started = time.thread_time()
     for i, s in enumerate(logs):
         new = pd.DataFrame(s["actions"])
         new["sid"] = i
         frames.append(new)
-    built = time.perf_counter() - started
+    built = time.thread_time() - started
     return frames, {"logs": logs, "frames": frames, "new": new, "s": s}, built
 
 
 def test_the_loops_frames_are_read_a_class_at_a_time(monkeypatch):
-    """Of 3,000 frames, each class is read once, and no id is spelled."""
+    """Of 3,000 frames, each class is read once, each object is read once
+    by each walk, and no id is spelled. These are counts, so they hold on
+    any runner however busy, and on every Python: 3.10 reads what 3.13
+    reads."""
     frames, namespace, _ = _loop_shape(3000)
     modes = []
     spelled = []
+    held, referred = [], []
     real_mode, real_all = in_place._reach_mode, in_place._Texts.all
+    real_holds, real_referents = in_place._what_it_holds, in_place._typed_referents
 
     def mode(kind, *args):
         modes.append(kind)
@@ -170,11 +176,23 @@ def test_the_loops_frames_are_read_a_class_at_a_time(monkeypatch):
         spelled.append(len(self.parts))
         return real_all(self)
 
+    def holds(value, *args):
+        held.append(id(value))
+        return real_holds(value, *args)
+
+    def referents(item, *args):
+        referred.append(id(item))
+        return real_referents(item, *args)
+
     monkeypatch.setattr(in_place, "_reach_mode", mode)
     monkeypatch.setattr(in_place._Texts, "all", spell)
+    monkeypatch.setattr(in_place, "_what_it_holds", holds)
+    monkeypatch.setattr(in_place, "_typed_referents", referents)
     assert in_place.refusal(frames, namespace) is None
     assert len(modes) == len(set(modes)) < 30
     assert spelled == []
+    assert len(held) == len(set(held)) > len(frames)
+    assert len(referred) == len(set(referred)) > len(frames)
 
 
 def test_the_loops_refusal_costs_a_fraction_of_making_its_frames():
@@ -186,13 +204,34 @@ def test_the_loops_refusal_costs_a_fraction_of_making_its_frames():
     so there the bound is three quarters. So it is under pandas 2, which
     makes the frames three times faster than pandas 3 (0.36 s against
     1.1 s), so the same walk was half of it (0.18 s) in CI. Which work it
-    skips is pinned by the test above; this bounds what is left."""
-    frames, namespace, built = _loop_shape(3000)
-    best = float("inf")
+    skips is pinned by the test above; this bounds what is left.
+
+    Both sides are this thread's CPU time, each the least of three rounds
+    that make the frames and then ask: a runner busy with other workers
+    took wall time from one side and not the other (0.33 s against 0.44 s
+    on macOS 3.10, where the walk reads what it reads on 3.13), and a
+    single making of the frames was the one sample of that side.
+
+    What the test run held before each round is frozen out of the garbage
+    collector (`gc.freeze`): making the frames leaves a full collection
+    due, which often fell inside the walk, and it read every object of the
+    worker, not of this test. In a worker holding 2 million objects that
+    collection was 0.56 s of a 0.78 s walk (0.24 s without it), and in CI
+    it took the walk to 0.51 of the making. A collection of what the round
+    itself made still counts on either side."""
+    built = best = float("inf")
     for _ in range(3):
-        started = time.perf_counter()
-        assert in_place.refusal(frames, namespace) is None
-        best = min(best, time.perf_counter() - started)
+        gc.collect()
+        gc.freeze()
+        try:
+            frames, namespace, making = _loop_shape(3000)
+            built = min(built, making)
+            started = time.thread_time()
+            assert in_place.refusal(frames, namespace) is None
+            best = min(best, time.thread_time() - started)
+            del frames, namespace
+        finally:
+            gc.unfreeze()
     slow_walk = sys.platform in ("win32", "darwin") and sys.version_info < (3, 11)
     share = 0.75 if slow_walk or int(pd.__version__.split(".")[0]) < 3 else 0.5
     assert best < built * share, (best, built)
