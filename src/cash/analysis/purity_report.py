@@ -72,6 +72,8 @@ ISSUE_AMBIENT_READ = "ambient_read"
 # there is a knob made for exactly this: `ttl=` bounds how old a served answer
 # may be, and setting one silences the advisory.
 ISSUE_NETWORK_READ = "network_read"
+#: The kinds of finding about what a body reads, not what it changes.
+READ_ONLY_ISSUE_KINDS = frozenset({ISSUE_AMBIENT_READ, ISSUE_NETWORK_READ, ISSUE_MUTABLE_GLOBAL})
 
 
 @dataclass(frozen=True)
@@ -224,6 +226,21 @@ class PurityReport:
     #: test to ``type``. Their code is keyed; the data their methods read is
     #: not folded (`GlobalsFold`), since no code of theirs runs for a test.
     check_only_classes: frozenset[str] = frozenset()
+    #: Where (`PurityIssue.where`, a name as in ``helper_source_hashes``)
+    #: each finding that can change state was made -- a write in place, a
+    #: write method, a ``global``, a run-time lookup -- in the function or
+    #: a helper, its findings reported or not (below an ``@pure`` helper).
+    #: A call refused for changing its argument keeps a verdict keyed by
+    #: these helpers' code, not every helper's (`refusal_verdicts`).
+    state_changing_helpers: frozenset[str] = frozenset()
+    #: Whether one of those findings is a write in place: a
+    #: ``scope_mutation`` (an assignment to an attribute or item of an
+    #: object the body did not make, ``global``, ``setattr``) or an
+    #: ``impure_call`` with no effect kind (a mutating method, ``inplace=True``,
+    #: a ``@stateful`` callee). Without one, what changed the argument is not
+    #: among the findings, and the verdict keeps every helper's code in its
+    #: key.
+    writes_in_place: bool = False
 
     def covered_ids(self) -> set[int]:
         """``id()`` of each live function in `audited_whole`: a live object

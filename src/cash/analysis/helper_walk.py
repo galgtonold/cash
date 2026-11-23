@@ -86,7 +86,9 @@ from .purity_report import (
     ANSWERED_AT_RUN_TIME,
     ISSUE_AMBIENT_READ,
     ISSUE_IMPURE_CALL,
+    ISSUE_SCOPE_MUTATION,
     ISSUE_UNTRACKABLE_DEP,
+    READ_ONLY_ISSUE_KINDS,
     UNREAD_MODULE,
     PurityIssue,
     PurityReport,
@@ -248,6 +250,11 @@ class HelperWalk:
         self._bodies_walked: set[Any] = set()
         #: Functions audited with their findings reported, in walk order.
         self._audited: list[Any] = []
+        #: Where (`PurityIssue.where`) each finding that can change state
+        #: was made, reported or not (`PurityReport.state_changing_helpers`).
+        self._state_changing: dict[str, None] = {}
+        #: Whether a finding is a write in place (`PurityReport.writes_in_place`).
+        self._writes_in_place = False
         #: False once something in the walk depended on where it started
         #: (`PurityReport.audited_whole`).
         self.composable = True
@@ -461,7 +468,15 @@ class HelperWalk:
         self._caller_paths.setdefault(id(callee), path)
 
     def _put_issues(self, issues: list[PurityIssue]) -> None:
+        self._note_state_changes(issues)
         self._issues += issues
+
+    def _note_state_changes(self, issues: Any) -> None:
+        for issue in issues:
+            if issue.kind not in READ_ONLY_ISSUE_KINDS:
+                self._state_changing.setdefault(issue.where, None)
+            if issue.kind == ISSUE_SCOPE_MUTATION or (issue.kind == ISSUE_IMPURE_CALL and issue.effect_kind is None):
+                self._writes_in_place = True
 
     def _put_body_issues(
         self,
@@ -482,6 +497,7 @@ class HelperWalk:
             self.composable = False
         self._judged_helpers |= judged
         self._environment_reads |= environment_reads
+        self._note_state_changes((*own, *more))
         if reported:
             self._issues += own + more
 
@@ -519,6 +535,7 @@ class HelperWalk:
         if site in self._exec_built_sites:
             return
         self._exec_built_sites.add(site)
+        self._note_state_changes(issues)
         self._issues += issues
 
     def _walk_one(self, entry: _Entry, qualname: str) -> None:
@@ -1230,6 +1247,8 @@ class HelperWalk:
             environment_reads=frozenset(self._environment_reads),
             cached_callees=tuple(self._cached_callees),
             unwalkable=self._unwalkable,
+            state_changing_helpers=frozenset(self._state_changing),
+            writes_in_place=self._writes_in_place,
             audited_whole=self._audited_whole(),
             check_only_classes=frozenset(
                 self._walked_names[wid]
