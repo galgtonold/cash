@@ -2407,7 +2407,7 @@ the top.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/statement/identity_holders.py:identity_held_reason @db67b352, cash/notebook/statement/processor.py:StatementProcessor._warn_identity_held @a5aa8bda, cash/notebook/statement/processor.py:_pointed_into @3af0c4e3 -->
+<!-- claim: cash/notebook/statement/identity_holders.py:identity_held_reason @6c21e22d, cash/notebook/statement/processor.py:StatementProcessor._warn_identity_held @a5aa8bda, cash/notebook/statement/processor.py:_pointed_into @3af0c4e3, cash/notebook/statement/processor.py:StatementProcessor._id_held_outputs @2fa51507, cash/notebook/call_unit.py:CallUnit._spells_a_held_id @0f2c661d -->
 **What happened.** A value the statement binds finds another object by
 identity, not by holding it: a weak reference (`wr = weakref.ref(p.child)`,
 a `WeakValueDictionary`) to an object the value does not hold, or an `int`
@@ -2424,7 +2424,15 @@ and the attributes and slots of your own objects and of a `SimpleNamespace`
 are looked through, and an `id()` turned into text counts as one, alone
 or anywhere inside a longer text (`hex(id(x))`, `'k' + str(id(x))`,
 `f"run-{id(x)}"`, an object's default `repr`): a run of 7 or more digits,
-or `0x` and 5 to 16 hexadecimal digits. Another library's object is not looked
+or `0x` and 5 to 16 hexadecimal digits. In a statement whose code, or a
+function of yours it calls, reads `id` or `repr`, so is an address glued to
+other digits (`'v2' + str(id(x))`, `hex(id(x)) + 'ff'`), and the value is
+also keyed by what it holds: what a later statement or call builds from it
+runs again once the object is a new one (after a restart, or when the cell
+that builds `p` runs again), as in plain Python, rather than being served
+with the old address. A call cash caches inside a statement is not kept
+when its code reads `id` or `repr` and its result holds such an `id()`.
+Another library's object is not looked
 inside: a value holding one next to an `id()` or a weak reference runs
 every time too, since that object could hold one as well. So does a value
 of more than 200,000 objects, one whose `id()` could be of an object

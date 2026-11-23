@@ -243,7 +243,7 @@ only the change itself repeats.
   NOT CACHED: m = make_model()  (1.30s) - 'm' holds an object another variable or container also holds; a restored copy would not be that object, so the statement re-runs every time
 ```
 
-<!-- claim: cash/notebook/statement/output_refusals.py:_alias_refusal @906ea75f, cash/notebook/statement/output_refusals.py:unrestorable_output_reason @eb059662 -->
+<!-- claim: cash/notebook/statement/output_refusals.py:_alias_refusal @906ea75f, cash/notebook/statement/output_refusals.py:unrestorable_output_reason @aa52b4ac -->
 A value restored from the cache is a copy. Some values must stay the very
 object they are, or keep sharing memory with another variable, so cash runs
 the statement every time instead of storing it:
@@ -261,7 +261,7 @@ the statement every time instead of storing it:
   a library's registry or a closure, or the statement is in a loop body. See
   [Mutating an object created in an earlier cell](known-limitations.md#mutating-an-object-created-in-an-earlier-cell).
 
-<!-- claim: cash/notebook/statement/identity_holders.py:identity_held_reason @db67b352 -->
+<!-- claim: cash/notebook/statement/identity_holders.py:identity_held_reason @6c21e22d -->
 - **Holds a weak reference, or the `id()` of an object the notebook holds**:
   `wr = weakref.ref(p.child)`, a `WeakValueDictionary`, `reg = {id(p): ...}`.
   Restored, the value would point at the object as it was when it was

@@ -38,12 +38,14 @@ MAKE = (
 #: how often the sessions column is read: once after the change (before it,
 #: the reading ``MAKE``'s check kept answers). Where an ``id()`` was put, the
 #: value refuses on its own, and the share check's retry with anchors, which
-#: would check the same value, is not asked.
+#: would check the same value, is not asked. A statement reading ``id``
+#: reads its outputs for every spelling before their lineage, apart from the
+#: memo (`reading_every_spelling`): once more, when ``df`` is one of them.
 CHANGES = {
     "an id appended through the frame": (
         ["df['k1'] = 1\ndf['actions'][5].append(('c', hex(id(p))))\ndf['k2'] = 2"],
         True,
-        1,
+        2,
     ),
     "an id appended through the list it was built from": (
         ["df['k1'] = 1\nrecs[5][1].append(('c', str(id(p))))\ndf['k2'] = 2"],

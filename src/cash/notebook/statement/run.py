@@ -180,6 +180,10 @@ class StatementRun:
     #: Its outputs keyed by value this run, and the digest of each output a
     #: rerun under the same key compared (`key_blind`): its entry keeps both.
     value_keyed_outputs: frozenset[str] = frozenset()
+    #: What the identity check answered for each output before its lineage
+    #: (``StatementProcessor._id_held_outputs``), with the value it asked
+    #: of, for the share check to take rather than walk the value again.
+    identity_verdicts: dict[str, tuple[Any, str | None]] = field(default_factory=dict)
     rerun_digests: dict[str, str] = field(default_factory=dict)
     allow_random: bool = False
     unseeded_calls: list = field(default_factory=list)

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import contextvars
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from cash._user_attrs import attribute_or
@@ -94,6 +94,7 @@ def unrestorable_output_reason(
     values_passed: list[bool] | None = None,
     shared_owners: set[str] | None = None,
     homes: dict[int, str] | None = None,
+    identity_known: Mapping[str, tuple[Any, str | None]] | None = None,
 ) -> str | None:
     """Why one of *outputs* cannot be cached, the first refusal found; None
     when every captured value can. An output in *restored_into*, a loop's a
@@ -133,7 +134,9 @@ def unrestorable_output_reason(
     inputs = set(inputs)
     reason = None
     if not values_passed:
-        reason = _value_refusal(outputs, captured_vars, user_ns, cash_held, inputs, set(restored_into), homes)
+        reason = _value_refusal(
+            outputs, captured_vars, user_ns, cash_held, inputs, set(restored_into), homes, identity_known
+        )
         if reason is None and values_passed is not None:
             values_passed.append(True)
     reason = reason or shared_output_reason(
@@ -178,8 +181,13 @@ def _value_refusal(
     inputs: Iterable[str] = (),
     restored_into: set[str] | frozenset[str] = frozenset(),
     homes: dict[int, str] | None = None,
+    identity_known: Mapping[str, tuple[Any, str | None]] | None = None,
 ) -> str | None:
     """The first refusal one output's value earns on its own.
+
+    *identity_known* holds what the identity check already answered for an
+    output, with the value it asked of: taken for that same value rather
+    than walked again.
 
     The identity walk before the alias check: when it gives up on a value
     holding more objects than it looks through, the alias check need not
@@ -197,13 +205,17 @@ def _value_refusal(
         identity_coupled_reason,
         _consumable_refusal,
         _context_variable_refusal,
-        lambda name, value: identity_held_reason(
-            name,
-            value,
-            user_ns,
-            weak_holders=name not in restored_into,
-            more=_answers_budget(name, value),
-            id_free=id_free.get(name),
+        lambda name, value: (
+            identity_known[name][1]
+            if identity_known and name in identity_known and identity_known[name][0] is value
+            else identity_held_reason(
+                name,
+                value,
+                user_ns,
+                weak_holders=name not in restored_into,
+                more=_answers_budget(name, value),
+                id_free=id_free.get(name),
+            )
         ),
         lambda name, value: _alias_refusal(name, value, user_ns, cash_held, inputs, homes),
     )

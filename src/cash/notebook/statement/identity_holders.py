@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import array
 import bisect
+import contextlib
 import functools
 import operator
 import re
@@ -56,6 +57,7 @@ import struct
 import sys
 import types
 import weakref
+from collections.abc import Iterator
 from itertools import accumulate, chain, compress, repeat
 from typing import Any
 
@@ -68,7 +70,15 @@ from cash.install_paths import is_user_code_module
 from cash.notebook.shared_objects import library_exact_values, walk_time_left
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
-__all__ = ["IdentityHeld", "end_cell_reads", "forget_flat_reads", "identity_held_reason", "library_parts"]
+__all__ = [
+    "ID_KIND",
+    "IdentityHeld",
+    "end_cell_reads",
+    "forget_flat_reads",
+    "identity_held_reason",
+    "library_parts",
+    "reading_every_spelling",
+]
 
 #: A container with more items is read at C speed when it holds only
 #: leaves or records of them, and walked item by item otherwise.
@@ -319,7 +329,10 @@ def end_cell_reads() -> None:
 
 def _flat_read_before(items: list[Any]) -> frozenset[int] | None:
     """The numbers a read of these very *items* found earlier this cell, or
-    None when they were not read as leaves."""
+    None when they were not read as leaves (or not as this read reads them:
+    `reading_every_spelling`)."""
+    if _EVERY_SPELLING[0]:
+        return None
     for kept, numbers in _FLAT_READS.get(len(items), ()):
         if all(map(operator.is_, kept, items)):
             return numbers
@@ -327,10 +340,17 @@ def _flat_read_before(items: list[Any]) -> frozenset[int] | None:
 
 
 def _keep_flat_read(items: list[Any], numbers: frozenset[int]) -> None:
+    if _EVERY_SPELLING[0]:
+        return
     if _flat_kept[0] + len(items) > _MAX_FLAT_KEPT:
         return
     _flat_kept[0] += len(items)
     _FLAT_READS.setdefault(len(items), []).append((list(items), numbers))
+
+
+#: `IdentityHeld.kind` of a value holding the ``id()`` of an object the
+#: notebook holds (or one the check could not look through for one).
+ID_KIND = "an id()"
 
 
 class IdentityHeld(str):
@@ -387,7 +407,7 @@ def identity_held_reason(
             f"cash could not look through '{name}' for an object it points at by identity "
             f"({type(error).__name__}: {error}), so this statement runs every time instead."
         )
-        return IdentityHeld(f"'{name}' could not be looked through", name, "an id()", what)
+        return IdentityHeld(f"'{name}' could not be looked through", name, ID_KIND, what)
 
 
 def _held_by_id(
@@ -474,7 +494,7 @@ def _held_by_id(
                 f"'{name}' holds the id() of an object the notebook holds; restored, the object would be "
                 "another one, so the statement re-runs every time",
                 name,
-                "an id()",
+                ID_KIND,
             )
     if walk.closed and (candidates or in_arrays or walk.refs):
         # A value that keeps ids or weak references, next to a library's
@@ -581,7 +601,8 @@ _DIGITS_AS_ZERO = str.maketrans("123456789", "000000000")
 #: keeps its heap right above its image, at 8-digit addresses (``0x12c5000``).
 _SHORTEST_RUN = len(str(_LOWEST_ADDRESS))
 #: The most: `_HIGHEST_ADDRESS` has fifteen. A longer run of digits holds
-#: one only as a part of it (``f"{id(a)}{id(b)}"``), read by `_windows`.
+#: one only as a part of it (``f"{id(a)}{id(b)}"``), read by `_windows`,
+#: as a shorter one can (``'v2' + str(id(x))``).
 _ADDRESS_DIGITS = len(str(_HIGHEST_ADDRESS))
 #: The longest run of digits also read as one number, as `_spelled_in`
 #: read a text that is all digits before reading inside texts.
@@ -591,7 +612,12 @@ _DECIMAL_RUN = re.compile(r"[0-9]{%d,}" % _SHORTEST_RUN)
 #: ``0x`` and the hexadecimal digits after it, anywhere in a text: read as
 #: a number when 5 to 16 digits long, as ``hex(id(x))`` is.
 _HEX_RUN = re.compile(r"0[xX]([0-9a-fA-F]{5,})")
+_SHORTEST_HEX = 5
 _LONGEST_HEX = 16
+#: The longest run after ``0x`` whose starts are read as an address with
+#: hexadecimal digits glued after it: not a hash (``0x`` and 40 or 64
+#: digits), whose every start would be read for nothing.
+_GLUED_HEX = 24
 #: Texts `_Walk._read_texts` joins into one string to search, and the
 #: characters, so a column of long texts is not joined into one huge string.
 _TEXTS_AT_ONCE = 100_000
@@ -606,6 +632,9 @@ def _spelled_in(text: str) -> set[int]:
     ``f"run-{id(x)}"``, ``hex(id(x))``, ``<Q object at 0x7f...>``. Each run
     of decimal digits of 7 to 18, and the parts of a longer one
     (`_windows`); each ``0x`` followed by 5 to 16 hexadecimal digits.
+    Inside `reading_every_spelling`, also the parts of a shorter run
+    (``'v2' + str(id(x))``) and the starts of a run of up to `_GLUED_HEX`
+    after ``0x`` (``hex(id(x)) + 'ff'``).
     Restored, a value holding one spells the old process's address, where
     plain Python spells the new one's. Which of them is an object's address
     `_candidate_ids` decides."""
@@ -614,19 +643,50 @@ def _spelled_in(text: str) -> set[int]:
     if runs:
         lengths = list(map(len, runs))
         numbers.update(map(int, compress(runs, map(operator.ge, repeat(_LONGEST_NUMBER), lengths))))
-        if max(lengths) > _ADDRESS_DIGITS:
-            for run in compress(runs, map(operator.lt, repeat(_ADDRESS_DIGITS), lengths)):
+        shortest = _SHORTEST_RUN if _EVERY_SPELLING[0] else _ADDRESS_DIGITS
+        if max(lengths) > shortest:
+            for run in compress(runs, map(operator.lt, repeat(shortest), lengths)):
                 numbers.update(_windows(run))
     if "0x" in text or "0X" in text:
-        numbers.update(int(digits, 16) for digits in _HEX_RUN.findall(text) if len(digits) <= _LONGEST_HEX)
+        for digits in _HEX_RUN.findall(text):
+            if len(digits) <= _LONGEST_HEX:
+                numbers.add(int(digits, 16))
+            if _EVERY_SPELLING[0] and _SHORTEST_HEX < len(digits) <= _GLUED_HEX:
+                # ``hex(id(x)) + 'ff'``: an address at the run's start.
+                ends = range(_SHORTEST_HEX, min(len(digits) - 1, _LONGEST_HEX) + 1)
+                numbers.update(int(digits[:end], 16) for end in ends)
     return numbers
 
 
+#: Whether `_spelled_in` reads the spellings `reading_every_spelling` adds.
+_EVERY_SPELLING = [False]
+
+
+@contextlib.contextmanager
+def reading_every_spelling() -> Iterator[None]:
+    """Inside the block, `_spelled_in` reads an address glued to other
+    digits too (``'v2' + str(id(x))``, ``hex(id(x)) + 'ff'``), and no read
+    is taken from or kept in the memos of reads made without it.
+
+    For a statement or call whose code reads ``id`` or ``repr``, the only
+    code that spells an address: the windows of every run of 8 to 15
+    digits made a column of a million ``'T' + 13 digits`` texts four times
+    slower to read (0.8 s to 3.6 s). A value built from one is keyed by its
+    lineage, which is keyed by that value."""
+    before = _EVERY_SPELLING[0]
+    _EVERY_SPELLING[0] = True
+    try:
+        yield
+    finally:
+        _EVERY_SPELLING[0] = before
+
+
 def _windows(run: str) -> list[int]:
-    """The numbers inside *run*, a run of digits longer than any address,
-    that could be one: 7 to 15 digits, not starting with ``0`` (``str()``
-    writes none), and a multiple of `_ALIGNMENT`, which its last three
-    digits tell. ``f"{id(a)}{id(b)}"`` spells both."""
+    """The numbers inside *run*, a run of more digits than the shortest
+    address, that could be one: 7 to 15 digits, not starting with ``0``
+    (``str()`` writes none), and a multiple of `_ALIGNMENT`, which its last
+    three digits tell. ``f"{id(a)}{id(b)}"`` spells both, and ``'v2' +
+    str(id(x))`` a 14-digit address in a run of 15."""
     found = []
     for end in range(_SHORTEST_RUN, len(run) + 1):
         if int(run[end - 3 : end]) % _ALIGNMENT:
@@ -841,12 +901,19 @@ def _arrow_text_numbers(values: Any) -> list[Any] | None:
     compute = sys.modules.get("pyarrow.compute")
     if chunked is None or pyarrow is None or compute is None:
         return None
-    known = _arrow_read_of(chunked)
+    # Read as every spelling is (`reading_every_spelling`): not the memo's.
+    every = _EVERY_SPELLING[0]
+    known = None if every else _arrow_read_of(chunked)
     if known is not None:
         return known
     try:
         if not (pyarrow.types.is_string(chunked.type) or pyarrow.types.is_large_string(chunked.type)):
             return None
+        if every:
+            parts: list[Any] = []
+            for piece in _joined_runs(pyarrow, chunked):
+                _spelled_numbers(pyarrow, compute, piece, parts)
+            return parts
         signature = _arrow_signature(chunked)
         read = _ARROW_READS.get(signature)
         if read is not None and read.alive():
@@ -861,7 +928,7 @@ def _arrow_text_numbers(values: Any) -> list[Any] | None:
         # text's bytes (`_could_spell`), and only they matched. A merged
         # frame's text column came in thousands of chunks, and two patterns
         # over all of it took 6 s after one `merge` (p18).
-        parts: list[Any] = []
+        parts = []
         for piece in _joined_runs(pyarrow, chunked):
             _spelled_numbers(pyarrow, compute, piece, parts)
         _ArrowRead(signature, parts).add(chunked)
@@ -1002,8 +1069,11 @@ def _spelled_numbers(pyarrow: Any, compute: Any, chunked: Any, parts: list[Any])
             return
         chunked = narrowed
     length = compute.binary_length(chunked)
+    # Read whole, at C speed; inside `reading_every_spelling` only the
+    # values of the shortest run, the rest read for the parts of their run.
+    longest = _SHORTEST_RUN if _EVERY_SPELLING[0] else _ADDRESS_DIGITS
     whole = compute.and_(
-        compute.and_(compute.greater_equal(length, _SHORTEST_RUN), compute.less_equal(length, _ADDRESS_DIGITS)),
+        compute.and_(compute.greater_equal(length, _SHORTEST_RUN), compute.less_equal(length, longest)),
         compute.ascii_is_decimal(chunked),
     )
     decimal = compute.filter(chunked, whole)
@@ -1011,7 +1081,9 @@ def _spelled_numbers(pyarrow: Any, compute: Any, chunked: Any, parts: list[Any])
         parts.append(compute.cast(decimal, pyarrow.int64()).to_numpy(zero_copy_only=False))
     rest = compute.filter(chunked, compute.invert(whole))
     if len(rest):
-        rest = compute.filter(rest, compute.match_substring_regex(rest, _SPELLING_TEXT))
+        rest = compute.filter(
+            rest, compute.match_substring_regex(rest, _EVERY_SPELLING_TEXT if _EVERY_SPELLING[0] else _SPELLING_TEXT)
+        )
     if len(rest):
         numbers: set[int] = set()
         texts = [text for text in rest.to_pylist() if text is not None]
@@ -1160,6 +1232,8 @@ _KEPT_ARROW_NUMBERS = 1 << 16
 #: digits ending there. Missed by none of its spellings, and matching no
 #: column of longer hashes (``0x`` and 64 digits), read in Python for nothing.
 _SPELLING_TEXT = r"[0-9]{7}|0[xX][0-9a-fA-F]{5,16}(?:[^0-9a-fA-F]|$)"
+#: The same inside `reading_every_spelling`: up to `_GLUED_HEX` digits.
+_EVERY_SPELLING_TEXT = r"[0-9]{7}|0[xX][0-9a-fA-F]{5,24}(?:[^0-9a-fA-F]|$)"
 #: An Arrow text array of at most this many values is read in Python: each
 #: Arrow call costs tens of microseconds however short the array, and a
 #: list of thousands of small frames made four per column.
@@ -1778,6 +1852,8 @@ class _Walk:
             if _SHAPE_WITNESS is not None and type(items) is list and type(items[0]) in _NESTED
             else None
         )
+        if witness is not None and _EVERY_SPELLING[0]:
+            witness = None
         if witness is not None:
             read = _SHAPE_READS.get(witness)
             if read is not None and read[1] <= self.budget:

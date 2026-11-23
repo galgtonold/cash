@@ -62,6 +62,7 @@ __all__ = [
     "one_walk",
     "process_state_writes",
     "reached_user_code",
+    "reads_a_builtin",
     "rebound_modules",
     "state_holders",
 ]
@@ -148,6 +149,28 @@ def reached_user_code(code: str, namespace: Mapping[str, Any] | None, *, close: 
         found.close_modules()
     data = tuple(sorted(item for item in found.data.items() if item[0] not in found.written))
     return Reach(tuple(found.functions), frozenset(found.modules), data, tuple(sorted(found.code_at.items())))
+
+
+def reads_a_builtin(code: str, namespace: Mapping[str, Any] | None, names: frozenset[str]) -> bool:
+    """Whether *code*, or a user function it reaches (`reached_user_code`),
+    loads one of *names* as a plain name: ``id`` in ``keys[3] = id(p)`` or
+    in the body of ``make_keys(p)`` it calls. ``f"{x!r}"`` reads ``repr``.
+    True for code that does not parse."""
+    tree = parse_cached(code)
+    if tree is None:
+        return True
+    repr_conversion = ord("r") if "repr" in names else None
+    for node in walk_tree(tree):
+        kind = type(node)
+        if kind is ast.Name and node.id in names:
+            return True
+        if kind is ast.FormattedValue and node.conversion == repr_conversion:  # f"{x!r}"
+            return True
+    return any(
+        not names.isdisjoint(_loaded_globals(co))
+        for fn in reached_user_code(code, namespace).functions
+        for co in _code_objects(fn.__code__)
+    )
 
 
 def class_data(classes: Iterable[type], namespace: Mapping[str, Any]) -> tuple[tuple[str, Any], ...]:
