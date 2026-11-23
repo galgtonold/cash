@@ -62,7 +62,6 @@ from collections.abc import Callable
 from typing import Any
 
 from .. import _weak, source_reads
-from .._clock import fine_thread_clock
 from .._memo import CODE_OBJECTS, MODULE_ANALYSES, LruMemo
 from .._paths import is_pseudo_filename
 from ..code_digest import callable_identity
@@ -1447,10 +1446,16 @@ _PENDING: list[tuple[Any, tuple[str, tuple[str, ...], str], dict]] = []
 #: Records worked out before they are written together (and the rest at
 #: exit): a file written per report cost more than the walks it spared.
 _FLUSH_EVERY = 64
-#: A walk that took less CPU time than working out its guards (which
-#: reading the report back does again) and reading its file is not stored:
-#: walking it again costs less than checking it would, unless an entry
-#: with its text is stored already, which is checked anyway (`_STALE`).
+#: A walk that took less CPU time than reading its file back is not
+#: stored, and its guards are not worked out: walking it again costs less
+#: than reading it would, unless an entry with its text is stored already,
+#: which is checked anyway (`_STALE`). Not the walk against its guards:
+#: a walk that is not stored works its guards out again in every process
+#: that walks it (`save`), as reading the report back would, so only the
+#: read is left to weigh. Weighed against them, the cut-off hung on how
+#: two timings of a few ms compared: a walk run after others of the same
+#: module (their parses held) took about the time of its guards, and on a
+#: runner where file reads cost more a report was left out, each time.
 #: CPU time of this thread, so a busy machine does not tip it -- where
 #: that clock is fine: on Windows it moves in 15.6 ms ticks, read every
 #: walk as 0 s and so as too cheap to store, and nothing was ever stored
@@ -1480,17 +1485,15 @@ def save(func: Callable[..., Any], report: PurityReport, walk: Any, seconds: flo
     text = _text(func)
     if text is None:
         return
-    clock = fine_thread_clock()
-    start = clock()
+    stale = (root, text) in _STALE
+    if seconds is not None and not stale and seconds < _READ_COST:
+        STATS["cheap"] += 1
+        return
+    _STALE.discard((root, text))
     try:
         entry = _entry(func, report, walk, text)
     except Exception:  # noqa: BLE001 - a report that cannot be spelled is not stored; the walk stands
         STATS["refused"] += 1
-        return
-    stale = (root, text) in _STALE
-    _STALE.discard((root, text))
-    if seconds is not None and not stale and seconds < clock() - start + _READ_COST:
-        STATS["cheap"] += 1
         return
     _PENDING.append((directory, root, entry))
     del _PENDING[:-_MAX_PENDING]
