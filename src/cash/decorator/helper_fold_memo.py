@@ -31,11 +31,18 @@ the build had folded before it, so a reuse is the same step of the same
 build. ``CASH_HITPATH_VERIFY=1`` folds again behind every reuse and raises
 `HitMemoMismatch` when anything differs.
 
+A step is watched and recorded only the second time it runs, and not while
+the cached function's state memo captures the whole segment around it
+(`STATE_CAPTURE`), which is then what serves the next call: a watch costs
+about as much as the fold, and in a fresh process the first calls of a
+library's functions move the epochs (each registered, its analysis loaded)
+and dropped most of what was recorded.
 Without the extension nothing is remembered.
 """
 
 from __future__ import annotations
 
+import contextvars
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -47,7 +54,13 @@ from .call_state import held_by_name
 _MASK = (1 << 64) - 1
 
 #: Counters for tests and profiling.
-STATS = {"served": 0, "recorded": 0, "refused": 0}
+STATS = {"served": 0, "recorded": 0, "refused": 0, "deferred": 0, "left_to_state_memo": 0}
+
+#: Set while a cached function's state memo captures the whole segment it
+#: will serve from the next call on (`state_memo.StateMemo.code_state`):
+#: a helper's fold is then not watched or recorded, as the segment around
+#: it is what gets reused.
+STATE_CAPTURE: contextvars.ContextVar[bool] = contextvars.ContextVar("_cash_state_capture", default=False)
 
 
 def _mix(item: Any) -> int:
@@ -107,6 +120,8 @@ class HelperFoldMemo:
         self._entries: LruMemo[tuple, _Entry] = LruMemo(HELPER_FOLDS)
         #: (id(helper), world epoch) of helpers refused at that epoch.
         self._refused: LruMemo[tuple, Any] = LruMemo(HELPER_FOLDS)
+        #: Steps folded once and not watched yet: full key -> the helper.
+        self._once: LruMemo[tuple, Any] = LruMemo(HELPER_FOLDS)
 
     def fold(
         self,
@@ -141,8 +156,17 @@ class HelperFoldMemo:
                 self._replay(entry, seen)
             STATS["served"] += 1
             return entry.state_out
+        if STATE_CAPTURE.get():
+            STATS["left_to_state_memo"] += 1
+            return compute()
         refused = self._refused.get((id(helper), world))
         if refused is helper:
+            return compute()
+        if self._once.get(full_key) is not helper:
+            # The first time this step runs it is folded, not watched (see
+            # the module doc); the second time, it is.
+            self._once[full_key] = helper
+            STATS["deferred"] += 1
             return compute()
         try:
             cells = hit_memo.watch_helper(helper, root_module)

@@ -86,6 +86,7 @@ from .call_state import CAPTURE_WATCH, CARRIER_LOOKUPS, HELD_BY_NAME, REACHED_TT
 from .class_data import CLASSES_FOLDED
 from .global_values import KEY_BUILD_DIGESTS
 from .globals_fold import READS_FOLDED
+from .helper_fold_memo import STATE_CAPTURE
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -515,6 +516,10 @@ class StateMemo:
         self.reused_since_scan = 0
         #: Has a build asked for a scan yet? The first does not get one.
         self.asked = False
+        #: Was the last build captured here remembered? While it was, the
+        #: helper folds inside a capture are not recorded on their own
+        #: (`helper_fold_memo.STATE_CAPTURE`).
+        self.remembers = True
 
     def _holds(self) -> bool:
         if not _world_holds(self.cells, self.tags):
@@ -593,9 +598,14 @@ class StateMemo:
             if not self._scan(keys._registry):
                 return build_now(spec, chain, note=note)
         world, gen, outside = self.world, self.gen, _outside()
-        cap = _sandboxed(fold)
+        token = STATE_CAPTURE.set(True) if self.remembers else None
+        try:
+            cap = _sandboxed(fold)
+        finally:
+            if token is not None:
+                STATE_CAPTURE.reset(token)
         _apply(cap, chain)
-        if (
+        remembered = (
             _world_epoch() == world
             and GEN[0] == gen
             and _outside() == outside
@@ -604,7 +614,9 @@ class StateMemo:
             and self.world == world
             and len(cap.chain) == _PRE_STAGES
             and self._holds()
-        ):
+        )
+        self.remembers = remembered
+        if remembered:
             self.entries[mode] = cap
             STATS["remembered"] += 1
         return cap.state
