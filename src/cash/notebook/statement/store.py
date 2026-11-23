@@ -1194,6 +1194,7 @@ class StatementStore:
             anchors=run.anchors or None,
             restored_into=sorted(run.restored_into & run.outputs) or None,
             bound_copies=sorted(run.bound_copies & run.outputs) or None,
+            kept_objects=sorted((run.kept_objects & run.outputs) - run.restored_into) or None,
             anchor_links=sorted(run.anchor_links) if run.anchors else None,
             anchor_holds=run.anchor_holds or None,
             share_edges=sorted([src, dst] for src, dst in run.linked_edges) if run.linked_edges is not None else None,

@@ -524,6 +524,8 @@ class CacheRestorer:
         if not is_one_structure(tree):
             # As at a hit: what it wrote into keeps its object.
             written = in_place.written_names(tree, mutated)
+            # Bound again to the object it held: plain Python keeps it too.
+            written |= set(metadata.get("kept_objects") or ()) & set(variables_to_restore)
             written -= {*(metadata.get("restored_into") or ()), *(metadata.get("bound_copies") or ()), *holders}
             if written:
                 found, why = in_place.identity_kept(written, variables_to_restore, user_ns)
