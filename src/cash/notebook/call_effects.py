@@ -381,14 +381,88 @@ class ArgFingerprints:
         #: ``id(frame) -> (weak reference, clone, signature, hash)`` for
         #: polars, this statement's.
         self._polars: dict[int, tuple] = {}
+        #: ``token -> (weak reference, shallow copy, signature, exposure
+        #: mark)`` of the frames `defer` vouched for, this statement's.
+        self._deferred: dict[str, tuple] = {}
+        self._tokens = 0
 
     def clear(self) -> None:
         self._memo.clear()
         self._polars.clear()
+        self._deferred.clear()
 
     def begin_statement(self) -> None:
-        """A statement starts: no polars digest is carried into it."""
+        """A statement starts: no polars digest is carried into it, and no
+        frame `defer` vouched for."""
         self._polars.clear()
+        self._deferred.clear()
+
+    def defer(self, value: Any) -> str | None:
+        """A stand-in for the digest of *value*, a big pandas frame under
+        copy-on-write, that `settle` turns into an answer once the
+        statement ran; None for any other value (hash it now).
+
+        ``chg_tab = arm_table(chg[chg.visit == "V4"])`` hands ``chg`` on
+        only through a subscript, so its digest serves nothing but the
+        check whether the statement changed ``chg``: that check read the
+        whole frame before the statement, 0.3 s of 5.5 million rows, to
+        learn on nearly every run that nothing changed. Here the frame is
+        held as the memo holds one (a shallow copy, its `frame_signature`
+        and the `exposure_mark`), and read only when that no longer
+        vouches for it. A frame the memo already knows is answered with
+        its digest."""
+        if not is_cow_pandas(value) or (pandas_nbytes(value) or 0) < _FINGERPRINT_MIN_BYTES:
+            return None
+        found = self._lookup(value)
+        if found is not None:
+            return found
+        try:
+            watch_array_handles()
+            since = exposure_mark()
+            held = value.copy(deep=False)
+            if frame_borrows_its_data(value, held, since):
+                return None
+            signature = frame_signature(value)
+            ref = _weak.ref(value)
+        except Exception:
+            logger.debug("call unit: could not hold a frame for its check", exc_info=True)
+            return None
+        self._tokens += 1
+        token = f"deferred:{self._tokens}"
+        self._deferred[token] = (ref, held, signature, since)
+        return token
+
+    def settle(self, value: Any, token: str, digest: Callable[[Any], str]) -> str:
+        """After the statement ran: *token* when *value* is the frame
+        `defer` held for it and its content is what it was then, else
+        *value*'s digest (through *digest*).
+
+        Unchanged when the frame still is what the memo would vouch for
+        (`_lookup`'s test: same blocks, axes and manager, nothing outside
+        pandas reaching its memory); otherwise, when no handle was given
+        out since to the copy's memory (`frame_borrows_its_data` of the
+        copy), the copy still holds what the frame held then, copy-on-write
+        having given the frame new arrays for each write, and the two are
+        compared by content: a write of the values a column already had
+        changed nothing. A handle that reached the copy's memory may have
+        written it too: changed."""
+        entry = self._deferred.pop(token, None)
+        if entry is None:
+            return digest(value)
+        ref, held, signature, since = entry
+        try:
+            if ref() is not value:
+                return digest(value)
+            if not frame_borrows_its_data(value, held, since) and frame_signature(value) == signature:
+                return token
+            if frame_borrows_its_data(held, None, since):
+                return digest(value)
+            before = compute_hash(held)
+        except Exception:
+            logger.debug("call unit: could not check a held frame", exc_info=True)
+            return digest(value)
+        now = digest(value)
+        return token if now == before and not is_identity_fallback_hash(value, now) else now
 
     def digest(self, value: Any) -> str:
         """`compute_hash` of *value*, from the memo when it is a frame
