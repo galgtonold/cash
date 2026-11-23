@@ -414,8 +414,20 @@ def _getsourcelines(obj: object) -> tuple[list[str], int]:
         path = _module_file(obj)
         if isinstance(path, str) and path.endswith((".py", ".pyw")):
             refresh_linecache(path)
-    elif hooked_class(obj) and "__firstlineno__" in class_dict(obj):
-        return _hooked_class_source_lines(obj)  # type: ignore[arg-type]
+    elif hooked_class(obj):
+        if "__firstlineno__" in class_dict(obj):
+            return _hooked_class_source_lines(obj)  # type: ignore[arg-type]
+        # Before Python 3.13 a class names no first line: found by its
+        # qualified name in its module's file, as ``inspect`` finds it, but
+        # with the module read by ``type``, not asked of the class.
+        version = settled_source_version(obj)
+        if version is None:
+            module = sys.modules.get(module_of_class(obj) or "")
+            path = _module_file(module) if module is not None else None
+            if not isinstance(path, str):
+                raise OSError("could not get source code")
+            version = (path, 0, 0, 0, 0)
+        return _class_source_lines(obj, version)
     return inspect.getsourcelines(obj)  # type: ignore[arg-type]
 
 
@@ -582,7 +594,11 @@ def _class_source_lines(cls: object, version: tuple[str, int, int, int, int]) ->
     version for all its classes rather than once per question."""
     path = version[0]
     linecache.checkcache(path)
-    module = inspect.getmodule(cls, path)
+    if hooked_class(cls):
+        # ``inspect.getmodule`` asks a class for its ``__module__``.
+        module = sys.modules.get(module_of_class(cls) or "")
+    else:
+        module = inspect.getmodule(cls, path)
     lines = linecache.getlines(path, module.__dict__) if module else linecache.getlines(path)
     if not lines:
         raise OSError("could not get source code")

@@ -465,7 +465,7 @@ def _held(value: Any, kind: type, hc: Any, work: list[int]) -> Iterable[Any]:
                 return []
             out = [cell.cell_contents for cell in value.__closure__ or () if _filled(cell)]
             g = value.__globals__
-            out.extend(g[n] for n in value.__code__.co_names if n in g and not isinstance(g[n], types.ModuleType))
+            out.extend(g[n] for n in value.__code__.co_names if n in g and not issubclass(type(g[n]), types.ModuleType))
             return out
         if issubclass(kind, (types.MethodType, classmethod, staticmethod)):
             return [value.__func__, attribute_or(value, "__self__", None)]
