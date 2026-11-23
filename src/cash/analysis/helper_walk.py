@@ -58,6 +58,7 @@ from .helper_bindings import (
     callee_chain,
     dotted_imports,
     held_ref,
+    helper_ref,
     local_import_map,
     resolve_binding,
     resolve_callee_chain,
@@ -1247,7 +1248,7 @@ class HelperWalk:
             self._helper_paths[qualname] = home
         else:
             try:
-                self._helper_objects[qualname] = _weak.ref(func)
+                self._helper_objects[qualname] = helper_ref(func)
             except TypeError:  # not weak-referenceable
                 pass
 
