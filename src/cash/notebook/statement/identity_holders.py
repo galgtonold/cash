@@ -934,6 +934,12 @@ def _spelled_numbers(pyarrow: Any, compute: Any, chunked: Any, parts: list[Any])
         parts.extend(int(text, 16) for text in hexadecimal.to_pylist() if text is not None)
 
 
+#: The fewest rows a chunk of Arrow text averages for `_starting_with_a_digit`
+#: to pick its candidates: below that, picking chunk by chunk costs more
+#: than Arrow reading all of it (even at 512 rows a chunk, measured).
+_NARROWED_CHUNK_ROWS = 512
+
+
 def _starting_with_a_digit(pyarrow: Any, chunked: Any) -> Any:
     """The values of *chunked* (Arrow text: an Array or a ChunkedArray)
     that could spell a number as `_spelled_numbers` reads them, in order,
@@ -949,11 +955,22 @@ def _starting_with_a_digit(pyarrow: Any, chunked: Any) -> Any:
     all of a fitting length) after each of p18's statements making a new
     frame of lab rows, where the first byte rules every one out in 20 ms.
     None when a chunk's buffers are not laid out as Arrow's ``string`` or
-    ``large_string`` lay them out: Arrow reads all of *chunked*, as before."""
+    ``large_string`` lay them out: Arrow reads all of *chunked*, as before.
+
+    None too when *chunked*'s chunks average fewer than
+    `_NARROWED_CHUNK_ROWS` rows: picking costs some 15 microseconds a
+    chunk, and 10,000 chunks of one row took 0.19 s against Arrow's 0.03 s
+    for all of them. A chunk most of whose values are candidates is kept
+    whole rather than copied (2 million digit strings: 0.11 s, against
+    Arrow's 0.07 s for the whole column): its other values are those
+    Arrow's patterns rule out themselves, so the numbers found are the
+    same."""
     numpy = sys.modules.get("numpy")
     if numpy is None:
         return None
     if isinstance(chunked, pyarrow.ChunkedArray):
+        if len(chunked) < chunked.num_chunks * _NARROWED_CHUNK_ROWS:
+            return None
         chunks = chunked.chunks
     else:
         chunks = [chunked]
@@ -982,11 +999,16 @@ def _starting_with_a_digit(pyarrow: Any, chunked: Any) -> Any:
         # Each value's first byte; an empty one at the end of the text
         # reads its last byte (``clip``), and is left out by its length.
         first = text.take(offsets[:-1], mode="clip")
-        at = numpy.flatnonzero((first >= 0x30) & (first <= 0x39))
-        lengths = offsets[at + 1] - offsets[at]
-        at = at[(lengths >= 7) & (lengths <= 18)]
-        if at.size:
-            taken.append(chunk.take(pyarrow.array(at, type=pyarrow.int64())))
+        fits = (first >= 0x30) & (first <= 0x39)
+        if not fits.any():
+            continue
+        lengths = numpy.diff(offsets)
+        fits &= (lengths >= 7) & (lengths <= 18)
+        count = numpy.count_nonzero(fits)
+        if 3 * count >= 2 * rows:
+            taken.append(chunk)  # most of it: Arrow's patterns pick them
+        elif count:
+            taken.append(chunk.take(pyarrow.array(numpy.flatnonzero(fits), type=pyarrow.int64())))
     return pyarrow.chunked_array(taken, type=kind)
 
 
