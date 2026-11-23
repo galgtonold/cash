@@ -22,7 +22,7 @@ import textwrap
 
 import pytest
 
-from cash import Cash
+from cash import Cash, _native
 from cash.decorator import class_memo, hit_memo
 from cash.decorator.code_args import CodeArgs
 from cash.tracking import trace_items
@@ -158,10 +158,17 @@ def test_a_class_module_data_holds_is_digested_once_while_its_world_holds(mod, m
         return real(cls, *args, **kwargs)
 
     monkeypatch.setattr(trace_items, "_class_digest_now", counting)
+    # The world epoch is the process's: anything else in it writing a world
+    # dict (a thread an earlier test left, such as a cache writer) moves it.
+    # A watch taken while it moved is not trusted, so the class is watched
+    # and digested again on the next call (`class_memo._Proof.scan`): one
+    # more digest per move, and none while it holds.
+    epoch = _native.cwatch.world_epoch()
     first = trace_items.value_digest(mod.HOLDER)
     assert trace_items.value_digest(mod.HOLDER) == first
     assert trace_items.value_digest(mod.HOLDER) == first
-    assert len(digests) == 1
+    moves = _native.cwatch.world_epoch() - epoch
+    assert len(digests) <= 1 + moves, f"digested {len(digests)} times while the world moved {moves} times"
     with monkeypatch.context() as m:
         m.setattr(class_memo, "ENABLED", False)
         assert trace_items.value_digest(mod.HOLDER) == first, "remembered, it is not the digest read now"
