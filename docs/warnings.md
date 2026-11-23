@@ -2479,12 +2479,14 @@ changes something outside its objects (`__add__` appending to a global
 list), so the operator may run it. The message names the container. It is
 shown once for each.
 
-<!-- claim: cash/tracking/lookups_seen.py:_note_value @6396f5f3, cash/tracking/lookups_seen.py:_warn_too_big @347ff5b1 -->
+<!-- claim: cash/tracking/lookups_seen.py:_note_value @5444add6, cash/tracking/lookups_seen.py:_warn_too_big @347ff5b1, cash/tracking/lookups_seen.py:_note_held @083b7eb0 -->
 It is shown too, once for each, when a statement, or a function of yours it
 calls, reads a dict, list or tuple through a module (`mod.ROWS`,
 `logging.Logger.manager.loggerDict`) that holds more than 100,000 items, too
 many to look through for an object found by its name, such as a logger, that
-an item read by C may find. The statement runs every time.
+an item read by C may find. The statement runs every time. So it is when a
+property or method of your class reads an object a module holds
+(`mod.STORE.level()`) that holds more than 100,000 items in all.
 
 It is also shown, once per statement, when a statement reads an item of a
 container by an index or method cash cannot follow (`[f(h[k]) for k in
@@ -2534,6 +2536,15 @@ swapped-in routine, run on Python 3.12 or newer.
 **When it is safe to ignore.** When no statement reads a logger, or another
 object found by its name, that a later cell changes. It is shown once per
 session, at the first statement that calls something or reads an attribute.
+
+<!-- claim: cash/tracking/lookups_seen.py:_cannot_follow @bd2b3dc1, cash/tracking/lookups_seen.py:_follow @77c614ba -->
+**It is also shown**, once for each read, when a statement reads through a
+module an attribute that compiled code decides, and then attributes of what
+it gives (`mod.local.log.level`, with `local` a `threading.local()`): cash
+cannot look at what it gives without running that code, so the statement
+runs every time instead of being served. Python's own attributes, slots and
+numpy's array attributes are read, and need no warning. **What to do:** bind
+what it gives to a variable in a cell of its own and read that.
 
 ### NOTEBOOK-MAGIC-STALE {#notebook-magic-stale}
 

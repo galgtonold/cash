@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import base64
 import builtins
+import collections
 import contextlib
 import dis
 import functools
@@ -69,6 +70,10 @@ class _State(threading.local):
     """Whether a callback runs on this thread: what it runs is cash's own."""
 
     busy = False
+    #: The code whose reads are to be noted, with its globals, while
+    #: `_note_reads` runs on this thread: code met on a chain (a property's
+    #: getter) is noted after the code being noted, not inside it.
+    pending: list[tuple[types.CodeType, Mapping[str, Any]]] | None = None
 
 
 _THREAD = _State()
@@ -105,6 +110,9 @@ class _Watch:
         #: whether each may stand by reference: each
         #: reduced once.
         self.noted: dict[int, bool] = {}
+        #: ``id -> object`` of the objects whose own attributes were looked
+        #: through for what code of their class reads (`_note_held`).
+        self.held_read: dict[int, Any] = {}
         #: The reads of containers too big to look through (`_too_big`).
         self.too_big: list[str] = []
         #: The CPU seconds noting may take (`_note_object`), what it took,
@@ -427,14 +435,22 @@ def _note_reads(code: types.CodeType, namespace: Mapping[str, Any]) -> None:
     from the module's own dict: nothing runs (a module's ``__getattr__``
     would)."""
     if _THREAD.busy:
+        pending = _THREAD.pending
+        if pending is not None:
+            # Met on a chain being noted: noted once that one is.
+            pending.append((code, namespace))
         return
     _THREAD.busy = True
+    pending = _THREAD.pending = [(code, namespace)]
     try:
         watch = _ACTIVE
-        _note_globals(code, namespace, watch is not None and namespace is watch.user_ns)
+        while pending:
+            code, namespace = pending.pop()
+            _note_globals(code, namespace, watch is not None and namespace is watch.user_ns)
     except Exception:  # noqa: BLE001 - whatever reading them raises: never served
         _unreadable()
     finally:
+        _THREAD.pending = None
         _THREAD.busy = False
 
 
@@ -444,7 +460,9 @@ def _note_globals(code: types.CodeType, namespace: Mapping[str, Any], notebooks:
     is read through a module of it is noted. From a module, the chain goes
     on through classes and objects (``logging.Logger.manager.loggerDict``);
     a dict, list or tuple met on it has the objects it holds noted, as an
-    item or a ``.get`` of it is read by C."""
+    item or a ``.get`` of it is read by C. Where code decides what an
+    attribute on it is (a property, a ``__getattr__``), the chain is
+    followed as `_follow` says."""
     for name, attrs in _global_reads(code):
         value = namespace.get(name, _MISSING)
         if value is _MISSING:
@@ -456,7 +474,7 @@ def _note_globals(code: types.CodeType, namespace: Mapping[str, Any], notebooks:
                     if not issubclass(type(value), types.ModuleType):
                         break
                     through_module = True
-                value = _attribute(value, attr)
+                value = _follow(value, attr, ".".join((name, *attrs[:depth])), depth == len(attrs))
             if value is _MISSING:
                 break
             _arm_returns_of(value)
@@ -505,7 +523,9 @@ def _note_value(value: Any, read: str) -> None:
     elif kind is list or kind is tuple:
         items = value
     else:
-        if _may_note(kind):
+        if kind in _SETTINGS_KINDS:
+            _note_settings(value)
+        elif _may_note(kind):
             _note_object(value)
         return
     watch = _ACTIVE
@@ -529,6 +549,70 @@ def _note_value(value: Any, read: str) -> None:
                 plain[id(item)] = item
             except TypeError:  # one that takes no weak reference: reduced each time
                 pass
+
+
+#: The settings a library keeps in a mapping of its own class, read by
+#: subscript (``plt.rcParams["font.size"]``): ``(module, attribute)`` of
+#: each. No call of the library's reads them, so nothing else sees the
+#: read; the mapping is noted with its state as a logger is
+#: (`_note_settings`), found again by its module and name.
+SETTINGS_MAPPINGS = (("matplotlib", "rcParams"),)
+
+
+def _settings_kinds() -> frozenset[type]:
+    """The classes of `SETTINGS_MAPPINGS` loaded now: a set lookup decides
+    whether a value read may be one."""
+    found = set()
+    for module, attr in SETTINGS_MAPPINGS:
+        held = vars(sys.modules[module]).get(attr) if module in sys.modules else None
+        if held is not None:
+            found.add(type(held))
+    return frozenset(found)
+
+
+class _SettingsKinds:
+    """`_settings_kinds`, read again once a module of `SETTINGS_MAPPINGS`
+    is imported after the last read."""
+
+    def __init__(self) -> None:
+        self._loaded: tuple[bool, ...] = ()
+        self._kinds: frozenset[type] = frozenset()
+
+    def __contains__(self, kind: type) -> bool:
+        loaded = tuple(module in sys.modules for module, _attr in SETTINGS_MAPPINGS)
+        if loaded != self._loaded:
+            self._loaded, self._kinds = loaded, _settings_kinds()
+        return kind in self._kinds
+
+
+_SETTINGS_KINDS = _SettingsKinds()
+
+
+def _note_settings(value: Any) -> None:
+    """Note *value*, when it is one of `SETTINGS_MAPPINGS`, with its state,
+    in each collector open, found again by its module and name
+    (`kept_state.by_name`): the statement reading it is served only while
+    it holds what it held then (`reference_states.changed`)."""
+    import pickle
+
+    for module, attr in SETTINGS_MAPPINGS:
+        held = sys.modules.get(module)
+        if held is None or vars(held).get(attr) is not value:
+            continue
+        recipe = pickle.dumps((kept_state.by_name, (module, attr)), protocol=4)
+        note_known_by_reference(recipe)
+        watch = _ACTIVE
+        key = base64.b64encode(recipe).decode("ascii")
+        missing = [] if watch is None else [found for found in watch.collectors if key not in found]
+        if not missing:
+            return
+        try:
+            digest = kept_state.state_digest(value)
+        except Exception:  # noqa: BLE001 - whatever pickling it raises: never served
+            digest = ""
+        for found in missing:
+            found[key] = digest
+        return
 
 
 #: ``id -> object`` of the objects a module's container held, found not to
@@ -631,18 +715,336 @@ _CLASS_DICT = type.__dict__["__dict__"].__get__
 #: The ``__getattribute__`` slot wrappers that are ``object``'s lookup: a C
 #: class that sets it explicitly holds a wrapper of its own for it, which
 #: reads attributes as ``object`` does (``SimpleNamespace`` below Python
-#: 3.13, ``functools.partial``). Any other decides what a read finds.
+#: 3.13, ``functools.partial``, and ``tuple``, ``dict`` and ``list``, which a
+#: named tuple, a struct sequence such as ``sys.version_info`` and a
+#: ``dict`` subclass such as matplotlib's ``rcParams`` reach). Any other
+#: decides what a read finds.
 _OBJECTS_LOOKUP = object.__getattribute__
 _GENERIC_GETATTRIBUTE = frozenset(
     {
         _OBJECTS_LOOKUP,
         *(
             _CLASS_DICT(kind)["__getattribute__"]
-            for kind in (types.SimpleNamespace, functools.partial)
+            for kind in (
+                types.SimpleNamespace,
+                functools.partial,
+                tuple,
+                list,
+                dict,
+                set,
+                int,
+                bytes,
+                bytearray,
+                complex,
+                BaseException,
+                collections.deque,
+                collections.defaultdict,
+            )
             if "__getattribute__" in _CLASS_DICT(kind)
         ),
     }
 )
+#: The lookup of an attribute of a class that ``type`` makes: any other
+#: a metaclass defines decides what a read finds.
+_TYPES_LOOKUP = _CLASS_DICT(type)["__getattribute__"]
+
+#: How code decides an attribute `_attribute` does not read (`_decided_by`):
+#: read after all, without code of the object's run; a function written in
+#: Python; a method, which the statement calls next; code written in C; or
+#: no attribute there (the read raises).
+_READ, _PYTHON, _CALLED, _COMPILED, _ABSENT = range(5)
+
+_MEMBER = type(type.__dict__["__weakrefoffset__"])
+_GETSET = type(type.__dict__["__dict__"])
+#: The descriptors that make a method when read on an object: called next,
+#: so what the call does is seen as a call (`_on_call`).
+_METHODS_PYTHON = (types.FunctionType, classmethod, staticmethod)
+_METHODS_C = frozenset(
+    {
+        types.BuiltinFunctionType,
+        types.MethodDescriptorType,
+        types.ClassMethodDescriptorType,
+        types.WrapperDescriptorType,
+        types.MethodWrapperType,
+    }
+)
+
+
+def _follow(value: Any, attr: str, read: str, last: bool) -> Any:
+    """``value.attr``, read through a module as *read*, the last of its
+    chain when *last*: as `_attribute` reads it, as `_decided_by` reads it
+    where that runs none of the object's code, or `_MISSING`. Code that
+    decides it is followed as a call is: a library's function has what it
+    returns seen; a function of the user's (a property's getter, a
+    ``__getattr__``, a method) has its own calls and reads seen, and what
+    the object or class of the user's it reads holds noted (`_note_held`).
+    Where the chain goes on past what other compiled code decides
+    (``mod.local.log.level``), what it finds cannot be seen, and the
+    statement is never served (`_cannot_follow`)."""
+    found = _attribute(value, attr)
+    if found is not _MISSING:
+        return found
+    how, what = _decided_by(value, attr)
+    if how == _READ:
+        return what
+    watch = _ACTIVE
+    if watch is None:
+        return _MISSING
+    if how == _PYTHON:
+        # No CALL event names a getter: armed here, as a callee is (a
+        # library's has what it returns seen).
+        _arm_callee(watch, what)
+    if (how == _PYTHON or how == _CALLED) and what is not None and _is_users(what.__code__):
+        if _is_users_class(value if issubclass(type(value), type) else type(value)):
+            _note_held(watch, value, read)
+    elif how == _COMPILED and not last:
+        _cannot_follow(read)
+    return _MISSING
+
+
+def _decided_by(value: Any, attr: str) -> tuple[int, Any]:
+    """How ``value.attr`` is found where `_attribute` does not read it, as
+    Python's own lookup finds it: ``(_READ, the value)`` where it is read
+    with no code of the object's run after all (a slot, an attribute of an
+    object shadowing a method, a class whose metaclass looks up as
+    ``type`` does); ``(_PYTHON, function)`` for a function written in
+    Python that decides it (a property's getter, a ``__getattr__``, a
+    ``__getattribute__``); ``(_CALLED, function or None)`` for a method;
+    ``(_COMPILED, None)`` for code written in C; ``(_ABSENT, None)``."""
+    kind = type(value)
+    if issubclass(kind, types.ModuleType):
+        return _decided_on_module(value, kind, attr)
+    if issubclass(kind, type):
+        return _decided_on_class(value, kind, attr)
+    hook = _own_lookup(kind, _GENERIC_GETATTRIBUTE)
+    if hook is not None:
+        return _decider(hook)
+    held = _in_mro(kind, attr)
+    if held is not _MISSING and _is_data_descriptor(held):
+        if type(held) is _GETSET and attr == "__dict__":
+            own = own_dict(value)
+            return (_COMPILED, None) if own is None else (_READ, own)
+        if _reads_a_slot(held, kind):
+            try:
+                return _READ, held.__get__(value, kind)
+            except AttributeError:  # an empty slot: ``__getattr__`` decides
+                return _hook(kind)
+        return _decided_by_descriptor(held)
+    own = own_dict(value)
+    if own is not None and attr in own:
+        return _READ, own[attr]
+    if held is not _MISSING:
+        return _decided_by_descriptor(held) if _is_descriptor(held) else (_READ, held)
+    return _hook(kind)
+
+
+_MODULES_LOOKUP = frozenset({_CLASS_DICT(types.ModuleType)["__getattribute__"]})
+
+
+def _decided_on_module(module: Any, kind: type, attr: str) -> tuple[int, Any]:
+    if kind is not types.ModuleType:
+        # A module of a class of its own (a lazy loader's): its class decides.
+        hook = _own_lookup(kind, _MODULES_LOOKUP)
+        if hook is not None:
+            return _decider(hook)
+        held = _in_mro(kind, attr)
+        if held is not _MISSING and _is_data_descriptor(held):
+            return _decided_by_descriptor(held)
+    if attr in vars(module):
+        return _READ, vars(module)[attr]
+    hook = vars(module).get("__getattr__", _MISSING)
+    return (_ABSENT, None) if hook is _MISSING else _decider(hook)
+
+
+def _decided_on_class(klass: type, meta: type, attr: str) -> tuple[int, Any]:
+    hook = _own_lookup(meta, frozenset({_TYPES_LOOKUP}))
+    if hook is not None:
+        return _decider(hook)
+    on_meta = _in_mro(meta, attr)
+    if on_meta is not _MISSING and _is_data_descriptor(on_meta):
+        if _reads_a_slot(on_meta, meta):
+            try:
+                return _READ, on_meta.__get__(klass, meta)
+            except AttributeError:
+                return _hook(meta)
+        return _decided_by_descriptor(on_meta)
+    held = _in_mro(klass, attr)
+    if held is not _MISSING:
+        if not _is_descriptor(held):
+            return _READ, held
+        kind = type(held)
+        if kind is types.FunctionType or kind is property:
+            # Read on its class, a function or a property is itself.
+            return _READ, held
+        if kind is staticmethod:
+            return _READ, held.__func__
+        return _decided_by_descriptor(held)
+    if on_meta is not _MISSING:
+        return _decided_by_descriptor(on_meta) if _is_descriptor(on_meta) else (_READ, on_meta)
+    return _hook(meta)
+
+
+def _decided_by_descriptor(held: Any) -> tuple[int, Any]:
+    """What decides an attribute *held*, a descriptor, gives."""
+    kind = type(held)
+    if kind in _METHODS_PYTHON:
+        fn = held if kind is types.FunctionType else held.__func__
+        return _CALLED, fn if type(fn) is types.FunctionType else None
+    if kind in _METHODS_C:
+        return _CALLED, None
+    getter = _in_mro(kind, "__get__")
+    if getter is _PROPERTY_GET and isinstance(held, property):
+        return _decider(held.fget)
+    if getter is _CACHED_GET and isinstance(held, functools.cached_property):
+        return _decider(held.func)
+    return _decider(getter)
+
+
+_PROPERTY_GET = _CLASS_DICT(property)["__get__"]
+_CACHED_GET = _CLASS_DICT(functools.cached_property)["__get__"]
+
+
+def _reads_a_slot(held: Any, owner: type) -> bool:
+    """Is *held*, an attribute of an object of class *owner*, a slot, or one
+    that Python's own classes, or numpy's, define in C (``__class__``,
+    ``__name__``, a struct sequence's field, an array's ``dtype``, ``T`` or
+    ``flags``), whose read changes nothing and runs no code of the user's?
+    numpy's only on an object of numpy's own class: a view of a subclass's
+    runs its ``__array_finalize__``."""
+    kind = type(held)
+    if kind is _MEMBER:
+        return True
+    if kind is not _GETSET:
+        return False
+    module = attribute_or(held.__objclass__, "__module__", None)
+    return module == "builtins" or (module == "numpy" and attribute_or(owner, "__module__", None) == "numpy")
+
+
+def _hook(kind: type) -> tuple[int, Any]:
+    """What a class's ``__getattr__`` decides: an attribute not found."""
+    hook = _in_mro(kind, "__getattr__")
+    return (_ABSENT, None) if hook is _MISSING else _decider(hook)
+
+
+def _decider(fn: Any) -> tuple[int, Any]:
+    if fn is None or fn is _MISSING:  # a property with no getter: the read raises
+        return _ABSENT, None
+    if type(fn) is types.MethodType:
+        fn = fn.__func__
+    return (_PYTHON, fn) if type(fn) is types.FunctionType else (_COMPILED, None)
+
+
+def _own_lookup(kind: type, generic: frozenset[Any]) -> Any:
+    """The ``__getattribute__`` the first class of *kind*'s MRO that has one
+    defines, when not one of *generic*; else None."""
+    for base in mro_of(kind):
+        held = _CLASS_DICT(base).get("__getattribute__", _MISSING)
+        if held is not _MISSING:
+            return None if held in generic else held
+    return None
+
+
+def _in_mro(kind: type, attr: str) -> Any:
+    for base in mro_of(kind):
+        held = _CLASS_DICT(base)
+        if attr in held:
+            return held[attr]
+    return _MISSING
+
+
+def _is_data_descriptor(value: Any) -> bool:
+    return any("__set__" in held or "__delete__" in held for held in map(_CLASS_DICT, mro_of(type(value))))
+
+
+def _note_held(watch: _Watch, obj: Any, read: str) -> None:
+    """Note each object pickled by reference that *obj*, read as *read*,
+    holds, as code of its class the user wrote reads what it holds (a
+    property returning ``self._log``, a method reading
+    ``self.cfg["log"].level``, ``self.LOG.level`` of its class): through
+    its own attributes and its class's, those of the objects of the user's
+    classes and of ``SimpleNamespace`` it holds, and the dicts, lists,
+    tuples and sets in them, reading each with no code of theirs run.
+    Past `ITEM_TYPES_AT` items in all, the statement is never served
+    (`_too_big`)."""
+    if id(obj) in watch.held_read:
+        return
+    watch.held_read[id(obj)] = obj
+    from ..analysis.handed_callables import ITEM_TYPES_AT
+
+    left = ITEM_TYPES_AT
+    seen = {id(obj)}
+    classes: set[type] = set()
+    stack = [obj]
+    while stack:
+        items = _held_items(stack.pop(), classes)
+        left -= len(items)
+        if left < 0:
+            _too_big(watch, read)
+            return
+        for item in items:
+            kind = type(item)
+            if kind in _SCALARS or id(item) in seen:
+                continue
+            seen.add(id(item))
+            if kind in _CONTAINERS or kind is types.SimpleNamespace or (kind is not type and _is_users_class(kind)):
+                stack.append(item)
+            elif _may_note(kind):
+                _note_item(watch, item)
+
+
+def _held_items(obj: Any, classes: set[type]) -> list[Any]:
+    """What *obj* holds, read with no code of its run: a container's items,
+    a class's own attributes along its MRO, an object's own attributes and
+    slots, and its class's when it is the user's and not in *classes*."""
+    kind = type(obj)
+    if kind is dict:
+        return list(obj.values())
+    if kind in _CONTAINERS:
+        return list(obj)
+    if issubclass(kind, type):
+        return _class_items(obj)
+    own = own_dict(obj)
+    items = [] if own is None else list(own.values())
+    for base in mro_of(kind):
+        for held in _CLASS_DICT(base).values():
+            if type(held) is _MEMBER:
+                try:
+                    items.append(held.__get__(obj, kind))
+                except AttributeError:  # an empty slot
+                    pass
+    if kind not in classes and _is_users_class(kind):
+        # What its methods read as ``self.LOG`` may be its class's.
+        classes.add(kind)
+        items.extend(_class_items(kind))
+    return items
+
+
+def _class_items(klass: type) -> list[Any]:
+    """The attributes *klass* and its bases but ``object`` hold."""
+    return [held for base in mro_of(klass) if base is not object for held in _CLASS_DICT(base).values()]
+
+
+#: The reads `_cannot_follow` told of, once each.
+_UNFOLLOWED_SAID: set[str] = set()
+
+
+def _cannot_follow(read: str) -> None:
+    """The chain goes on past *read*, an attribute code written in C
+    decides: what it finds is not seen, so the statement is never served,
+    and NOTEBOOK-LOOKUPS-UNSEEN says so once for each such read."""
+    _unreadable()
+    if read in _UNFOLLOWED_SAID:
+        return
+    _UNFOLLOWED_SAID.add(read)
+    what = (
+        f"this statement reads `{read}` and attributes of what it gives, which compiled code decides: cash "
+        "cannot look through it for an object found by its name (such as a logger), so the statement runs "
+        "every time rather than be served what it read before"
+    )
+    fix = "bind what it gives to a variable in a cell of its own and read that; then the statement is cached again."
+    log_diagnostic(_logger, CODE_UNSEEN, what, fix)
+    warn_diagnostic(CashWarning, CODE_UNSEEN, what, fix)
+
 
 #: ``code -> ((global name, (attribute, ...)), ...)`` (`_global_reads`).
 _READS: weakref.WeakKeyDictionary[types.CodeType, tuple[tuple[str, tuple[str, ...]], ...]] = _weak.WeakKeyDictionary()

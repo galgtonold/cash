@@ -674,19 +674,42 @@ a name bound through the namespace, `eval`, `exec` of a computed string and
 
 ### An object found by a lookup cash does not see
 
-<!-- claim: cash/tracking/lookups_seen.py:_note_object @417935ea, cash/tracking/lookups_seen.py:collecting @9163f1c2, cash/tracking/lookups_seen.py:_may_note @d506a15c, cash/tracking/lookups_seen.py:_note_globals @c4fe6755, cash/tracking/lookups_seen.py:_note_value @6396f5f3, cash/tracking/lookups_seen.py:_on_call @c61001a7, cash/tracking/lookups_seen.py:_on_start @182191e3, cash/tracking/lookups_seen.py:_on_return @b1e9395e, cash/tracking/lookups_seen.py:arm @621f5c02 -->
+<!-- claim: cash/tracking/lookups_seen.py:_note_object @417935ea, cash/tracking/lookups_seen.py:collecting @9163f1c2, cash/tracking/lookups_seen.py:_may_note @d506a15c, cash/tracking/lookups_seen.py:_note_globals @77198b83, cash/tracking/lookups_seen.py:_note_value @5444add6, cash/tracking/lookups_seen.py:_on_call @c61001a7, cash/tracking/lookups_seen.py:_on_start @182191e3, cash/tracking/lookups_seen.py:_on_return @b1e9395e, cash/tracking/lookups_seen.py:arm @621f5c02 -->
 A logger pickles by its name, so a statement can find it without any
 variable holding it: `seen = logging.getLogger("app").level`. On Python 3.12
 and newer, cash checks such an object when a call written in Python returns
 it, or when the statement's code, or a function of yours it calls, reads it
 through a module (an attribute, of the module or of a class or object it
-holds, or an item of a dict, list or tuple held there). It does not see one
-found in other ways, and a statement reading it is served what it read
-before after another cell changes it:
+holds, or an item of a dict, list or tuple held there).
+
+<!-- claim: cash/tracking/lookups_seen.py:_follow @77c614ba, cash/tracking/lookups_seen.py:_note_held @083b7eb0, cash/tracking/lookups_seen.py:_reads_a_slot @7dcabbe9, cash/tracking/lookups_seen.py:_cannot_follow @bd2b3dc1 -->
+Where code decides what such an attribute is, cash follows it. A property,
+a method, a `__getattr__` or `__getattribute__` of your class, or a
+property of your metaclass, reading an object or class a module holds
+(`seen = cfg.SETTINGS.log.level`, `cfg.SETTINGS.level()`): what that object
+holds is looked through, its own attributes and its class's, and the
+objects of your classes, dicts, lists, tuples and sets in them, for such
+objects; past 100,000 items in all the statement runs every time
+([NOTEBOOK-ITEMS-UNREAD](warnings.md#notebook-items-unread)). A slot, and
+an attribute Python's own classes or numpy's arrays define in C
+(`__class__`, `dtype`), is read as it is. A library's property or
+`__getattr__` (`pd.options.display.max_rows`) has what it returns
+checked, as a call written in Python does. Where the chain goes on past an
+attribute other compiled code decides (`mod.local.log.level`, with `local`
+a `threading.local()`), what it finds cannot be seen: the statement runs
+every time, and
+[NOTEBOOK-LOOKUPS-UNSEEN](warnings.md#notebook-lookups-unseen) says so.
+
+cash does not see one found in other ways, and a statement reading it is
+served what it read before after another cell changes it:
 
 - by a call written in C: `getattr(logging, "root")`, `vars(logging)["root"]`,
   `operator.attrgetter("root")(logging)`;
 - by a function of yours that returns what such a call found;
+- inside a value a library's code returns or hands over, such as a list or
+  an object holding the logger (`lib.settings().log.level`);
+- by an item of a dict, list or tuple read through a module more than one
+  level down (`mod.CFG["a"]["log"].level`, `mod.ITEMS[0].log.level`);
 - by a call made where the same statement, at the same place, called a
   function written in C first (`for get in (str, logging.getLogger)`), or
   called one function twice before (`for get in (fake, fake,
