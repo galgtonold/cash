@@ -17,6 +17,7 @@ import pytest
 from cash import content_hashers
 from cash.decorator import arg_hashing
 from cash.notebook import call_effects
+from cash.value_hash import compute_hash
 from tests._cell_driver import run_cash_cell
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
@@ -109,6 +110,23 @@ def test_a_frame_written_with_the_same_values_is_compared_by_content(cash_magics
     # against the frame, and the statement changed nothing.
     assert settled == [True]
     assert reads_of_x, "the frame was not read against the copy held"
+
+
+@pytest.mark.parametrize(("change", "unchanged"), [("copy", True), ("bump", False)])
+def test_a_name_holding_another_frame_now_is_compared_by_content(change, unchanged):
+    """Defensive: no statement seen so far rebinds a name it hands on as a
+    part before its check (an output or a global the callee writes takes
+    another route). Should one, the frame now named is read against the
+    copy held, as the digest taken before would have been, not taken as
+    changed only because it is another object."""
+    memo = call_effects.ArgFingerprints()
+    x = pd.DataFrame({"a": np.arange(300_000.0), "b": np.ones(300_000)})
+    token = memo.defer(x)
+    assert token is not None
+    now = x.copy()
+    if change == "bump":
+        now.loc[0, "a"] = 1.0
+    assert (memo.settle(now, token, compute_hash) == token) is unchanged
 
 
 def test_a_frame_changed_reads_as_changed(cash_magics, mock_shell, settled):

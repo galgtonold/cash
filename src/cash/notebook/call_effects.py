@@ -444,16 +444,20 @@ class ArgFingerprints:
         copy), the copy still holds what the frame held then, copy-on-write
         having given the frame new arrays for each write, and the two are
         compared by content: a write of the values a column already had
-        changed nothing. A handle that reached the copy's memory may have
-        written it too: changed."""
+        changed nothing. The same holds when the name now holds another
+        value (``x = keep(x[mask])``): it is compared with the copy by
+        content, as the digest taken before would have been. A handle that
+        reached the copy's memory may have written it too: changed."""
         entry = self._deferred.pop(token, None)
         if entry is None:
             return digest(value)
         ref, held, signature, since = entry
         try:
-            if ref() is not value:
-                return digest(value)
-            if not frame_borrows_its_data(value, held, since) and frame_signature(value) == signature:
+            if (
+                ref() is value
+                and not frame_borrows_its_data(value, held, since)
+                and frame_signature(value) == signature
+            ):
                 return token
             if frame_borrows_its_data(held, None, since):
                 return digest(value)
