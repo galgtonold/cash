@@ -6,7 +6,9 @@ address alone, and an address outlives its object: the next dict made lands
 where the last one was freed. That dict inherited the skip, so a big dict
 that never changed went unwatched for up to a million checks: a notebook
 variable "never vouched for", a memo that never served its argument, both
-after whatever test had left a skip at that address.
+after whatever test had left a skip at that address. A list or a tuple,
+which no weak reference can name, is told by what holds its items as well:
+the next list made lands where the last one was freed too.
 """
 
 from __future__ import annotations
@@ -103,6 +105,73 @@ def test_a_dict_made_where_a_skipped_list_was_freed_is_watched(watching, counted
     fresh = _a_dict_where_a_list_was_freed(skipped_list)
     value_watch._cw.configure(min_bytes=0)
     assert _watched_after_two_hashes(fresh, counted), "the dict inherited the freed list's skip"
+
+
+def _a_list_where_a_skipped_one_was_freed(watching, counted, make):
+    """A list made by *make* where a three-item list skipped as too small
+    was freed just before: CPython hands a new list the one freed last."""
+    value_watch._cw.configure(min_bytes=1 << 20)
+    small = [1, 2, 3]
+    watching["small"] = small
+    for _ in range(3):
+        value_watch.digest(small, counted)
+    assert value_watch._cw.check(small, value_watch.KIND_VALUE) == SKIP, "the small list was not skipped"
+    address = id(small)
+    del watching["small"], small
+    fresh = make()
+    value_watch._cw.configure(min_bytes=0)
+    assert id(fresh) == address, "the new list was not made where the skipped one was freed"
+    return fresh
+
+
+def test_a_list_made_where_a_skipped_list_was_freed_is_watched(watching, counted):
+    """A list has no weak reference to prove a skip is still about it, and
+    was skipped by its address and type alone: a table of 30,000 records
+    made where a small list some earlier statement left skipped had lived
+    was hashed whole on every check, never watched."""
+    rows = _a_list_where_a_skipped_one_was_freed(
+        watching, counted, lambda: [{"id": i, "tags": ["a"]} for i in range(30_000)]
+    )
+    watching["rows"] = rows
+    assert _watched_after_two_hashes(rows, counted), "the new list inherited the freed list's skip"
+
+
+def test_a_tuple_made_where_a_skipped_tuple_was_freed_is_watched(watching, counted):
+    value_watch._cw.configure(min_bytes=1 << 20)
+    small = tuple([1, 2, "c"])  # not a constant, which its code would keep alive
+    watching["small"] = small
+    for _ in range(3):
+        value_watch.digest(small, counted)
+    assert value_watch._cw.check(small, value_watch.KIND_VALUE) == SKIP, "the small tuple was not skipped"
+    address = id(small)
+    del watching["small"], small
+    value_watch._cw.configure(min_bytes=0)
+    held = []
+    for i in range(20000):
+        fresh = (i, [i] * 50, "x" * 100)
+        if id(fresh) == address:
+            break
+        held.append(fresh)
+    else:
+        raise AssertionError("no tuple landed where the skipped one was freed")
+    watching["fresh"] = fresh
+    assert _watched_after_two_hashes(fresh, counted), "the new tuple inherited the freed tuple's skip"
+
+
+def test_a_skipped_list_still_alive_stays_skipped(watching, counted):
+    """The control for lists: the skip holds while the list lives, its
+    items set in place or not."""
+    rows = [{"id": i} for i in range(200)]
+    watching["rows"] = rows
+    for i in range(8):
+        rows[0] = {"id": -i}
+        value_watch.digest(rows, counted)
+    assert value_watch._cw.check(rows, value_watch.KIND_VALUE) == SKIP, "the changing list was not skipped"
+    rows[1] = {"id": -1}
+    counted.calls = 0
+    for _ in range(4):
+        value_watch.digest(rows, counted)
+    assert counted.calls == 4
 
 
 def test_a_skipped_value_still_alive_stays_skipped(watching, counted):
