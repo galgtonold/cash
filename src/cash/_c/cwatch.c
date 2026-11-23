@@ -3601,22 +3601,140 @@ static PyObject *py_any_key(PyObject *self, PyObject *const *args, Py_ssize_t na
     return k;
 }
 
+/* Is *v* exactly one of the scalar classes `lookups_seen._SCALARS` names? */
+static inline int plain_scalar(PyObject *v) {
+    PyTypeObject *t = Py_TYPE(v);
+    return v == Py_None || t == &PyLong_Type || t == &PyBool_Type || t == &PyFloat_Type || t == &PyUnicode_Type ||
+           t == &PyBytes_Type || t == &PyComplex_Type;
+}
+
+/* Does *v*, exactly a tuple, list, dict, set or frozenset, hold only
+   scalars (`plain_scalar`), keys too? Read in C: no code of an item's runs.
+   -1 when *v* is none of them. */
+static int plain_container(PyObject *v) {
+    PyTypeObject *t = Py_TYPE(v);
+    if (t == &PyTuple_Type) {
+        for (Py_ssize_t i = 0, n = PyTuple_GET_SIZE(v); i < n; i++)
+            if (!plain_scalar(PyTuple_GET_ITEM(v, i))) return 0;
+        return 1;
+    }
+    if (t == &PyList_Type) {
+        for (Py_ssize_t i = 0; i < PyList_GET_SIZE(v); i++)
+            if (!plain_scalar(PyList_GET_ITEM(v, i))) return 0;
+        return 1;
+    }
+    if (t == &PyDict_Type) {
+        Py_ssize_t pos = 0;
+        PyObject *k, *val;
+        while (PyDict_Next(v, &pos, &k, &val))
+            if (!plain_scalar(k) || !plain_scalar(val)) return 0;
+        return 1;
+    }
+    if (t == &PySet_Type || t == &PyFrozenSet_Type) {
+        /* An exact set's iterator runs no code. */
+        PyObject *iter = PyObject_GetIter(v);
+        if (iter == NULL) { PyErr_Clear(); return 0; }
+        PyObject *k;
+        int all = 1;
+        while (all && (k = PyIter_Next(iter)) != NULL) {
+            all = plain_scalar(k);
+            Py_DECREF(k);
+        }
+        Py_DECREF(iter);
+        if (PyErr_Occurred()) { PyErr_Clear(); return 0; }
+        return all;
+    }
+    return -1;
+}
+
 /* `lookups_seen`'s PY_RETURN callback for a library callee, which may run
    millions of times in a loop (``random.randint`` in a simulation): a
-   value of exactly one of the plain classes `lookups_seen._PLAIN` names
-   never stands by reference, so None is returned here without a Python
-   frame; any other value goes to *slow* (the Python callback, held as this
-   function's self) with the same arguments. Every return is still seen. */
+   value of exactly one of the scalar classes `lookups_seen._SCALARS` names
+   never stands by reference, nor does a tuple, list or dict holding only
+   such values, so None is returned here without a Python frame; any other
+   value goes to *slow* (the Python callback, held as this function's
+   self) with the same arguments, a container holding anything else
+   included, as an object found by its name may be in it. Every return is
+   still seen. */
 static PyObject *plain_return_call(PyObject *slow, PyObject *const *args, Py_ssize_t nargs) {
     if (nargs == 3) {
         PyObject *v = args[2];
-        PyTypeObject *t = Py_TYPE(v);
-        if (v == Py_None || t == &PyLong_Type || t == &PyBool_Type || t == &PyFloat_Type || t == &PyUnicode_Type ||
-            t == &PyTuple_Type || t == &PyList_Type || t == &PyDict_Type || t == &PyBytes_Type ||
-            t == &PyComplex_Type || t == &PySet_Type || t == &PyFrozenSet_Type)
+        if (plain_scalar(v) || plain_container(v) == 1)
             Py_RETURN_NONE;
     }
     return PyObject_Vectorcall(slow, args, (size_t)nargs, NULL);
+}
+
+/* One item `py_pure_data` meets: 1 when it is a scalar, or a container
+   now on *stack*; 0 when it is anything else; -1 out of memory. */
+static int pd_item(PyObject *item, PyObject ***stack, Py_ssize_t *cap, Py_ssize_t *top) {
+    if (plain_scalar(item)) return 1;
+    PyTypeObject *t = Py_TYPE(item);
+    if (t != &PyTuple_Type && t != &PyList_Type && t != &PyDict_Type && t != &PySet_Type && t != &PyFrozenSet_Type)
+        return 0;
+    if (*top == *cap) {
+        PyObject **grown = PyMem_Realloc(*stack, 2 * (size_t)*cap * sizeof(PyObject *));
+        if (grown == NULL) { PyErr_NoMemory(); return -1; }
+        *stack = grown;
+        *cap *= 2;
+    }
+    (*stack)[(*top)++] = item;
+    return 1;
+}
+
+/* pure_data(value, cap) -> bool: is *value* exactly a tuple, list, dict,
+   set or frozenset holding only scalars (`plain_scalar`) and such
+   containers, keys too, at any depth, in at most *cap* items in all (a
+   dict's key and value count two)? Read in C with no code of an item's
+   run, so nothing changes under the read; past *cap* (a cycle too),
+   False. `lookups_seen._pure_data` is the Python reading, which answers
+   the same. */
+static PyObject *py_pure_data(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 2) { PyErr_SetString(PyExc_TypeError, "pure_data(value, cap)"); return NULL; }
+    Py_ssize_t left = PyLong_AsSsize_t(args[1]);
+    if (left == -1 && PyErr_Occurred()) return NULL;
+    Py_ssize_t cap = 64, top = 0;
+    PyObject **stack = PyMem_Malloc((size_t)cap * sizeof(PyObject *));
+    if (stack == NULL) return PyErr_NoMemory();
+    int r = pd_item(args[0], &stack, &cap, &top);
+    if (r == 1 && top == 0) r = 0; /* a scalar: not a container */
+    while (r == 1 && top > 0) {
+        PyObject *v = stack[--top];
+        PyTypeObject *t = Py_TYPE(v);
+        if (t == &PyTuple_Type) {
+            Py_ssize_t n = PyTuple_GET_SIZE(v);
+            if ((left -= n) < 0) { r = 0; break; }
+            for (Py_ssize_t i = 0; i < n && r == 1; i++) r = pd_item(PyTuple_GET_ITEM(v, i), &stack, &cap, &top);
+        } else if (t == &PyList_Type) {
+            Py_ssize_t n = PyList_GET_SIZE(v);
+            if ((left -= n) < 0) { r = 0; break; }
+            for (Py_ssize_t i = 0; i < n && r == 1; i++) r = pd_item(PyList_GET_ITEM(v, i), &stack, &cap, &top);
+        } else if (t == &PyDict_Type) {
+            if ((left -= 2 * PyDict_GET_SIZE(v)) < 0) { r = 0; break; }
+            Py_ssize_t pos = 0;
+            PyObject *k, *val;
+            while (r == 1 && PyDict_Next(v, &pos, &k, &val)) {
+                r = pd_item(k, &stack, &cap, &top);
+                if (r == 1) r = pd_item(val, &stack, &cap, &top);
+            }
+        } else {
+            /* A set: its iterator runs no code, and each item stays held
+               by the set, which nothing changes while this reads. */
+            if ((left -= PySet_GET_SIZE(v)) < 0) { r = 0; break; }
+            PyObject *iter = PyObject_GetIter(v);
+            if (iter == NULL) { r = -1; break; }
+            PyObject *k;
+            while (r == 1 && (k = PyIter_Next(iter)) != NULL) {
+                Py_DECREF(k);
+                r = pd_item(k, &stack, &cap, &top);
+            }
+            Py_DECREF(iter);
+            if (PyErr_Occurred()) r = -1;
+        }
+    }
+    PyMem_Free(stack);
+    if (r < 0) return NULL;
+    return PyBool_FromLong(r == 1);
 }
 
 static PyMethodDef plain_return_def = {
@@ -3638,6 +3756,7 @@ static PyMethodDef methods[] = {
     {"commit", (PyCFunction)(void (*)(void))py_commit, METH_FASTCALL, "commit(value, kind, digest, seconds) -> bool"},
     {"peek", (PyCFunction)(void (*)(void))py_peek, METH_FASTCALL, "peek(value, kind) -> digest | None"},
     {"forget", py_forget, METH_O, "stop tracking value"},
+    {"pure_data", (PyCFunction)(void (*)(void))py_pure_data, METH_FASTCALL, "pure_data(value, cap) -> bool"},
     {"version", py_version, METH_O, "the version of a clean tracked value, or None"},
     {"set_type_verdict", (PyCFunction)(void (*)(void))py_set_type_verdict, METH_FASTCALL, ""},
     {"type_verdict", py_type_verdict, METH_O, ""},

@@ -2479,14 +2479,18 @@ changes something outside its objects (`__add__` appending to a global
 list), so the operator may run it. The message names the container. It is
 shown once for each.
 
-<!-- claim: cash/tracking/lookups_seen.py:_note_value @5444add6, cash/tracking/lookups_seen.py:_warn_too_big @347ff5b1, cash/tracking/lookups_seen.py:_note_held @083b7eb0 -->
+<!-- claim: cash/tracking/lookups_seen.py:_note_value @9465af19, cash/tracking/lookups_seen.py:_warn_too_big @347ff5b1, cash/tracking/lookups_seen.py:_note_held @b2dec90d, cash/tracking/lookups_seen.py:_note_within @686b554a, cash/tracking/lookups_seen.py:_on_return @42581e94 -->
 It is shown too, once for each, when a statement, or a function of yours it
 calls, reads a dict, list or tuple through a module (`mod.ROWS`,
-`logging.Logger.manager.loggerDict`) that holds more than 100,000 items, too
-many to look through for an object found by its name, such as a logger, that
-an item read by C may find. The statement runs every time. So it is when a
-property or method of your class reads an object a module holds
-(`mod.STORE.level()`) that holds more than 100,000 items in all.
+`logging.Logger.manager.loggerDict`) that holds more than 100,000 items in
+all, at any depth, too many to look through for an object found by its
+name, such as a logger, that an item read by C may find. The statement runs
+every time. So it is when a library's function the statement calls returns
+such a container (the message names `what <function>() returns`), and when
+a property or method of your class reads an object a module holds
+(`mod.STORE.level()`) that holds more than 100,000 items in all. Numbers,
+strings and containers of only those are not counted: they are read at
+once.
 
 It is also shown, once per statement, when a statement reads an item of a
 container by an index or method cash cannot follow (`[f(h[k]) for k in
