@@ -21,7 +21,10 @@ import traceback
 import pytest
 
 from cash.notebook import run_memo
+from cash.notebook.statement import store
+from cash.notebook.statement.rebuild_cost import RebuildCostLedger
 from cash.tracking import file_dep_snapshot, file_watch
+from cash.tracking.read_classification import stat_key
 from tests._cell_driver import run_cash_cell
 
 FILES = 60
@@ -51,7 +54,8 @@ def fetch(folder):
 @pytest.fixture(autouse=True)
 def _listed_as_on_windows(monkeypatch):
     """Listings taken on every system, as on Windows: no link count, which
-    a stat of the file itself is noted for."""
+    a stat of the file itself is noted for, and no file identity
+    (``st_ino`` and ``st_dev`` 0, as ``DirEntry.stat`` gives there)."""
     real = os.scandir
 
     class Entry:
@@ -98,7 +102,7 @@ def _listed_as_on_windows(monkeypatch):
             for e in it:
                 st = e.stat()
                 extra = {f: getattr(st, f) for f in dir(st) if f.startswith("st_") and f.endswith("_ns")}
-                out.append(Entry(e, os.stat_result((*st[:3], 0, *st[4:]), extra)))
+                out.append(Entry(e, os.stat_result((st[0], 0, 0, 0, *st[4:]), extra)))
         return Listing(out)
 
     monkeypatch.setattr(file_dep_snapshot.os, "scandir", scandir)
@@ -156,13 +160,35 @@ def photo_stats(monkeypatch, photos):
     return taken
 
 
-def test_the_cells_below_a_read_take_no_stat_for_a_link_count(cash_magics, photos, photo_stats):
+@pytest.mark.parametrize("stored_below", [False, True], ids=["not-stored-below", "stored-below"])
+def test_the_cells_below_a_read_take_no_stat_for_a_link_count(
+    cash_magics, photos, photo_stats, monkeypatch, stored_below
+):
+    """Whether ``n = len(positive)`` is stored hangs on how long the read
+    took: it is stored when what is not on disk behind ``positive`` took
+    `RebuildCostLedger.COSTLY_INPUTS_S` (0.1 s), as the read of 60 files
+    did on a loaded Windows runner. Stored, its entry takes over the read's
+    records (`_RecordsAsRun`): the read, not cacheable (it writes a file),
+    took no digest and no stat at its end, and the run holds only listed
+    stats of the photos, with no file identity on Windows; each photo was
+    stat-ed again (60 stats), where the stat its read took has the digest
+    the read's lineage remembered under it. Both ways pinned here."""
+    monkeypatch.setattr(RebuildCostLedger, "COSTLY_INPUTS_S", 1e-9 if stored_below else float("inf"))
+    recorded = []  # the photos each records taken name
+    snapshot = store._snapshot_with_inherited
+
+    def records(files, *args, **kwargs):
+        recorded.append(sum(1 for f in files if os.path.basename(f).startswith("p")))
+        return snapshot(files, *args, **kwargs)
+
+    monkeypatch.setattr(store, "_snapshot_with_inherited", records)
     for cell in CELLS[:2]:
         run_cash_cell(cash_magics, cell, cells=CELLS)
     assert len(cash_magics.shell.user_ns["faces"]) == FILES
 
     below = []
     by = []
+    recorded.clear()
     for cell in CELLS[2:]:
         photo_stats.clear()
         run_cash_cell(cash_magics, cell, cells=CELLS)
@@ -170,6 +196,8 @@ def test_the_cells_below_a_read_take_no_stat_for_a_link_count(cash_magics, photo
         by.append(dict(photo_stats.by))
 
     assert cash_magics.shell.user_ns["n"] == FILES
+    # The way it is pinned is the way it went: stored, the read's records were taken.
+    assert any(recorded) is stored_below, recorded
     watch = file_watch.running()
     assert sum(below) <= FILES // 10, (
         f"the cells below took a stat of each photo again: {below}; taken by {by}; "
@@ -196,3 +224,23 @@ def test_a_file_with_a_second_link_is_still_stat_ed_by_itself(photos):
         file_dep_snapshot.end_file_state_epoch()
     assert str(linked) not in listed
     assert len(listed) == FILES - 1
+
+
+def test_records_taken_by_the_read_s_stat_describe_the_file_as_read(tmp_path):
+    """Records taken a while after the read, by the stat the read took
+    (``read_lstats``), are of the file as read, digest and identity alike:
+    a file written since is not vouched for as it is now."""
+    photo = tmp_path / "p000.txt"
+    photo.write_text("photo as read", encoding="utf-8")
+    os.utime(photo, (1_700_000_000, 1_700_000_000))
+    path = str(photo)
+    read = os.lstat(path)
+    as_read_digest = file_dep_snapshot.file_content_hash(path, read.st_size, read)  # remembered, as a lineage does
+    photo.write_text("photo written since the read", encoding="utf-8")
+
+    snapshot = file_dep_snapshot.snapshot_file_deps({path}, as_read={path: stat_key(read)}, read_lstats={path: read})
+
+    entry = snapshot[path]
+    assert (entry["size"], entry["mtime_ns"], entry["ino"]) == (read.st_size, read.st_mtime_ns, read.st_ino)
+    assert entry["hash"] == as_read_digest
+    assert file_dep_snapshot.file_dep_is_fresh(path, entry)[0] is False

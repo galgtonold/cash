@@ -626,6 +626,7 @@ def snapshot_file_deps(
     checked: Mapping[str, os.stat_result] | None = None,
     as_read: Mapping[str, tuple[int, int, int]] | None = None,
     taken: Mapping[str, os.stat_result] | None = None,
+    read_lstats: Mapping[str, os.stat_result] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Return ``{path: {'mtime', 'size', 'hash'}}`` for paths that exist.
 
@@ -664,6 +665,17 @@ def snapshot_file_deps(
     the read is still its own (*known*), or one whose digest under that
     stat is remembered (`_HASH_MEMO`). Older than a stat taken here, it
     can only find the file moved since sooner.
+
+    *read_lstats* maps a path to the stat its read took of the file itself
+    (``FileAccessTracker.read_lstats``), for a snapshot taken a while after
+    the read (*as_read*): taken where neither of the above is, when the
+    digest under it is the read's (*known*) or is remembered
+    (`_HASH_MEMO`). The entry then describes the file as read, identity
+    and all, as one from *checked* does. On Windows the cell run's stats of
+    a crowded folder's files are a listing's, with no file identity, so
+    the first statement stored below a read that took no digest (it
+    writes a file, so is not cacheable) stat-ed each file again to look
+    its digest up, under the stat its read had taken.
     """
     snapshot: dict[str, dict[str, Any]] = {}
     # A relative read is recorded under both spellings
@@ -696,6 +708,12 @@ def snapshot_file_deps(
                 # Or a file whose digest under that very stat is remembered
                 # (`_HASH_MEMO`): the stat and the digest describe the same
                 # bytes, as one taken now and its digest would.
+                remembered = _digest_remembered_under(f, st)
+                if remembered is None:
+                    st = None
+        if st is None and read_lstats is not None:
+            st = read_lstats.get(f)
+            if st is not None and not (known and f in known and known[f][0] == stat_key(st)):
                 remembered = _digest_remembered_under(f, st)
                 if remembered is None:
                     st = None
@@ -935,6 +953,7 @@ def snapshot_dependencies(
     checked: Mapping[str, os.stat_result] | None = None,
     as_read: Mapping[str, tuple[int, int, int]] | None = None,
     taken: Mapping[str, os.stat_result] | None = None,
+    read_lstats: Mapping[str, os.stat_result] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Snapshot everything a call read — local files and remote objects — as one dict.
 
@@ -942,7 +961,7 @@ def snapshot_dependencies(
     (``FileAccessTracker.get_unresolved_files``): each is recorded as never
     fresh. *present* are paths it probed and found without reading
     (``FileAccessTracker.get_present_files``). *stats*, *checked*,
-    *as_read* and *taken* are `snapshot_file_deps`'s.
+    *as_read*, *taken* and *read_lstats* are `snapshot_file_deps`'s.
 
     The single entry point both caching subsystems use, so neither has to
     remember to merge two helpers. Local and remote entries answer the same
@@ -963,6 +982,8 @@ def snapshot_dependencies(
             extra["as_read"] = as_read
         if taken:
             extra["taken"] = taken
+        if read_lstats:
+            extra["read_lstats"] = read_lstats
         snapshot = snapshot_file_deps(set(paths), known, **extra)
     if urls:
         snapshot.update(snapshot_remote_deps(urls))

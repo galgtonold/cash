@@ -3455,7 +3455,7 @@ multiple of 8 inside the memory the process uses.
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
 <!-- claim: cash/decorator/file_deps.py:FileDeps.inputs_moved_during_call @7d2264c0, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @803cd545 -->
-<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @4364ed7d, cash/tracking/file_dep_snapshot.py:snapshot_file_deps @c2002cea -->
+<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @4364ed7d, cash/tracking/file_dep_snapshot.py:snapshot_file_deps @c3b72772 -->
 <!-- claim: cash/notebook/statement/store.py:StatementStore.inputs_moved @0669c2ad, cash/notebook/statement/processor.py:StatementProcessor._post_execute @a8c3dc59 -->
 === "Decorator"
 
