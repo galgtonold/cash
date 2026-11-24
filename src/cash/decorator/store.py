@@ -770,6 +770,7 @@ class ResultStore:
                 # `frozen=True` does not look undecorated to the rate ceiling
                 # and lose disk persistence.
                 copy_required=not self._registry.is_frozen(func_name),
+                frozen=self._registry.is_frozen(func_name) or None,
                 read_only=_read_only_array(result) or None,
                 content_digest=self._frozen_digest(func_name, result),
                 result_ref=(result_ref := self._result_ref(func_name, result)),

@@ -96,7 +96,7 @@ less; [the CLI page](../cli.md) has every option.
 
 ## The tiers
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @bae8b089, cash/backends/memory_backend.py:_cheap_to_keep @ef9b9285 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @91b58e42, cash/backends/memory_backend.py:_cheap_to_keep @ef9b9285 -->
 | Tier | Where | Survives a restart? |
 |------|-------|---------------------|
 | Memory | RAM | No |
@@ -105,7 +105,9 @@ less; [the CLI page](../cli.md) has every option.
 A read tries memory first. A polars `DataFrame`, `Series` or `LazyFrame`
 found on disk is kept in memory for the next read without a copy (see below). Any other value found on disk, a pandas table among them, is
 copied into memory on its second read from disk in the same process, so a
-value read once after a restart costs no extra copy. A decorated function's
+value read once after a restart costs no extra copy. A `frozen=True`
+function's result is kept on its first read, as the object every later hit
+hands back ([`frozen=`](../decorator.md#frozen-and-large-arguments)). A decorated function's
 result that holds 1 MiB or more of arrays goes to disk alone when it is
 stored, and into memory on its first hit. Neither is kept when it
 would take more than 90% of the memory cap. A value of which the memory tier
@@ -113,7 +115,7 @@ would have to copy 64 MB or more goes to the disk tier alone when it is
 stored, and is not kept in memory when it is read either; when no disk tier
 takes it, memory keeps it as usual.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @4d56c7f5, cash/backends/frame_sharing.py:_freeze @d40098df, cash/backends/frame_sharing.py:own_parts @bd7577a7, cash/backends/tiered_backend.py:TieredBackend.get @bae8b089, cash/backends/memory_backend.py:_copy_polars @d34b28a6 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @4d56c7f5, cash/backends/frame_sharing.py:_freeze @d40098df, cash/backends/frame_sharing.py:own_parts @bd7577a7, cash/backends/tiered_backend.py:TieredBackend.get @91b58e42, cash/backends/memory_backend.py:_copy_polars @d34b28a6 -->
 The memory tier keeps a copy of each value that only it holds, so nothing you
 do to a value you were handed reaches the stored one, or the other way round.
 Under pandas copy-on-write (pandas 3, or `pd.options.mode.copy_on_write = True`
@@ -166,7 +168,7 @@ The Python objects in an `Object` column are copied.
 tiers; see
 [choosing a backend](../tutorials/feature-guides/choosing-a-backend.md).
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @bae8b089, cash/backends/_base.py:effective_ttl @c0f1dab8 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @91b58e42, cash/backends/_base.py:effective_ttl @c0f1dab8 -->
 An entry's ttl is checked on every tier's copy as it is read, so the memory
 copy expires with the disk copy, and a backend used on its own applies the
 same rule. The ttl is the decorator's `ttl=`, or else the shorter of the ttl
@@ -266,7 +268,7 @@ notebook statement also drops its older versions when the new one is written.
 
 ## When a result reaches the disk
 
-<!-- claim: cash/backends/_writes.py:PendingWrites.wait_for_backlog @252b9ad2, cash/backends/_writes.py:MAX_BACKLOG_S == 2.0, cash/backends/_writes.py:_finish_before_child @342230fe, cash/backends/file_backend.py:_finish_before_listing @891535e1, cash/backends/file_backend.py:FileBackend.get @8a07544f -->
+<!-- claim: cash/backends/_writes.py:PendingWrites.wait_for_backlog @252b9ad2, cash/backends/_writes.py:MAX_BACKLOG_S == 2.0, cash/backends/_writes.py:_finish_before_child @342230fe, cash/backends/file_backend.py:_finish_before_listing @891535e1, cash/backends/file_backend.py:FileBackend.get @77be7187 -->
 The disk write runs on a background thread, and your code carries on while it
 does. cash waits for a write only when something needs it on disk:
 
@@ -334,7 +336,7 @@ killed process was still writing is missing, and is computed again.
 
 ## Turning objects into bytes
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @9ae74e54, cash/backends/serialization.py:PickleSerializer.serialize @d8e20083 -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @68588b08, cash/backends/serialization.py:PickleSerializer.serialize @d8e20083 -->
 Every result is stored with `pickle` (protocol 5), pandas DataFrames
 included, so a hit hands back the same frame: its class, index, dtypes, cell
 types, `attrs` and `flags`. Pickle is several times faster than Parquet to
@@ -443,7 +445,7 @@ restart, an out-of-memory kill) leaves that file behind. The first write of a
 later process on the same machine removes it; one left by another machine
 goes once nobody has written to it for a day.
 
-<!-- claim: cash/backends/entry_format.py:update_metadata_in_place @ec1993ba, cash/backends/file_backend.py:FileBackend.get @8a07544f -->
+<!-- claim: cash/backends/entry_format.py:update_metadata_in_place @ec1993ba, cash/backends/file_backend.py:FileBackend.get @77be7187 -->
 Several processes can share one folder. Each one counts the reads of the
 entries it used and writes those counts back later. When another process has
 stored a new result under the same entry meanwhile, the next read takes the

@@ -42,7 +42,7 @@ from typing import Any
 from . import _weak, value_watch
 from ._native import cwatch as _cw
 
-__all__ = ["Handed", "MAX_MISSES", "release", "retain", "reuse"]
+__all__ = ["Handed", "MAX_MISSES", "release", "retain", "reuse", "unwatch", "watch", "watched"]
 
 #: Hits in a row that could not reuse the copy before an entry's copies are
 #: no longer kept.
@@ -129,6 +129,49 @@ def reuse(handed: Handed) -> Any:
     except Exception:  # noqa: BLE001 - not provable: a new copy
         return NONE
     return NONE if made is None else (made, False)
+
+
+def watch(value: Any) -> tuple[object, int] | None:
+    """Arm the watchers on *value*, a copy a hit of a ``frozen=True``
+    entry just read, for `watched`: ``(token, size)``, or None when they
+    cannot follow it. Who else holds it is not asked: the frozen promise
+    waives that (`backends.frozen_handback`)."""
+    if not _ON:
+        return None
+    try:
+        status = value_watch.arm_value(value)
+        if status != _cw.ARMED and status != _cw.ALREADY:
+            return None
+        token = object()
+        if not _cw.commit(value, value_watch.KIND_HANDED, token, 0.0):
+            _cw.forget(value)
+            return None
+        info = _cw.info(value)
+        if not info or info.get("views"):
+            _cw.forget(value)
+            return None
+        return token, int(info.get("content_bytes") or 0)
+    except Exception:  # noqa: BLE001 - not kept: the next hit reads a new copy
+        unwatch(value)
+        return None
+
+
+def watched(value: Any, token: object) -> str:
+    """Is *value*, armed by `watch` with *token*, unchanged? ``"same"``;
+    ``"changed"`` when the watchers saw it written; ``"unknown"`` when they
+    no longer follow it (its watch dropped for room, or armed anew)."""
+    if _cw.peek(value, value_watch.KIND_HANDED) is token:
+        return "same"
+    info = _cw.info(value)
+    return "changed" if info and info.get("dirty") else "unknown"
+
+
+def unwatch(value: Any) -> None:
+    """Disarm what `watch` armed."""
+    try:
+        _cw.forget(value)
+    except Exception:  # noqa: BLE001 - a value the watchers never took needs no forgetting
+        pass
 
 
 def release(handed: Handed) -> None:

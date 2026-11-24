@@ -42,7 +42,7 @@ from ..cost_model import GENERIC_FAMILY
 from ..sizing import memory_footprint, pickled_size_estimate, slot_values
 from ..source_reading import read_code_file
 from ..value_types import IMMUTABLE_PRIMS
-from . import block_digests, frame_sharing, heap_blocks, iterative_copy, set_order, shared_blocks
+from . import block_digests, frame_sharing, frozen_handback, heap_blocks, iterative_copy, set_order, shared_blocks
 from ._base import MEASURED_ROUND_TRIP, CacheBackend, MetadataDict, gdsf_value
 from .entry_format import SplitPayload
 from .no_file_writes import WouldWriteAFile, no_file_writes, refused_now, would_write_a_file
@@ -202,6 +202,24 @@ class _ReadOut:
 
 #: Most copies kept for the next hit per tier (`handed_copies`).
 _MAX_HANDED = 8
+
+#: Most objects kept for the hits of ``frozen=True`` entries per tier
+#: (`frozen_handback`).
+_MAX_FROZEN = 64
+
+
+def _keeps_frozen(metadata: MetadataDict) -> bool:
+    """Does an entry of *metadata* hand its hits one kept object
+    (``frozen=True``, `frozen_handback`)? Not one whose hit puts objects
+    back into the value or writes into the caller's arguments: that would
+    change the kept object."""
+    return bool(
+        metadata.get("frozen")
+        and not metadata.get("held_refs")
+        and not metadata.get("result_ref")
+        and not metadata.get("args_left")
+    )
+
 
 #: The hit in a row, counted from 1, that gets a copy made from the kept one
 #: while something outside holds that and keeps the new copy in its place
@@ -753,6 +771,12 @@ class InMemoryBackend(CacheBackend):
         #: Keys whose kept bytes keep the copy a hit handed out for the next
         #: one (`handed_copies`), least recently handed first.
         self._handed: dict[str, _Pickled | _Marshalled] = {}
+        #: The objects hits of ``frozen=True`` entries handed out, handed
+        #: back by every hit after while unchanged (`frozen_handback`),
+        #: least recently handed first.
+        self._frozen: dict[str, frozen_handback.Kept] = {}
+        #: Keys whose kept object was seen changed, said once each.
+        self._frozen_warned: builtins.set[str] = builtins.set()
 
     #: How far the machine's memory percent must climb within one pressure
     #: episode before the tier takes a fresh share rather than holding flat.
@@ -1432,7 +1456,7 @@ class InMemoryBackend(CacheBackend):
             _remember_own_polars(frame)  # read from disk: its store is a clone
         return self.set(key, value, metadata) is not False
 
-    def keep_read(self, key: str, holder: list, metadata: MetadataDict, stream: bytes, seconds: float) -> None:
+    def keep_read(self, key: str, holder: list, metadata: MetadataDict, stream: bytes | None, seconds: float) -> None:
         """Keep ``holder[0]``, a value a slower tier just unpickled out of
         *stream* and nothing has touched since, as `set` keeps it; *holder*
         is its only reference, and holds the value to hand out after.
@@ -1449,8 +1473,8 @@ class InMemoryBackend(CacheBackend):
         value = holder[0]
         kind = type(value)
         top_class = None if kind is dict or _copied_as_data(kind) else class_key(kind)
-        kept = _Pickled(stream, [], [], top_class)
-        _PREMADE.entry = (value, kept)
+        kept = _Pickled(stream, [], [], top_class) if stream is not None else None
+        _PREMADE.entry = (value, kept) if kept is not None else None
         try:
             stored = self.set(key, value, metadata)
         finally:
@@ -1461,8 +1485,17 @@ class InMemoryBackend(CacheBackend):
             return
         with self._lock:
             entry = self._store.get(key)
-            if entry is None or entry[1] is not kept:
+            if entry is None or entry[0] is not metadata:
                 return
+            frozen = _keeps_frozen(metadata)
+            if not frozen and entry[1] is not kept:
+                return
+        if frozen:
+            # The stored entry is a copy of its own, or the very bytes the
+            # value was read out of: the value is the caller's, kept for
+            # the hits after as any copy a frozen hit hands out.
+            holder[0] = self._keep_frozen(key, entry[1], holder)
+            return
         self._keep_handed(key, _ReadOut(None, kept, seconds, False), holder)
 
     def peek_metadata(self, key: str) -> MetadataDict | None:
@@ -1613,6 +1646,15 @@ class InMemoryBackend(CacheBackend):
             return metadata
 
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
+        # Read without the lock: only a hint, checked again under it before
+        # a copy is kept for the entry (`_keep_frozen`).
+        entry = self._store.get(key)
+        stored = entry[1] if entry is not None and _keeps_frozen(entry[0]) else None
+        del entry
+        if stored is not None and key in self._frozen:
+            found = self._frozen_hit(key)
+            if found is not None:
+                return found
         phase = phase_times.sub_begin(phase_times.READ_DECODE) if phase_times.ON else None
         try:
             metadata, value = self._get_copy(key)
@@ -1637,10 +1679,84 @@ class InMemoryBackend(CacheBackend):
             if not value.cloned:
                 # A copy made from the handed one is laid out as it is.
                 set_order.restore(value.value, metadata)
+            if stored is not None:
+                holder = [value.value]
+                value.value = None
+                return metadata, self._keep_frozen(key, stored, holder)
             return metadata, self._keep_handed(key, value)
         # The copy's sets iterate as the stored ones do (`set_order`).
         set_order.restore(value, metadata)
+        if stored is not None and metadata is not None:
+            holder = [value]
+            del value
+            return metadata, self._keep_frozen(key, stored, holder)
         return metadata, value
+
+    def _frozen_hit(self, key: str) -> tuple[MetadataDict, Any] | None:
+        """A hit of a ``frozen=True`` entry: the object the last hit handed
+        out, while it is proved unchanged (`frozen_handback.check`); None
+        when the hit reads a new copy. A kept object seen changed is let
+        go, and KEY-FROZEN-MUTATED said once for the entry."""
+        changed = None
+        with self._lock:
+            kept = self._frozen.get(key)
+            if kept is None:
+                return None
+            entry = self._store.get(key)
+            if entry is None or entry[1] is not kept.stored:
+                self._release_frozen(key)
+                return None
+            verdict = frozen_handback.check(kept)
+            if verdict == frozen_handback.SAME:
+                metadata = entry[0]
+                metadata["last_access"] = time.time()
+                metadata["access_count"] = metadata.get("access_count", 0) + 1
+                metadata.setdefault("source", self.source_label)
+                self._touch(key)
+                self._frozen[key] = self._frozen.pop(key)
+                return metadata, kept.value
+            if verdict == frozen_handback.CHANGED and key not in self._frozen_warned:
+                self._frozen_warned.add(key)
+                changed = (kept.value, entry[0].get("func_name"))
+            self._release_frozen(key)
+        if changed is not None:
+            frozen_handback.warn_changed(*changed)
+        return None
+
+    def _keep_frozen(self, key: str, stored: Any, holder: list) -> Any:
+        """Hand out ``holder[0]``, a copy just read out of *stored*, the
+        value of *key*'s ``frozen=True`` entry, and keep it for the hits
+        after (`frozen_handback.keep`) while the entry is still *stored*.
+        *holder* holds the only reference to it."""
+        with self._lock:
+            entry = self._store.get(key)
+            if entry is None or entry[1] is not stored:
+                return holder[0]
+            kept = frozen_handback.keep(holder[0])
+            if kept is None:
+                return holder[0]
+            self._release_frozen(key)
+            kept.stored = stored
+            self._frozen[key] = kept
+            self._trim_frozen()
+            return kept.value
+
+    def _release_frozen(self, key: str) -> None:
+        """Stop keeping the object hits of *key* hand back. Lock held."""
+        kept = self._frozen.pop(key, None)
+        if kept is not None:
+            frozen_handback.release(kept)
+
+    def _trim_frozen(self) -> None:
+        """Keep at most `_MAX_FROZEN` objects for frozen entries, of at most
+        a quarter of the byte cap together (256 MiB without one), as for
+        handed copies (`_trim_handed`). Lock held."""
+        cap = self._max_size_bytes // 4 if self._max_size_bytes else 256 << 20
+        while len(self._frozen) > 1:
+            total = sum(kept.content for kept in self._frozen.values())
+            if len(self._frozen) <= _MAX_FROZEN and total <= cap:
+                return
+            self._release_frozen(next(iter(self._frozen)))
 
     def _keep_handed(self, key: str, read: _ReadOut, holder: list | None = None) -> Any:
         """Hand out *read*'s copy, kept for the next hit of *key* when it
@@ -2241,6 +2357,7 @@ class InMemoryBackend(CacheBackend):
             previous = self._store.get(key)
             if previous is not None:
                 self._current_size_bytes -= previous[0].get("size", 0)
+                self._release_frozen(key)
             self._store[key] = (metadata, stored)
             self._touch(key)
             if immutable:
@@ -2336,6 +2453,7 @@ class InMemoryBackend(CacheBackend):
         self._gdsf_base.pop(key, None)
         self._seq_by_key.pop(key, None)
         self._release_handed(key)
+        self._release_frozen(key)
         entry = self._store.pop(key, None)
         if entry is not None:
             self._current_size_bytes -= entry[0].get("size", 0)
@@ -2359,6 +2477,9 @@ class InMemoryBackend(CacheBackend):
             self._seq_by_key.clear()
             for key in list(self._handed):
                 self._release_handed(key)
+            for key in list(self._frozen):
+                self._release_frozen(key)
+            self._frozen_warned.clear()
             self._current_size_bytes = 0
             self._pressure_floor = None
             self._pressure_percent = None
