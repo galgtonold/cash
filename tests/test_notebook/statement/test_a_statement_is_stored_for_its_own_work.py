@@ -11,6 +11,7 @@ cost, which a hit is credited with, stays the whole cost.
 
 from __future__ import annotations
 
+import gc
 import time
 
 import pytest
@@ -97,6 +98,22 @@ def _setup(magics):
     run_cash_cell(magics, "a = list(range(1000))")
 
 
+def _run(magics, code):
+    """Run *code* as a cell, with the garbage earlier tests left freed first.
+
+    A collection starts wherever an allocation makes it, and a ``__del__``
+    of the user's it runs inside a statement (an earlier test's ``Litter``
+    or ``Node`` cycles) keeps that statement out of the cache this once
+    (``COLLECTED_ONLY_REASON``, `test_a_finalizer_run_during_a_statement_is_not_its_work.py`):
+    no entry at all, so a check of what the entry holds failed with
+    ``value`` None on a macOS runner, part way through the full suite, and a
+    check that it keeps no value passed for the wrong reason, or found no
+    disk record. Cash is right to refuse that run; the test is about the
+    statement's own price, so the garbage is freed before it."""
+    gc.collect()
+    run_cash_cell(magics, code)
+
+
 def _floor_between_own_work_and_the_call(magics):
     """Pin the statement floor between a statement's own work and the 0.2 s
     call inside it, for a test that a statement is judged by the former.
@@ -123,7 +140,7 @@ def test_a_cheap_rest_around_a_cached_call_keeps_no_value(tiers, mock_shell):
     magics, ram, disk = tiers
     _floor_between_own_work_and_the_call(magics)
     _setup(magics)
-    run_cash_cell(magics, "b = shifted(a) + [1]")
+    _run(magics, "b = shifted(a) + [1]")
     assert mock_shell.user_ns["b"] == [*range(1000), 1]
     assert _entry(ram, "shifted(a) + [1]") == (None, None), "the statement kept a second copy of the call's result"
     meta = _metadata(disk, "shifted(a) + [1]")
@@ -134,7 +151,7 @@ def test_a_cheap_rest_around_a_cached_call_keeps_no_value(tiers, mock_shell):
 
     # Run again: the call is served, the rest recomputes, the value is right.
     mock_shell.user_ns.pop("b")
-    run_cash_cell(magics, "b = shifted(a) + [1]")
+    _run(magics, "b = shifted(a) + [1]")
     assert mock_shell.user_ns["b"] == [*range(1000), 1]
 
 
@@ -143,8 +160,8 @@ def test_a_statement_missing_while_its_call_hits_keeps_no_value(tiers, mock_shel
     magics, ram, disk = tiers
     _floor_between_own_work_and_the_call(magics)
     _setup(magics)
-    run_cash_cell(magics, "b = shifted(a) + [1]")
-    run_cash_cell(magics, "c = shifted(a) + [2]")
+    _run(magics, "b = shifted(a) + [1]")
+    _run(magics, "c = shifted(a) + [2]")
     assert mock_shell.user_ns["c"] == [*range(1000), 2]
     assert _entry(ram, "shifted(a) + [2]") == (None, None)
     meta = _metadata(disk, "shifted(a) + [2]")
@@ -158,10 +175,44 @@ def test_a_statement_whose_own_work_is_expensive_is_stored(tiers, mock_shell):
     magics, ram, disk = tiers
     _setup(magics)
     code = "b = shifted(a) + [time.sleep(0.2)]"
-    run_cash_cell(magics, code)
+    _run(magics, code)
     meta, value = _entry(ram, code)
+    assert value is not None, "the statement was not stored"
     assert value["variables"]["b"][-1] is None
     assert meta["store_time"] >= 0.15, meta
+
+
+def test_garbage_an_earlier_test_left_does_not_keep_the_statement_out(tiers, mock_shell, monkeypatch):
+    """`_run` frees the garbage of the user's left before the statement, which
+    a collection inside it would free (`Litter`, as an earlier test leaves).
+
+    The collection is made to start inside the statement by a stand-in for
+    ``time.sleep``. Being a function of the user's, it is a call of its own,
+    which the entry refers to; so only that the statement was stored is
+    checked here, its contents above."""
+    from tests.test_notebook.statement.test_a_finalizer_run_during_a_statement_is_not_its_work import Litter
+
+    magics, ram, _disk = tiers
+    _setup(magics)
+    sleep = time.sleep
+
+    def collecting_sleep(seconds):
+        gc.collect()  # where an allocation might have started one
+        sleep(seconds)
+
+    was = gc.isenabled()
+    gc.disable()  # no collection but the ones asked for
+    try:
+        Litter()
+        monkeypatch.setattr(time, "sleep", collecting_sleep)
+        code = "b = shifted(a) + [time.sleep(0.2)]"
+        _run(magics, code)
+    finally:
+        if was:
+            gc.enable()
+    _meta, value = _entry(ram, code)
+    assert value is not None, "the statement was kept out for garbage earlier work left"
+    assert mock_shell.user_ns["b"] == [*range(1000), None]
 
 
 def test_a_plain_call_result_keeps_its_reference_entry(tiers, mock_shell):
@@ -171,7 +222,7 @@ def test_a_plain_call_result_keeps_its_reference_entry(tiers, mock_shell):
     from cash.notebook.call_refs import CallRef
 
     _setup(magics)
-    run_cash_cell(magics, "b = shifted(a)")
+    _run(magics, "b = shifted(a)")
     meta, value = _entry(ram, "b = shifted(a)")
     assert isinstance(value["variables"]["b"], CallRef)
 
@@ -180,7 +231,7 @@ def test_persist_still_stores_the_value(tiers, mock_shell):
     magics, ram, disk = tiers
     _setup(magics)
     code = "# @cash:persist\nb = shifted(a) + [1]"
-    run_cash_cell(magics, code)
+    _run(magics, code)
     meta, value = _entry(ram, "shifted(a) + [1]")
     assert value["variables"]["b"][-1] == 1
 
@@ -194,13 +245,13 @@ def test_a_file_read_inside_a_cached_call_does_not_waive_the_floor(tiers, mock_s
     path.write_text("hello", encoding="utf-8")
     _floor_between_own_work_and_the_call(magics)
     _setup(magics)
-    run_cash_cell(magics, f"t = load(r'{path}') + '!'")
+    _run(magics, f"t = load(r'{path}') + '!'")
     assert mock_shell.user_ns["t"] == "hello!"
     assert _entry(ram, "load(") == (None, None)
     assert _metadata(disk, "load(").get("metadata_only")
 
     # The control: the same read made by the statement itself waives it.
-    run_cash_cell(magics, f"u = open(r'{path}').read() + '!'")
+    _run(magics, f"u = open(r'{path}').read() + '!'")
     meta, value = _entry(ram, "open(")
     assert value["variables"]["u"] == "hello!"
 
@@ -212,8 +263,8 @@ def test_a_cheap_statement_over_it_is_not_kept_for_rebuilding_the_call(tiers, mo
     magics, ram, disk = tiers
     _floor_between_own_work_and_the_call(magics)
     _setup(magics)
-    run_cash_cell(magics, "b = shifted(a) + [1]")
-    run_cash_cell(magics, "n = len(b)")
+    _run(magics, "b = shifted(a) + [1]")
+    _run(magics, "n = len(b)")
     assert mock_shell.user_ns["n"] == 1001
     assert _entry(ram, "len(b)") == (None, None)
     with pytest.raises(AssertionError):
@@ -235,6 +286,7 @@ def test_under_cache_fit_the_fit_is_the_statements_own_work(cash_magics, clean_b
 
     def run(code):
         node = ast.parse(code).body[0]
+        gc.collect()  # as `_run`
         return magics._statement_processor.process_statement(
             ast.unparse(node), annotation=get_statement_annotations(code, node)
         )
@@ -278,8 +330,8 @@ def test_a_call_under_the_persistence_floor_is_the_statements_work(tiers, mock_s
     turns = _loop_count_for(target)
     for attempt in range(4):
         name = f"quick{attempt}"
-        run_cash_cell(magics, f"def {name}(x):\n    for _ in range({turns}):\n        pass\n    return list(x)")
-        run_cash_cell(magics, f"b = {name}(a) + [1]")
+        _run(magics, f"def {name}(x):\n    for _ in range({turns}):\n        pass\n    return list(x)")
+        _run(magics, f"b = {name}(a) + [1]")
         try:
             quick_s = _call_seconds(ram, name)
         except AssertionError:  # not stored: under the store floor
@@ -301,7 +353,7 @@ def test_a_call_whose_result_a_method_is_called_on_is_a_call_unit(tiers, mock_sh
     magics, ram, disk = tiers
     _floor_between_own_work_and_the_call(magics)
     _setup(magics)
-    run_cash_cell(magics, "b = shifted(a).count(5)")
+    _run(magics, "b = shifted(a).count(5)")
     assert mock_shell.user_ns["b"] == 1
     calls = [m for m in ram.list_entries() or () if str(m.get("key", "")).startswith("call:")]
     assert [str(m.get("function")).rsplit(".", 1)[-1] for m in calls] == ["shifted"], calls
