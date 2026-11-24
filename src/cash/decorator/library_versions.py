@@ -40,6 +40,7 @@ from .._lazy_module import LazyModule
 from .._location import per_user_cache_root
 from .._type_memo import class_module, class_qualname
 from .._user_attrs import importable_attr, plain_getattr
+from ..analysis.bytecode import instructions
 from ..backends.cache_dir import LIBRARY_MAP_FILENAME, LIBRARY_RECORDS_FILENAME
 from ..install_paths import in_own_package, is_cash_path, is_user_path, top_package
 from ..jit_functions import jit_python_function
@@ -903,15 +904,21 @@ def _imported_modules(code: types.CodeType) -> tuple[str, ...]:
         if not c.co_names or _IMPORT_NAME not in c.co_code[::2]:
             continue
         try:
-            ins = list(dis.get_instructions(c))
+            # ``dis.get_instructions``'s (opname, argval), read in one loop:
+            # it built an object per instruction, and a fresh process's
+            # first keys read the code of every helper they reach. Without
+            # the ``EXTENDED_ARG`` prefixes, whose argument is folded into
+            # the instruction after them: past 255 names, one stood between
+            # the import and its level, and the import went unseen.
+            ins = [i for i in instructions(c) if i[0] != "EXTENDED_ARG"]
         except Exception:  # noqa: BLE001 - code dis cannot read imports nothing it can name
             continue
-        for k, i in enumerate(ins):
+        for k, (opname, argval) in enumerate(ins):
             # ``LOAD_CONST level`` comes before ``IMPORT_NAME``: 0 is absolute.
-            if i.opname == "IMPORT_NAME" and isinstance(i.argval, str) and k >= 2:
-                level = ins[k - 2].argval
+            if opname == "IMPORT_NAME" and isinstance(argval, str) and k >= 2:
+                level = ins[k - 2][1]
                 if level == 0:
-                    found[i.argval] = None
+                    found[argval] = None
     out = tuple(found)
     if len(_IMPORTED) > 4096:
         _IMPORTED.clear()

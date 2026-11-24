@@ -95,6 +95,27 @@ def _read_text(path: str) -> tuple[bytes, str] | None:
     return source, hashlib.blake2b(source, digest_size=20).hexdigest()
 
 
+#: path -> (file_version, `_read_text`) for a file read once it had settled.
+_TEXTS: LruMemo[str, tuple[tuple[int, int, int, int], tuple[bytes, str]]] = LruMemo(COMPILED_MODULES)
+
+
+def _settled_text(path: str, st: os.stat_result) -> tuple[bytes, str] | None:
+    """`_read_text` (*path*), *st* its stat just taken, read once per file
+    version once the file has settled (`stat_has_settled`, asked before the
+    read): a module whose ``.pyc`` proves nothing (an install that wrote it
+    in the source's mtime tick) was read and digested again for each of its
+    functions a key checked."""
+    version = file_version(st)
+    held = _TEXTS.get(path)
+    if held is not None and held[0] == version:
+        return held[1]
+    settled = stat_has_settled(st)
+    text = _read_text(path)
+    if settled and text is not None:
+        _TEXTS[path] = (version, text)
+    return text
+
+
 def _compiled_text(path: str, text: tuple[bytes, str]) -> tuple[types.CodeType | None, tuple[str, ...]]:
     """*text* (`_read_text`) compiled as the file at *path*, with its lines;
     kept per path and found again by the text's digest."""
@@ -399,7 +420,8 @@ def loaded_code_matches_disk(fn: object) -> bool:
         # file it is defined in holds it now, or nothing does.
         return relocated_source_lines(fn, code) is not None
     try:
-        if _pyc_proves_unchanged(path, os.stat(path)):
+        st = os.stat(path)
+        if _pyc_proves_unchanged(path, st):
             return True
     except OSError:
         return True
@@ -408,7 +430,7 @@ def loaded_code_matches_disk(fn: object) -> bool:
     # text once -- here or by an earlier process -- and found again by the
     # text's digest. Reading and digesting the file costs a fraction of
     # compiling it, which a process paid for every helper file it checked.
-    text = _read_text(path)
+    text = _settled_text(path, st)
     if text is None:
         return False  # gone between the stat and the read: not what runs
     record = _record(path, text[1])

@@ -133,6 +133,10 @@ def test_a_cell_using_open_keys_as_it_did_through_inspect(mock_shell, cash_insta
     from IPython.core.interactiveshell import _modified_open
 
     monkeypatch.chdir(tmp_path)
+    # Each read worked out here: a block kept from an earlier read of the
+    # same file (`source_reading._kept_block`) would leave the control below
+    # nothing to see.
+    monkeypatch.setenv("CASH_ANALYSIS_STORE", "0")
     (tmp_path / "f.txt").write_text("some text", encoding="utf-8")
     mock_shell.user_ns["open"] = _modified_open
     cell = "text = open('f.txt').read()"

@@ -1808,7 +1808,7 @@ message, so cash can record that read.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/loaded_code.py:loaded_code_matches_disk @aa944245, cash/decorator/function_identity.py:warn_source_changed_since_load @767f9eca -->
+<!-- claim: cash/loaded_code.py:loaded_code_matches_disk @b9b7f6e5, cash/decorator/function_identity.py:warn_source_changed_since_load @767f9eca -->
 <!-- claim: cash/loaded_code.py:_pyc_proves_unchanged @42e99e55 -->
 **What happened.** A file holding a cached function or a helper was edited
 after this process imported it, or the import loaded bytecode compiled from an

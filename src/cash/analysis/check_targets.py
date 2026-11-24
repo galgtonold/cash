@@ -64,23 +64,52 @@ def function_only_tests_against(func: Any, name: str, cls: type) -> bool:
     slot = (code, name)
     got = _TESTS_ONLY.get(slot)
     if got is None:
-        got = False
         try:
             src = textwrap.dedent(own_source(func))
-            tree = tree_memo.parse(src, code.co_filename)
-        except (*SOURCE_RETRIEVAL_ERRORS, SyntaxError):
-            tree = None
-        func_def = (
-            next((n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))), None)
-            if tree is not None
-            else None
-        )
-        if func_def is not None and func_def.name == code.co_name:
-            got = named_only_as_check_target(func_def, name, func.__globals__)
+        except SOURCE_RETRIEVAL_ERRORS:
+            src = None
+        got = False if src is None else _tests_only_in(src, code, name, func.__globals__)
         if len(_TESTS_ONLY) > 4096:
             _TESTS_ONLY.clear()
         _TESTS_ONLY[slot] = got
     return got
+
+
+def _tests_only_in(src: str, code: types.CodeType, name: str, namespace: dict[str, Any]) -> bool:
+    """`function_only_tests_against` read from *src*, the function's
+    dedented text: what `named_only_as_check_target` answers for its first
+    function definition, when that is the one *code* runs. Kept across
+    processes (`text_store`) with the text, the name, the function's name
+    and which of the tests its globals leave to the builtins -- all it
+    reads -- so a fresh process does not parse and walk every helper that
+    names a class again."""
+    tests = _tests_in(namespace)
+
+    def compute() -> bool:
+        try:
+            tree = tree_memo.parse(src, code.co_filename)
+        except SyntaxError:
+            return False
+        func_def = next((n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))), None)
+        if func_def is None or func_def.name != code.co_name:
+            return False
+        return _only_check_target(func_def, name, tests)
+
+    def decoded(value: Any) -> bool:
+        if type(value) is not bool:
+            raise ValueError("not a verdict")
+        return value
+
+    from . import text_store
+
+    extra = "\0".join((name, code.co_name, *sorted(tests)))
+    return text_store.kept("check-target-only", src, extra, compute, bool, decoded)
+
+
+def _tests_in(namespace: dict[str, Any]) -> set[str]:
+    """The builtin tests (`_TESTS`) a function with globals *namespace*
+    calls by their names: those its globals do not rebind."""
+    return {t for t in _TESTS if namespace.get(t, getattr(builtins, t)) is getattr(builtins, t)}
 
 
 def named_only_as_check_target(func_def: ast.AST, name: str, namespace: dict[str, Any]) -> bool:
@@ -92,9 +121,14 @@ def named_only_as_check_target(func_def: ast.AST, name: str, namespace: dict[str
     False when *name* or such a parameter is bound anywhere in it, or when
     it reads its own locals by a string (``locals()``, ``eval``).
     """
+    return _only_check_target(func_def, name, _tests_in(namespace))
+
+
+def _only_check_target(func_def: ast.AST, name: str, tests: set[str]) -> bool:
+    """`named_only_as_check_target`, the builtin tests the function calls
+    by name given as *tests*."""
     if not isinstance(func_def, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
         return False
-    tests = {t for t in _TESTS if namespace.get(t, getattr(builtins, t)) is getattr(builtins, t)}
     parents = _parents(func_def)
     params = _parameters_defaulting_to(func_def, name, parents)
     if params is None:
