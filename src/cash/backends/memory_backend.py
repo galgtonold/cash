@@ -208,7 +208,19 @@ _MAX_HANDED = 8
 #: (`InMemoryBackend._read_pickled`). Not the first: watching the new copy
 #: costs more than making it, and a caller holding one result once (a
 #: tokenizer keeping the trie it was given) need not pay it on that hit.
+#: Again at twice the count each time (`_adopts_at`): a copy kept in the
+#: held one's place can be held in turn (a library keeping each trie it is
+#: given by its id), and the callers after it let go of theirs again.
 _ADOPT_AT_CLONE = 2
+
+
+def _adopts_at(clones: int) -> bool:
+    """Whether the *clones*-th copy in a row made from a held kept copy is
+    kept in its place: the `_ADOPT_AT_CLONE`-th, then each count twice the
+    last, so a caller holding every copy it gets pays a new watch on a
+    vanishing share of its hits."""
+    runs, left = divmod(clones, _ADOPT_AT_CLONE)
+    return runs > 0 and left == 0 and (runs & (runs - 1)) == 0
 
 
 def _load_pickled(stream: bytes, buffers: list[bytes], readonly: list[bool]) -> Any:
@@ -1786,7 +1798,7 @@ class InMemoryBackend(CacheBackend):
                     if reused:
                         kept.misses = kept.clones = 0
                     kept.clones += not reused
-                    if reused or kept.clones != _ADOPT_AT_CLONE:
+                    if reused or not _adopts_at(kept.clones):
                         # The kept copy, or one made from it while
                         # something outside holds it: either way laid
                         # out as the bytes lay it out, and nothing to keep.
@@ -1795,9 +1807,11 @@ class InMemoryBackend(CacheBackend):
                     # Held again: the holder keeps it, so the new copy is
                     # kept in its place (`_keep_handed`), and the hits
                     # after, whose callers let go, hand that one back
-                    # instead of copying the held one every time. Once
-                    # per run of such hits: a caller holding every copy
-                    # it gets is not paid a new watch for each.
+                    # instead of copying the held one every time. At
+                    # doubling counts of such hits (`_adopts_at`): a
+                    # caller holding every copy it gets is not paid a new
+                    # watch for each, and one holding the kept copy in
+                    # turn does not leave every later hit copying.
                     self._release_handed(key)
                     return metadata, _ReadOut(made, kept, time.perf_counter() - started, False, True)
                 kept.misses += 1

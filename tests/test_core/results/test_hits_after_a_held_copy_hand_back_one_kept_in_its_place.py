@@ -166,3 +166,25 @@ def test_a_handed_back_copy_changed_is_not_handed_back(word_trie, made, change):
     assert after.words() == PLAIN
     assert after.tags == [("trie", 1), ["mutable", "tag"]]
     assert HOLDER[0].words() == PLAIN
+
+
+def test_a_kept_copy_held_again_is_replaced_again(word_trie, made):
+    # A library keeping each copy it is given by its id (PyThaiNLP's
+    # longest-match tokenizers) holds the copy kept in the first one's
+    # place too: the hits after, whose callers let go, still get one copy
+    # back once a later copy is kept in its place.
+    second_holder = []
+    released_hit(word_trie)
+    second_holder.append(word_trie())  # the copy kept in the held one's place, held too
+    for _ in range(8):
+        released_hit(word_trie)
+    kept = released_hit(word_trie)
+    made.clear()
+    for _ in range(3):
+        again = word_trie()
+        assert id(again) == kept, "a released, unchanged copy is handed back"
+        assert again is not HOLDER[0] and again is not second_holder[0]
+        assert again.words() == PLAIN
+        del again
+    assert made == [], "no hit made a new copy"
+    assert second_holder[0].words() == PLAIN
