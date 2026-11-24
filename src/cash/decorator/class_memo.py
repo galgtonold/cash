@@ -41,17 +41,13 @@ from __future__ import annotations
 
 import abc
 import os
-import sys
-import threading
-import types
 from collections.abc import Callable
 from typing import Any
 
 from .. import _native, _weak
 from .._memo import LruMemo
 from .._type_memo import class_module, class_qualname
-from .._user_attrs import plain_getattr
-from . import hit_memo, state_memo
+from . import hit_memo, main_rebinding, state_memo
 
 __all__ = [
     "CALLEE_STATES_BUILT",
@@ -199,7 +195,7 @@ class _Proof:
                 return False
             reached: list = []
             watched: set[int] = set()
-            cells, tags, self.family = _watching(
+            cells, tags, self.family = main_rebinding.watching(
                 watched, lambda: hit_memo.watch_class(cls, found, reached if self.callees_ok else None)
             )
             self.reaches_cached = bool(reached)
@@ -222,74 +218,15 @@ _proofs: LruMemo[tuple, _Proof] = LruMemo(_PROOFS)
 _moved_only_in = getattr(_cw, "world_moved_only_in", None)
 
 
-_SCAN_LOCK = threading.Lock()
-
-
-def _watching(into: set[int], scan: Callable[[], Any]) -> Any:
-    """Run *scan* (`hit_memo.watch_class`) and add to *into* the id of
-    every namespace it watches (`cwatch.world_watch_log`): the module
-    globals of the code it met, the modules whose attributes that code
-    names, each dict it read. The modules every scan watches are watched
-    first, so only the scan's own are noted. Another thread's scan
-    meanwhile adds its own, which only makes the set larger: fewer
-    namespaces count as outside."""
-    log = getattr(_cw, "world_watch_log", None)
-    if log is None:
-        into.add(id(getattr(sys.modules.get("__main__"), "__dict__", None)))
-        return scan()
-    with _SCAN_LOCK:
-        hit_memo._watch_modules()
-        log(True)
-        try:
-            return scan()
-        finally:
-            into.update(log(False))
-
-
 def _outside_namespaces(cls: type, reports: Any, cells: tuple, tags: tuple, watched: set[int]) -> frozenset[int]:
     """The namespaces a plain rebinding in which leaves *cls*'s watch
-    standing: the script's or notebook's (``__main__``), unless the
+    standing (`main_rebinding.outside_namespaces`): ``__main__``, unless the
     class's world reads it. A notebook rebinds its variables on every cell,
-    and each one whose name the scanned code names (an attribute name
-    counts: ``ids`` for ``self.ids``) moved the world epoch, so a class
-    handed to every call was folded again on each, hits included.
-
-    The world reads ``__main__`` when the scan watched its namespace, the
-    class or one it met was defined there, a function met runs in it or
-    names it (``import __main__``, ``sys.modules["__main__"]``), or an
-    analysis resolved a helper through it. A change there that is not a plain rebinding (a
-    function, a class or a module bound, a name of a dict no key reads)
-    still moves the world as before; so does any change anywhere else.
-    *watched* holds the namespaces the scan watched: one it read
-    ``__main__`` through (a module of the class's naming ``__main__``'s
-    variables) is among them."""
+    and each one whose name the scanned code names moved the world epoch, so
+    a class handed to every call was folded again on each, hits included."""
     if _moved_only_in is None:
         return frozenset()
-    main = getattr(sys.modules.get("__main__"), "__dict__", None)
-    if type(main) is not dict or id(main) in watched:
-        return frozenset()
-    if class_module(cls) == "__main__":
-        return frozenset()
-    for report in reports:
-        paths = [m for m, _chain in report.helper_resolution_paths.values()]
-        paths.extend(m for m, _chain, _ref in report.helper_bindings)
-        if "__main__" in paths:
-            return frozenset()
-    for x in (*cells, *tags):
-        if isinstance(x, type):
-            if class_module(x) == "__main__":
-                return frozenset()
-        elif type(x) is types.FunctionType:
-            if x.__globals__ is main or plain_getattr(x, "__module__", None) == "__main__" or _names_main(x.__code__):
-                return frozenset()
-    return frozenset((id(main),))
-
-
-def _names_main(code: types.CodeType) -> bool:
-    """Does *code*, or code nested in it, name ``__main__``?"""
-    if "__main__" in code.co_names or "__main__" in code.co_consts:
-        return True
-    return any(type(c) is types.CodeType and _names_main(c) for c in code.co_consts)
+    return main_rebinding.outside_namespaces(reports, cells, tags, watched, (class_module(cls),))
 
 
 class _WeakType:

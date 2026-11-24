@@ -1356,7 +1356,12 @@ def _resolve(mod_name: str, chain: tuple) -> Any:
 
 
 def scan(
-    spec: CachedFunction, registry: Any, *, environment_ok: bool = False, content: bool = False
+    spec: CachedFunction,
+    registry: Any,
+    *,
+    environment_ok: bool = False,
+    content: bool = False,
+    reports: list | None = None,
 ) -> tuple[tuple, tuple, list, _Family | None]:
     """Watch the world of *spec*'s key. Returns the cells and the class
     tags a fast hit compares, the states of the cached functions it
@@ -1365,7 +1370,8 @@ def scan(
     each variable a segment read before serving it) an analysis that keys
     an environment read does not make it ineligible. With *content* (the
     state memo too) a list or an array met is read again on every reuse
-    (`ContentProbe`) instead of making it ineligible."""
+    (`ContentProbe`) instead of making it ineligible. *reports*, when
+    given, collects the analyses the scan resolved helpers by."""
     func, name = spec.func, spec.name
     s = _Scan(plain_getattr(func, "__module__", None), func)
     s.content = content
@@ -1378,6 +1384,8 @@ def scan(
             raise Ineligible("a data source")
         report = registry.report_for(func, name) if node == name else registry.purity_reports.get(node)
         if report is not None:
+            if reports is not None:
+                reports.append(report)
             if report.unwalkable or report.unkeyable or (report.environment_reads and not environment_ok):
                 raise Ineligible("its analysis keys an environment read or could not finish")
             for mod_name, chain in report.helper_resolution_paths.values():

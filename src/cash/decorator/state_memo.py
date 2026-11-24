@@ -26,7 +26,10 @@ The fold is remembered per function and served again while three things hold:
   the ordinary path. A change to any of it
   moves the C extension's world epoch, and a renamed function, a rebound
   closure cell or a rebased class is checked on every reuse
-  (`cwatch.world_holds`), as is what ABCs registered.
+  (`cwatch.world_holds`), as is what ABCs registered. A move that was
+  only a plain rebinding in ``__main__`` (a script's loop rebinding its
+  variables) leaves the memo standing when its world provably reads
+  nothing of ``__main__`` (`main_rebinding`).
 * **Cash's own state**: what the fold reads of cash -- the registrations, the
   analysis of each function and the graph of cached calls, the names a call
   was seen to change (`LearnedMutations`), the random streams a function was
@@ -78,10 +81,11 @@ from typing import TYPE_CHECKING, Any
 
 from .. import _native
 from .._active import ACTIVE_CONFIG, EXPLAINING
+from .._user_attrs import plain_getattr
 from ..code_swaps import FOLDED_CODE, FoldedCode
 from ..dependency_state import OUTSIDE_READS_FOLDED, STATE_LEDGER
 from ..effects import ENVIRONMENT_FOLDED, ENVIRONMENT_READS, ENVIRONMENT_READS_FOLDED, environment_value_now
-from . import hit_memo, walk_scope
+from . import hit_memo, main_rebinding, walk_scope
 from .call_state import CAPTURE_WATCH, CARRIER_LOOKUPS, HELD_BY_NAME, REACHED_TTLS
 from .class_data import CLASSES_FOLDED
 from .global_values import KEY_BUILD_DIGESTS
@@ -124,6 +128,10 @@ VERIFY = ENABLED and (_flag("CASH_STATE_MEMO_VERIFY", "0") or hit_memo.VERIFY)
 #: name the scan met is among its cells, at its own epoch (`_holds`).
 _world_epoch = _cw.core_epoch if ENABLED else None
 _world_holds = _cw.world_holds if ENABLED else None
+#: `cwatch.core_moved_only_in`, or None with an extension without it: has
+#: every move of the core epoch since been a plain rebinding in a
+#: namespace the segment's world reads nothing of (`StateMemo.outside`)?
+_moved_only_in = getattr(_cw, "core_moved_only_in", None) if ENABLED else None
 
 #: The generation of cash's own state that a state segment reads. Moved by
 #: `moved`, never on a plain call.
@@ -143,7 +151,7 @@ _PRE_STAGES = 5
 #: cash's own state did (``status()``; for telling what keeps moving).
 WHY: Counter = Counter()
 #: Reuses, builds remembered, and reuses checked by the verify mode.
-STATS = {"reused": 0, "remembered": 0, "verified": 0, "scans": 0, "scans_failed": 0}
+STATS = {"reused": 0, "remembered": 0, "verified": 0, "scans": 0, "scans_failed": 0, "moved_outside": 0}
 
 
 def moved() -> None:
@@ -509,6 +517,10 @@ class StateMemo:
         self.cells: tuple = ()
         self.tags: tuple = ()
         self.family: Any = None
+        #: The namespaces the world provably reads nothing of
+        #: (`main_rebinding.outside_namespaces`): a plain rebinding there
+        #: moves the core epoch, not this memo.
+        self.outside: frozenset[int] = frozenset()
         self.entries: dict[tuple, _Capture] = {}
         self.slow = 0
         self.backoff = 1
@@ -527,11 +539,26 @@ class StateMemo:
         family = self.family
         return family is None or family.holds([None] * 11)
 
+    def _at_world(self) -> bool:
+        """Is the scan at the world epoch now: the same, or every move
+        since a plain rebinding in a namespace its world reads nothing of
+        (a script's loop rebinding its variables between calls)? It is
+        then moved on to the epoch now, and the next check looks only past
+        it."""
+        now = _world_epoch()
+        if self.world == now:
+            return True
+        if self.world < 0 or not self.outside or not _moved_only_in(self.world, self.outside):
+            return False
+        self.world = now
+        STATS["moved_outside"] += 1
+        return True
+
     def _scan(self, registry: Any) -> bool:
         """Watch the function's world now, when due; True when it is
         watched at the current world epoch and generation."""
-        world, gen = _world_epoch(), GEN[0]
-        if self.world == world and self.gen == gen:
+        gen = GEN[0]
+        if self._at_world() and self.gen == gen:
             return True
         if not self.asked:
             # Most functions of a library run once a process, and a scan
@@ -548,10 +575,20 @@ class StateMemo:
         self.slow = self.reused_since_scan = 0
         self.scanned_at = now
         self.world = -1
+        self.outside = frozenset()
         self.entries = {}
         STATS["scans"] += 1
+        watched: set[int] = set()
+        reports: list = []
         try:
-            cells, tags, _callees, family = hit_memo.scan(self.spec, registry, environment_ok=True, content=True)
+            cells, tags, _callees, family = main_rebinding.watching(
+                watched,
+                lambda: hit_memo.scan(self.spec, registry, environment_ok=True, content=True, reports=reports),
+            )
+            if _moved_only_in is not None:
+                self.outside = main_rebinding.outside_namespaces(
+                    reports, cells, tags, watched, (plain_getattr(self.spec.func, "__module__", None),)
+                )
         except Exception:  # noqa: BLE001 - Ineligible, or a scan that broke: the ordinary path
             STATS["scans_failed"] += 1
             return False
@@ -573,7 +610,7 @@ class StateMemo:
         def fold(into: list) -> str:
             return build_now(spec, into, note=note)
 
-        if self.world == _world_epoch() and self.gen == GEN[0]:
+        if self.gen == GEN[0] and self._at_world():
             if not self._holds():
                 # A cell, a name or a class moved without a dict event:
                 # scanned again at the next call.

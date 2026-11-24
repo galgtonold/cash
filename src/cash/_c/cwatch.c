@@ -593,11 +593,19 @@ static inline void wring_note(uintptr_t d) {
     wring_epoch[world_epoch % WRING] = world_epoch;
     wring_dict[world_epoch % WRING] = d;
 }
-static inline void world_bump(void) { world_epoch++; core_epoch++; c_world_bumps++; wring_note(0); }
+/* The same for the moves of `core_epoch` (`core_moved_only_in`): what the
+ * state memo compares (a scoped name's change moves `world_epoch` alone). */
+static uint64_t cring_epoch[WRING];
+static uintptr_t cring_dict[WRING];
+static inline void cring_note(uintptr_t d) {
+    cring_epoch[core_epoch % WRING] = core_epoch;
+    cring_dict[core_epoch % WRING] = d;
+}
+static inline void world_bump(void) { world_epoch++; core_epoch++; c_world_bumps++; wring_note(0); cring_note(0); }
 /* A key of the keyed namespace d named by scanned code, rebound, added or
  * deleted, neither the old nor the new value a callable or a module. */
 static inline void world_bump_in(PyObject *d) {
-    world_epoch++; core_epoch++; c_world_bumps++; wring_note((uintptr_t)d);
+    world_epoch++; core_epoch++; c_world_bumps++; wring_note((uintptr_t)d); cring_note((uintptr_t)d);
 }
 
 /* Scoped names (`world_scope`): keys of world dicts that libraries set and
@@ -2710,22 +2718,21 @@ static PyObject *py_func_sets(PyObject *self, PyObject *noargs) {
 }
 static PyObject *py_core_epoch(PyObject *self, PyObject *noargs) { return PyLong_FromUnsignedLongLong(core_epoch); }
 
-/* world_moved_only_in(since, namespaces) -> bool
- *   Has every move of `world_epoch` after `since` been a plain rebinding
- *   (`world_bump_in`, a scoped name's change) in a namespace whose id is in
- *   the frozenset `namespaces`? False when any was another change, or is no
- *   longer remembered. True when nothing moved. */
-static PyObject *py_world_moved_only_in(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+/* Has every move of an epoch (now *now*) after `since` been a plain
+ * rebinding in a namespace whose id is in the frozenset `namespaces`,
+ * by the ring of its moves (`wring`, `cring`)? */
+static PyObject *moved_only_in(const uint64_t *ring_epoch, const uintptr_t *ring_dict, uint64_t now,
+                               PyObject *const *args, Py_ssize_t nargs, const char *usage) {
     if (nargs != 2 || !PyLong_Check(args[0]) || !PyFrozenSet_CheckExact(args[1])) {
-        PyErr_SetString(PyExc_TypeError, "world_moved_only_in(since int, namespaces frozenset)"); return NULL;
+        PyErr_SetString(PyExc_TypeError, usage); return NULL;
     }
     unsigned long long since = PyLong_AsUnsignedLongLong(args[0]);
     if (since == (unsigned long long)-1 && PyErr_Occurred()) { PyErr_Clear(); Py_RETURN_FALSE; }
-    if (since > world_epoch || world_epoch - since > WRING - 1) Py_RETURN_FALSE;
-    for (uint64_t ep = since + 1; ep <= world_epoch; ep++) {
+    if (since > now || now - since > WRING - 1) Py_RETURN_FALSE;
+    for (uint64_t ep = since + 1; ep <= now; ep++) {
         size_t i = ep % WRING;
-        if (wring_epoch[i] != ep || wring_dict[i] == 0) Py_RETURN_FALSE;
-        PyObject *at = PyLong_FromVoidPtr((void *)wring_dict[i]);
+        if (ring_epoch[i] != ep || ring_dict[i] == 0) Py_RETURN_FALSE;
+        PyObject *at = PyLong_FromVoidPtr((void *)ring_dict[i]);
         if (!at) return NULL;
         int in = PySet_Contains(args[1], at);   /* int keys: no Python code */
         Py_DECREF(at);
@@ -2733,6 +2740,25 @@ static PyObject *py_world_moved_only_in(PyObject *self, PyObject *const *args, P
         if (!in) Py_RETURN_FALSE;
     }
     Py_RETURN_TRUE;
+}
+
+/* world_moved_only_in(since, namespaces) -> bool
+ *   Has every move of `world_epoch` after `since` been a plain rebinding
+ *   (`world_bump_in`, a scoped name's change) in a namespace whose id is in
+ *   the frozenset `namespaces`? False when any was another change, or is no
+ *   longer remembered. True when nothing moved. */
+static PyObject *py_world_moved_only_in(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    return moved_only_in(wring_epoch, wring_dict, world_epoch, args, nargs,
+                         "world_moved_only_in(since int, namespaces frozenset)");
+}
+
+/* core_moved_only_in(since, namespaces) -> bool
+ *   `world_moved_only_in` for `core_epoch` (the state memo's epoch): has
+ *   every move of it after `since` been a plain rebinding (`world_bump_in`)
+ *   in a namespace whose id is in `namespaces`? */
+static PyObject *py_core_moved_only_in(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    return moved_only_in(cring_epoch, cring_dict, core_epoch, args, nargs,
+                         "core_moved_only_in(since int, namespaces frozenset)");
 }
 
 static int scoped_holds(PyObject *name, PyObject *held) {
@@ -3870,6 +3896,7 @@ static PyMethodDef methods[] = {
     {"core_epoch", py_core_epoch, METH_NOARGS, ""},
     {"world_watch_log", py_world_watch_log, METH_O, ""},
     {"world_moved_only_in", (PyCFunction)(void (*)(void))py_world_moved_only_in, METH_FASTCALL, ""},
+    {"core_moved_only_in", (PyCFunction)(void (*)(void))py_core_moved_only_in, METH_FASTCALL, ""},
     {"func_sets", py_func_sets, METH_NOARGS, ""},
     {"world_scope", py_world_scope, METH_O, ""},
     {"scoped_cells", py_scoped_cells, METH_O, ""},
