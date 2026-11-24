@@ -53,7 +53,7 @@ def watching(into: set[int], scan: Callable[[], Any]) -> Any:
         into.add(id(getattr(sys.modules.get("__main__"), "__dict__", None)))
         return scan()
     with _LOCK:
-        hit_memo._watch_modules()
+        hit_memo.watch_modules()
         if _OPEN:
             noted = log(False)
             for outer in _OPEN:

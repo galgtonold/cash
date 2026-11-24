@@ -977,7 +977,7 @@ class _Scan:
                         # ``sys``), so a key folds nothing of it
                         # (`module_attrs._library_attr_parts`); which
                         # module a name is bound to is watched apart
-                        # (`_watch_modules`). Walked, it is every module
+                        # (`watch_modules`). Walked, it is every module
                         # loaded, and one of a class of its own
                         # (``six.moves``) refused the whole world.
                         continue
@@ -1386,7 +1386,7 @@ _QUIET_HOOKS = {
 def _quiet_warnings() -> None:
     """Make `_QUIET_HOOKS` quiet in their modules' namespaces, for every
     scan: `watch_helper` watches the ``warnings`` namespace as soon as a
-    helper names ``warnings``, while only `_watch_modules` made the hooks
+    helper names ``warnings``, while only `watch_modules` made the hooks
     quiet, and a function whose own scan stopped early (`Ineligible`) never
     reaches it. Every ``catch_warnings(record=True)`` its body ran then moved
     the world twice, and no helper fold was served again. A module not yet
@@ -1409,7 +1409,7 @@ def _quiet_warnings() -> None:
 _QUIET_DONE: set[str] = set()
 
 
-def _watch_modules() -> None:
+def watch_modules() -> None:
     """Watch every module's namespace (keyed) and ``sys.modules`` (every
     change): a helper cash finds by name can live in any of them."""
     with _WATCH_LOCK:
@@ -1488,7 +1488,7 @@ def scan(
                 visited.add(dep)
                 stack.append(dep)
     s.finish()
-    _watch_modules()
+    watch_modules()
     s.commit()
     cells = tuple(x for pair in s.cells for x in pair) + _cw.scoped_cells(s.names)
     tags = tuple(x for pair in s.types.values() for x in pair)
@@ -1529,7 +1529,7 @@ def scan_trace(spec: CachedFunction, registry: Any, items: list) -> tuple[tuple,
             # A lookup by name or an import by name: checked on each hit.
             raise Ineligible(f"a traced {kind}")
     s.finish()
-    _watch_modules()
+    watch_modules()
     s.commit()
     cells = tuple(x for pair in s.cells for x in pair) + _cw.scoped_cells(s.names)
     tags = tuple(x for pair in s.types.values() for x in pair)
@@ -1886,7 +1886,7 @@ def watch_class(cls: type, reports: Any = (), reached: list | None = None) -> tu
     s.finish()
     if _probes_main_variables(s.probes, (x for pair in s.cells for x in pair)):
         raise Ineligible("a probe would hold a variable of __main__")
-    _watch_modules()
+    watch_modules()
     s.commit()
     cells = tuple(x for pair in s.cells for x in pair)
     tags = tuple(x for pair in s.types.values() for x in pair)
