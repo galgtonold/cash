@@ -197,14 +197,15 @@ def test_the_loops_frames_are_read_a_class_at_a_time(monkeypatch):
 
 def test_the_loops_refusal_costs_a_fraction_of_making_its_frames():
     """Asked at the end of a loop that made 3,000 small frames, the check
-    costs less than half of making them: here a quarter to a third on
-    Linux (0.2 s against 0.7 s on 3.13 and 3.14). On Windows and macOS,
-    whose interpreters run this pure-Python walk slower against the pandas
-    work of making the frames, it was half to 0.57 of it in CI runs (0.19 s
-    against 0.35 s on macOS 3.14), so there the bound is three quarters. So it is under pandas 2, which
-    makes the frames three times faster than pandas 3 (0.36 s against
-    1.1 s), so the same walk was half of it (0.18 s) in CI. Which work it
-    skips is pinned by the test above; this bounds what is left.
+    costs well under the making of them: here a third of it on Linux (0.2 s
+    against 0.6 s on 3.13), but on shared CI runners of every OS it reached
+    half to 0.57 of it (0.35 s against 0.67 s on an Ubuntu 3.13 runner, 0.19 s
+    against 0.35 s on macOS 3.14), and under pandas 2, which makes the frames
+    three times faster, half of it too. A bound of half failed in four of
+    eight CI runs while the walk read the same objects, so the bound is three
+    quarters.
+    Which work it skips is pinned by the test above; this bounds what is
+    left.
 
     Both sides are this thread's CPU time, each the least of three rounds
     that make the frames and then ask: a runner busy with other workers
@@ -232,6 +233,4 @@ def test_the_loops_refusal_costs_a_fraction_of_making_its_frames():
             del frames, namespace
         finally:
             gc.unfreeze()
-    slow_walk = sys.platform in ("win32", "darwin")
-    share = 0.75 if slow_walk or int(pd.__version__.split(".")[0]) < 3 else 0.5
-    assert best < built * share, (best, built)
+    assert best < built * 0.75, (best, built)
