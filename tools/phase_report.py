@@ -120,7 +120,8 @@ def row(stats: dict[str, dict]) -> dict:
         if phase in _TOTALS or phase == "body":
             continue
         phases[f"{outcome}.{phase}"] += stat["total"]
-    if count.get("fast_hit"):
+    if count.get("fast_hit") and not any(name.startswith("fast_hit.") for name in phases):
+        # Written before fast hits were split by phase: one lump.
         phases["fast_hit"] = _get(stats, "fast_hit.cash")
     top = sorted(phases.items(), key=lambda kv: kv[1], reverse=True)[:3]
     hit_hist: dict[int, int] = {}

@@ -16,7 +16,8 @@ The phases, by the outcome they are counted under (``hit``, ``fast_hit``,
 refused storing; ``raised``):
 
 ``wrapper``      the stats wrapper's own work, before and after the call
-``fast_probe``   the remembered-hit probe (`hit_memo`) that did not serve
+``fast_probe``   the remembered-hit probe (`hit_memo`): under ``fast_hit``
+                 the one that served, its ``read.decode`` apart
 ``setup``        the per-function analysis, ttl, before the key
 ``key.code``     the state segment: code, helpers, callees, closure, defaults
 ``key.globals``  the globals the function and its helpers read
@@ -267,23 +268,6 @@ class PhaseRecord:
                     stat[3][b if 0 <= b <= top else (0 if b < 0 else top)] += 1
                 else:
                     stat[3][0] += 1
-
-    def fast_hit(self, seconds: float) -> None:
-        """A hit the remembered-hit path served, in *seconds*, all cash's."""
-        b = _slot(seconds)
-        with self.lock:
-            rows = self.outcomes.get("fast_hit")
-            if rows is None:
-                rows = self.outcomes["fast_hit"] = [None] * (_SIZE + 2)
-            for at in (_TOTAL, _CASH):
-                stat = rows[at]
-                if stat is None:
-                    stat = rows[at] = _stat()
-                stat[0] += 1
-                stat[1] += seconds
-                if seconds > stat[2]:
-                    stat[2] = seconds
-                stat[3][b] += 1
 
     def _items(self) -> list[tuple[str, int, float, float, dict]]:
         with self.lock:

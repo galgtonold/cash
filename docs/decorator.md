@@ -271,7 +271,8 @@ checks before a hit is served, the body, the checks after it and the store.
 It costs a few microseconds a call, so it is off by default.
 `f.cache_info()["phase_times"]` then holds, per `"<outcome>.<phase>"`, the
 `count`, `total`, `median` and `max` seconds. The outcomes are `hit`,
-`fast_hit` (served by the remembered-hit path, timed as a whole), `miss`
+`fast_hit` (served by the remembered-hit path: its `fast_probe`, and the
+copy it hands out as its `read.decode`), `miss`
 (ran and stored), `not_stored` (ran, then refused storing), `uncached` (no
 key: what it paid before running is in its `setup` and `key.*` phases) and
 `raised`. Each outcome also has `total` (the whole call) and `cash`
