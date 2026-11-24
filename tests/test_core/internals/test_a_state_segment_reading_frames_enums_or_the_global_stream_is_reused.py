@@ -325,6 +325,23 @@ def test_catch_warnings_in_a_body_leaves_the_world_still():
     assert served >= 25, out.stdout
 
 
+def test_a_scan_that_cannot_finish_leaves_the_world_still():
+    """The state memo's scan noted the namespaces it watched by watching
+    every module first. While no scan in the process had finished, every
+    write to a watched namespace moved the world -- no name was known to be
+    unread -- so a body whose world no scan can finish (it runs a lambda a
+    list holds) moved it about fifteen times a call: its ``catch_warnings``
+    hooks, cash's own module globals, the loop's ``i``. The modules are
+    watched as every scan watches them, just before it finishes."""
+    script = QUIET.replace("OBJ = Thing()\n", "OBJ = Thing()\nRUN = [lambda y: y + 1]\n").replace(
+        "return x + 1", "return RUN[0](x)"
+    )
+    assert script != QUIET and "RUN[0](x)" in script
+    out = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)
+    bumps, _served = map(int, out.stdout.split())
+    assert bumps < 5, out.stdout
+
+
 @pytest.mark.parametrize("func", [drawn, picked], ids=["numpy", "stdlib"])
 def test_a_function_drawing_from_the_global_stream_is_reused_and_keyed_by_its_seed(c, monkeypatch, func):
     monkeypatch.setattr(state_memo, "VERIFY", True)

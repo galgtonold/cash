@@ -1411,7 +1411,14 @@ _QUIET_DONE: set[str] = set()
 
 def watch_modules() -> None:
     """Watch every module's namespace (keyed) and ``sys.modules`` (every
-    change): a helper cash finds by name can live in any of them."""
+    change): a helper cash finds by name can live in any of them. Not
+    noted as a scan's own namespaces (`main_rebinding.unnoted`)."""
+    from . import main_rebinding
+
+    main_rebinding.unnoted(_watch_modules_now)
+
+
+def _watch_modules_now() -> None:
     with _WATCH_LOCK:
         modules = sys.modules
         _cw.world_watch_dict(modules, True)

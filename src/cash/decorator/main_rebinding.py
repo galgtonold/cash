@@ -28,9 +28,8 @@ from typing import Any
 from .. import _native
 from .._type_memo import class_module
 from .._user_attrs import plain_getattr
-from . import hit_memo
 
-__all__ = ["outside_namespaces", "watching"]
+__all__ = ["outside_namespaces", "unnoted", "watching"]
 
 _cw = _native.cwatch
 
@@ -38,27 +37,36 @@ _LOCK = threading.RLock()
 #: The sets of the `watching` calls open on the thread holding `_LOCK`,
 #: outermost first: a scan inside another one notes into both.
 _OPEN: list[set[int]] = []
+#: The thread holding `_LOCK` while `_OPEN` is not empty.
+_OWNER: list[int | None] = [None]
 
 
 def watching(into: set[int], scan: Callable[[], Any]) -> Any:
     """Run *scan* (a `hit_memo` scan) and add to *into* the id of every
     namespace it watches (`cwatch.world_watch_log`): the module globals of
     the code it met, the modules whose attributes that code names, each
-    dict it read. The modules every scan watches are watched first, so only
-    the scan's own are noted. Another thread's watch meanwhile adds its own,
+    dict it read. The modules every scan watches (`hit_memo.watch_modules`,
+    which the scan runs before it commits) are not noted (`unnoted`), so
+    only the scan's own are. Another thread's watch meanwhile adds its own,
     and a scan run inside this one adds to both, which only makes the sets
-    larger: fewer namespaces count as outside."""
+    larger: fewer namespaces count as outside.
+
+    The modules are not watched before the scan runs: in a process where
+    no scan had committed yet, every write to a watched namespace moves the
+    world (no name is known to be unread), and the scan's own first work --
+    cash's lazy imports, its module globals set once -- moved it dozens of
+    times, the ``warnings`` hooks of a body's ``catch_warnings`` included."""
     log = getattr(_cw, "world_watch_log", None)
     if log is None:
         into.add(id(getattr(sys.modules.get("__main__"), "__dict__", None)))
         return scan()
     with _LOCK:
-        hit_memo.watch_modules()
         if _OPEN:
             noted = log(False)
             for outer in _OPEN:
                 outer.update(noted)
         _OPEN.append(into)
+        _OWNER[0] = threading.get_ident()
         log(True)
         try:
             return scan()
@@ -70,6 +78,25 @@ def watching(into: set[int], scan: Callable[[], Any]) -> Any:
                 outer.update(noted)
             if _OPEN:
                 log(True)
+            else:
+                _OWNER[0] = None
+
+
+def unnoted(watch: Callable[[], Any]) -> Any:
+    """Run *watch* with what it watches noted by no `watching` open on this
+    thread: `hit_memo.watch_modules`, which every scan runs, watches every
+    module, which says nothing of the namespaces a scan reads. On another
+    thread it is noted, which only makes the sets larger."""
+    log = getattr(_cw, "world_watch_log", None)
+    if log is None or not _OPEN or _OWNER[0] != threading.get_ident():
+        return watch()
+    noted = log(False)
+    for outer in _OPEN:
+        outer.update(noted)
+    try:
+        return watch()
+    finally:
+        log(True)
 
 
 def outside_namespaces(
