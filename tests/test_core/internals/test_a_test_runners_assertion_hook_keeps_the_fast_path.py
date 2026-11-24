@@ -111,7 +111,7 @@ _SCRIPT = textwrap.dedent(
 
 
 def test_the_assertion_hook_set_and_put_back_keeps_a_fast_path(tmp_path):
-    (tmp_path / "main.py").write_text(_SCRIPT)
+    (tmp_path / "main.py").write_text(_SCRIPT, encoding="utf-8")
     run_python("main.py", cwd=tmp_path)
 
 
