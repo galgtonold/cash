@@ -41,12 +41,16 @@ from __future__ import annotations
 
 import abc
 import os
+import sys
+import threading
+import types
 from collections.abc import Callable
 from typing import Any
 
 from .. import _native, _weak
 from .._memo import LruMemo
 from .._type_memo import class_module, class_qualname
+from .._user_attrs import plain_getattr
 from . import hit_memo, state_memo
 
 __all__ = [
@@ -113,6 +117,7 @@ class _Proof:
         "cells",
         "family",
         "gen",
+        "outside",
         "reaches_cached",
         "served",
         "skipped",
@@ -134,6 +139,10 @@ class _Proof:
         self.cells: tuple = ()
         self.tags: tuple = ()
         self.family: Any = None
+        #: The namespaces the class's world provably reads nothing of
+        #: (`_outside_namespaces`): a plain rebinding there moves the world
+        #: epoch, not this watch.
+        self.outside: frozenset[int] = frozenset()
         #: Reuses since the last scan, calls skipped since, and how many to skip.
         self.served = 0
         self.skipped = 0
@@ -144,7 +153,10 @@ class _Proof:
         return self._cls()
 
     def holds(self) -> bool:
-        if self.world < 0 or self.world != _cw.world_epoch() or self.gen != state_memo.GEN[0]:
+        if self.world < 0 or self.gen != state_memo.GEN[0]:
+            return False
+        world = _cw.world_epoch()
+        if self.world != world and not (self.outside and _moved_only_in(self.world, self.outside)):
             return False
         # Once a round of checks (`hit_memo.probe_round`): a key build asks
         # again for the watch of each class it meets, about 30 times for an
@@ -159,6 +171,9 @@ class _Proof:
             return False
         if self.family is not None and not self.family.holds([None] * 11):
             return False
+        # Every move since was a plain rebinding outside the world: it
+        # holds at the epoch now, and the next check looks only past it.
+        self.world = world
         if seen is not None:
             seen[mark] = (self.stamp, self.world, self.gen)
         return True
@@ -183,9 +198,13 @@ class _Proof:
             if cls is None:
                 return False
             reached: list = []
-            cells, tags, self.family = hit_memo.watch_class(cls, found, reached if self.callees_ok else None)
+            watched: set[int] = set()
+            cells, tags, self.family = _watching(
+                watched, lambda: hit_memo.watch_class(cls, found, reached if self.callees_ok else None)
+            )
             self.reaches_cached = bool(reached)
             self.cells, self.tags = _weakened(cells), _weakened(tags)
+            self.outside = _outside_namespaces(cls, found, cells, tags, watched)
         except Exception:  # noqa: BLE001 - Ineligible, or a scan that broke: folded every time
             STATS["refused"] += 1
             self.backoff = _MAX_BACKOFF
@@ -198,6 +217,79 @@ class _Proof:
 
 
 _proofs: LruMemo[tuple, _Proof] = LruMemo(_PROOFS)
+
+#: `cwatch.world_moved_only_in`, or None with an extension without it.
+_moved_only_in = getattr(_cw, "world_moved_only_in", None)
+
+
+_SCAN_LOCK = threading.Lock()
+
+
+def _watching(into: set[int], scan: Callable[[], Any]) -> Any:
+    """Run *scan* (`hit_memo.watch_class`) and add to *into* the id of
+    every namespace it watches (`cwatch.world_watch_log`): the module
+    globals of the code it met, the modules whose attributes that code
+    names, each dict it read. The modules every scan watches are watched
+    first, so only the scan's own are noted. Another thread's scan
+    meanwhile adds its own, which only makes the set larger: fewer
+    namespaces count as outside."""
+    log = getattr(_cw, "world_watch_log", None)
+    if log is None:
+        into.add(id(getattr(sys.modules.get("__main__"), "__dict__", None)))
+        return scan()
+    with _SCAN_LOCK:
+        hit_memo._watch_modules()
+        log(True)
+        try:
+            return scan()
+        finally:
+            into.update(log(False))
+
+
+def _outside_namespaces(cls: type, reports: Any, cells: tuple, tags: tuple, watched: set[int]) -> frozenset[int]:
+    """The namespaces a plain rebinding in which leaves *cls*'s watch
+    standing: the script's or notebook's (``__main__``), unless the
+    class's world reads it. A notebook rebinds its variables on every cell,
+    and each one whose name the scanned code names (an attribute name
+    counts: ``ids`` for ``self.ids``) moved the world epoch, so a class
+    handed to every call was folded again on each, hits included.
+
+    The world reads ``__main__`` when the scan watched its namespace, the
+    class or one it met was defined there, a function met runs in it or
+    names it (``import __main__``, ``sys.modules["__main__"]``), or an
+    analysis resolved a helper through it. A change there that is not a plain rebinding (a
+    function, a class or a module bound, a name of a dict no key reads)
+    still moves the world as before; so does any change anywhere else.
+    *watched* holds the namespaces the scan watched: one it read
+    ``__main__`` through (a module of the class's naming ``__main__``'s
+    variables) is among them."""
+    if _moved_only_in is None:
+        return frozenset()
+    main = getattr(sys.modules.get("__main__"), "__dict__", None)
+    if type(main) is not dict or id(main) in watched:
+        return frozenset()
+    if class_module(cls) == "__main__":
+        return frozenset()
+    for report in reports:
+        paths = [m for m, _chain in report.helper_resolution_paths.values()]
+        paths.extend(m for m, _chain, _ref in report.helper_bindings)
+        if "__main__" in paths:
+            return frozenset()
+    for x in (*cells, *tags):
+        if isinstance(x, type):
+            if class_module(x) == "__main__":
+                return frozenset()
+        elif type(x) is types.FunctionType:
+            if x.__globals__ is main or plain_getattr(x, "__module__", None) == "__main__" or _names_main(x.__code__):
+                return frozenset()
+    return frozenset((id(main),))
+
+
+def _names_main(code: types.CodeType) -> bool:
+    """Does *code*, or code nested in it, name ``__main__``?"""
+    if "__main__" in code.co_names or "__main__" in code.co_consts:
+        return True
+    return any(type(c) is types.CodeType and _names_main(c) for c in code.co_consts)
 
 
 class _WeakType:

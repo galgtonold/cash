@@ -583,7 +583,22 @@ static int world_quiet_name(PyObject *d, PyObject *key) {
 /* `core_epoch` moves with every change but a scoped name's (below): what
  * the hit memo's state compares, besides the scoped names it reads. */
 static uint64_t core_epoch = 1;
-static inline void world_bump(void) { world_epoch++; core_epoch++; c_world_bumps++; }
+/* The latest moves of `world_epoch`, each with the namespace it was a
+ * plain rebinding in, or 0 for any other change (`world_moved_only_in`):
+ * a memo whose world reads no such namespace still holds across them. */
+#define WRING 1024
+static uint64_t wring_epoch[WRING];
+static uintptr_t wring_dict[WRING];
+static inline void wring_note(uintptr_t d) {
+    wring_epoch[world_epoch % WRING] = world_epoch;
+    wring_dict[world_epoch % WRING] = d;
+}
+static inline void world_bump(void) { world_epoch++; core_epoch++; c_world_bumps++; wring_note(0); }
+/* A key of the keyed namespace d named by scanned code, rebound, added or
+ * deleted, neither the old nor the new value a callable or a module. */
+static inline void world_bump_in(PyObject *d) {
+    world_epoch++; core_epoch++; c_world_bumps++; wring_note((uintptr_t)d);
+}
 
 /* Scoped names (`world_scope`): keys of world dicts that libraries set and
  * put back around nearly every call -- ``warnings.filters`` and the display
@@ -629,6 +644,7 @@ static int scoped_index(PyObject *key) {
 
 static void scoped_change(int i, PyObject *d, PyObject *old, PyObject *nv) {
     world_epoch++;   /* the total: what every other memo compares */
+    wring_note((uintptr_t)d);
     c_scoped_moves++;
     int depth = scoped[i].depth;
     if (depth > 0) {
@@ -771,7 +787,7 @@ static void world_dict_event(WEnt *e, PyDict_WatchEvent ev, PyObject *d, PyObjec
         if (old == NULL && PyErr_Occurred()) PyErr_Clear();
         else if (old == nv) { c_world_ignored++; return; }
     }
-    int scoped_i = -1;
+    int scoped_i = -1, plain_named = 0;
     PyObject *scoped_old = NULL;
     if ((e->flags & WD_UNKEYED) == 0 && key != NULL && PyUnicode_CheckExact(key) && world_names != NULL &&
         (ev == PyDict_EVENT_ADDED || ev == PyDict_EVENT_MODIFIED || ev == PyDict_EVENT_DELETED)) {
@@ -780,6 +796,7 @@ static void world_dict_event(WEnt *e, PyDict_WatchEvent ev, PyObject *d, PyObjec
         if (named < 0) { PyErr_Clear(); named = 1; }
         PyObject *old = ev == PyDict_EVENT_ADDED ? NULL : PyDict_GetItem(d, key);  /* borrowed */
         int plain = !codeish(old) && !codeish(nv);
+        plain_named = named && plain;
         if (!named) {
             if (plain) { c_world_ignored++; return; }
             if (world_quiet_name(d, key)) { c_world_ignored++; return; }
@@ -791,7 +808,8 @@ static void world_dict_event(WEnt *e, PyDict_WatchEvent ev, PyObject *d, PyObjec
     }
     if (expected_write(ev, d, key, nv)) { c_world_ignored++; return; }
     if (scoped_i >= 0) { scoped_change(scoped_i, d, scoped_old, nv); return; }
-    world_bump();
+    if (plain_named) world_bump_in(d);
+    else world_bump();
 }
 
 /* expect_set(owner, name[, value]): see `expect`; no value: a delete */
@@ -2692,6 +2710,31 @@ static PyObject *py_func_sets(PyObject *self, PyObject *noargs) {
 }
 static PyObject *py_core_epoch(PyObject *self, PyObject *noargs) { return PyLong_FromUnsignedLongLong(core_epoch); }
 
+/* world_moved_only_in(since, namespaces) -> bool
+ *   Has every move of `world_epoch` after `since` been a plain rebinding
+ *   (`world_bump_in`, a scoped name's change) in a namespace whose id is in
+ *   the frozenset `namespaces`? False when any was another change, or is no
+ *   longer remembered. True when nothing moved. */
+static PyObject *py_world_moved_only_in(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 2 || !PyLong_Check(args[0]) || !PyFrozenSet_CheckExact(args[1])) {
+        PyErr_SetString(PyExc_TypeError, "world_moved_only_in(since int, namespaces frozenset)"); return NULL;
+    }
+    unsigned long long since = PyLong_AsUnsignedLongLong(args[0]);
+    if (since == (unsigned long long)-1 && PyErr_Occurred()) { PyErr_Clear(); Py_RETURN_FALSE; }
+    if (since > world_epoch || world_epoch - since > WRING - 1) Py_RETURN_FALSE;
+    for (uint64_t ep = since + 1; ep <= world_epoch; ep++) {
+        size_t i = ep % WRING;
+        if (wring_epoch[i] != ep || wring_dict[i] == 0) Py_RETURN_FALSE;
+        PyObject *at = PyLong_FromVoidPtr((void *)wring_dict[i]);
+        if (!at) return NULL;
+        int in = PySet_Contains(args[1], at);   /* int keys: no Python code */
+        Py_DECREF(at);
+        if (in < 0) return NULL;
+        if (!in) Py_RETURN_FALSE;
+    }
+    Py_RETURN_TRUE;
+}
+
 static int scoped_holds(PyObject *name, PyObject *held) {
     int i = scoped_index(name);
     return i >= 0 && epoch_is(held, scoped[i].epoch);
@@ -2750,10 +2793,37 @@ static PyObject *py_bump_cash(PyObject *self, PyObject *noargs) { cash_epoch++; 
 static PyObject *py_bump_world(PyObject *self, PyObject *noargs) { world_bump(); Py_RETURN_NONE; }
 
 /* world_watch_dict(d, unkeyed): count events on d (see world_dict_event) */
+/* The ids of the dicts `world_watch_dict` was asked to watch since
+ * `world_watch_log(True)`, or NULL while nothing is noted: which
+ * namespaces one scan reads (`class_memo`). */
+static PyObject *watch_log = NULL;
+
+/* world_watch_log(on) -> frozenset | None: start noting (on), or stop and
+ * return what was noted since the start (another thread's watches
+ * meanwhile included). */
+static PyObject *py_world_watch_log(PyObject *self, PyObject *on) {
+    int start = PyObject_IsTrue(on);
+    if (start < 0) return NULL;
+    if (start) {
+        if (!watch_log && !(watch_log = PySet_New(NULL))) return NULL;
+        Py_RETURN_NONE;
+    }
+    PyObject *noted = watch_log ? PyFrozenSet_New(watch_log) : PyFrozenSet_New(NULL);
+    Py_CLEAR(watch_log);
+    return noted;
+}
+
 static PyObject *py_world_watch_dict(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
     if (nargs != 2 || !PyDict_Check(args[0])) { PyErr_SetString(PyExc_TypeError, "world_watch_dict(dict, unkeyed)"); return NULL; }
     int unkeyed = PyObject_IsTrue(args[1]);
     if (unkeyed < 0) return NULL;
+    if (watch_log) {
+        PyObject *at = PyLong_FromVoidPtr(args[0]);
+        if (!at) return NULL;
+        int rc = PySet_Add(watch_log, at);
+        Py_DECREF(at);
+        if (rc < 0) return NULL;
+    }
     if (ensure_watchers() < 0) return NULL;
     if (went_add(&wds, &wds_cap, &wds_used, &wds_tomb, (uintptr_t)args[0], unkeyed ? WD_UNKEYED : WD_KEYED) < 0) return NULL;
     if (PyDict_Watch(dict_wid, args[0]) < 0) return NULL;
@@ -3798,6 +3868,8 @@ static PyMethodDef methods[] = {
     {"info", py_info, METH_O, ""},
     {"world_epoch", py_world_epoch, METH_NOARGS, ""},
     {"core_epoch", py_core_epoch, METH_NOARGS, ""},
+    {"world_watch_log", py_world_watch_log, METH_O, ""},
+    {"world_moved_only_in", (PyCFunction)(void (*)(void))py_world_moved_only_in, METH_FASTCALL, ""},
     {"func_sets", py_func_sets, METH_NOARGS, ""},
     {"world_scope", py_world_scope, METH_O, ""},
     {"scoped_cells", py_scoped_cells, METH_O, ""},
