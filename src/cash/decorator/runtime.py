@@ -13,6 +13,7 @@ import logging
 import operator
 import os
 import pickle
+import re
 import sys
 import threading
 import time
@@ -2055,16 +2056,21 @@ class CallRunner:
             logger.debug("[ATTRS] %s: attribute changes not judged", func_name, exc_info=True)
             return None
         if verdict is not None and verdict.why is not None and verdict.why.startswith(attribute_replay.ALSO_CHANGED):
-            named = self._source_changes(spec, verdict.names)
+            named = self._source_changes(spec, verdict.names, verdict.fresh_attributes())
             if named:
                 verdict = verdict._replace(why=attribute_replay.also_changed({}, named))
         return verdict
 
-    def _source_changes(self, spec: CachedFunction, params: list[str]) -> list[str]:
+    def _source_changes(
+        self, spec: CachedFunction, params: list[str], fresh: dict[str, set[str]] | None = None
+    ) -> list[str]:
         """The places in *spec*'s own body that reading its source found
         changing one of *params* in place other than by binding a top-level
         attribute (``self.history.append (line 12)``): what keeps a hit from
-        replaying the attributes the call bound."""
+        replaying the attributes the call bound. A write into an attribute
+        the call itself bound to a new object (*fresh*, ``{parameter:
+        attributes}``: ``self.null_ = {}`` then ``self.null_[k] = v``)
+        changed nothing the caller had, and is not one."""
         report = self._registry.report_for(spec.func, spec.name)
         own = {spec.name, plain_getattr(spec.func, "__qualname__", None)}
         found = []
@@ -2074,6 +2080,9 @@ class CallRunner:
             if attribute_bound_parameter(issue) is not None:
                 continue
             what = getattr(issue, "description", "").split(" - ", 1)[0].removesuffix("()")
+            into = _WRITE_INTO_ATTRIBUTE.match(what)
+            if into is not None and fresh and into.group(2) in fresh.get(into.group(1), ()):
+                continue
             line = getattr(issue, "line", 0)
             found.append(f"{what} (line {line})" if line else what)
         return found
@@ -2159,9 +2168,10 @@ class CallRunner:
             return None
         left: dict[str, tuple[Any, Any]] = {}
         replayed = [name for name in mutated if type(before[name][1]) is rewrite_in_place.AttrRecording]
+        roots = (attrs.roots if attrs is not None else None) or {}
         if replayed:
             states = attrs.states if attrs is not None else None
-            if states is None or any(name not in states for name in replayed):
+            if states is None or any(name not in states and name not in roots.values() for name in replayed):
                 if attrs is not None and attrs.why:
                     observer.unreplayable = attrs.why
                     observer.reword(
@@ -2170,10 +2180,14 @@ class CallRunner:
                         f" in place, and a hit cannot replay it: {attrs.why} -- the result was not stored",
                     )
                 return None
-            for name in replayed:
-                left[name] = (before[name][2], states[name])
+            for name, state in states.items():
+                # The argument's own attributes, then those of what it held
+                # one level down (`HeldBefore`), found again on a hit where
+                # it held them.
+                if roots.get(name, name) in replayed:
+                    left[name] = (before[name][2], state)
         for name in mutated:
-            if name in left:
+            if name in left or name in replayed:
                 continue
             value, shape, fingerprint = before[name]
             if rewrite_in_place.refusal(value) is not None or rewrite_in_place.shape_change(shape, value) is not None:
@@ -2193,7 +2207,7 @@ class CallRunner:
                 return None
             except Exception:  # noqa: BLE001 - not copied: not stored
                 return None
-        written = [name for name in left if name not in replayed]
+        written = [name for name in left if name not in replayed and name not in roots]
         try:
             # Attributes rebound share no memory a write could reach: only
             # what is written into is looked at.
@@ -2225,17 +2239,27 @@ class CallRunner:
         identity, or None. Such an argument is a NumPy array, a pandas
         frame or Series or a plain container (`arguments_left` keeps no
         other), whose state the entry keeps and a hit writes back in place,
-        so a hit can hand back the argument itself as a plain run does."""
+        so a hit can hand back the argument itself as a plain run does; or
+        an instance whose attributes the entry keeps, an argument or one an
+        argument holds one level down (``return self.kernel``), named as
+        *args_left* names it."""
         if not args_left:
             return None
         named = self._checked_named(func_name, *arguments) or {}
         spec = self._registry.cached.get(func_name)
         if spec is not None and any(
-            isinstance(before, rewrite_in_place.BoundBefore) for before, _ in args_left.values()
+            isinstance(_outer(before), rewrite_in_place.BoundBefore) for before, _ in args_left.values()
         ):
             named = {**dict(bound_values(spec.func)), **named}
-        for name in args_left:
-            if name in named and named[name] is result:
+        for name, (before, _state) in args_left.items():
+            if isinstance(before, rewrite_in_place.HeldBefore):
+                # ``return self.kernel``: what the argument holds there, as
+                # a hit finds it again.
+                owner = named.get(before.param)
+                held = plain_getattr(owner, "__dict__", None) if owner is not None else None
+                if type(held) is dict and held.get(before.name, _NOT_HELD) is result:
+                    return name
+            elif name in named and named[name] is result:
                 return name
         return None
 
@@ -2347,21 +2371,35 @@ class CallRunner:
         bound: dict[str, Any] | None = None
         spec = self._registry.cached.get(func_name)
         if spec is not None and any(
-            isinstance(before, rewrite_in_place.BoundBefore) for before, _ in left.states.values()
+            isinstance(_outer(before), rewrite_in_place.BoundBefore) for before, _ in left.states.values()
         ):
             # The instance the callable is bound to, which the key folded.
             named = {**dict(bound_values(spec.func)), **named}
         for name, (before, state) in left.states.items():
-            if name not in named:
-                return [], f"the argument {name!r} it changes in place was not handed in"
-            live = named[name]
+            # An instance an argument held one level down (`HeldBefore`) is
+            # found where it held it, before anything is written; its state
+            # is in the key as part of that argument's.
+            held = before if isinstance(before, rewrite_in_place.HeldBefore) else None
+            owner = held.param if held is not None else name
+            if owner not in named:
+                return [], f"the argument {owner!r} it changes in place was not handed in"
+            before = _outer(before)
+            live = named[owner]
+            if held is not None:
+                try:
+                    live = attribute_replay.held_attribute(
+                        live, held.name, owner, "the object whose attributes it bound"
+                    )
+                except attribute_replay.Unresolved as exc:
+                    return [], f"the state the call left {name!r} in cannot be written back: {exc}"
             why = rewrite_in_place.mismatch(live, state)
             if why is None:
                 if isinstance(before, rewrite_in_place.BoundBefore):
                     # Its whole state is in the key this hit matched.
                     same = True
                 elif isinstance(before, rewrite_in_place.KeyedBefore):
-                    same = content_keyed is not None and content_keyed.holds(live) and before.args_hash == args_hash
+                    holder = named[owner]
+                    same = content_keyed is not None and content_keyed.holds(holder) and before.args_hash == args_hash
                 else:
                     same = mutation_fingerprint(live) == before
                 if not same:
@@ -2458,6 +2496,8 @@ class CallRunner:
         run.arg_carriers_moved = []
         run.args_before = self.arguments_before(spec, call, args, kwargs)
         self._record_bound(spec, call, run)
+        if run.args_before:
+            _record_held(run.args_before, (*args, *kwargs.values(), *(value for _, value in bound_values(func))))
         # And the registries the process keeps outside any variable: a hit
         # would not set ``np.seterr`` or a logger's level again.
         run.registries = process_registries.snapshot()
@@ -2686,7 +2726,8 @@ class CallRunner:
             # A hit writes the arguments back and hands the result back as a
             # copy, which no longer shares their memory as the call's did.
             refusal = (
-                f"it changed {', '.join(repr(n) for n in args_left)} in place and its result shares an object "
+                f"it changed {', '.join(repr(n) for n in dict.fromkeys(_root_of(n, args_left) for n in args_left))} "
+                f"in place and its result shares an object "
                 f"with what it was handed ({shared}), which a hit would hand back apart"
             )
         if refusal is None:
@@ -2702,15 +2743,20 @@ class CallRunner:
             # Stored with the state it left them in: the warning says what
             # a hit does. Said after the refusals above, which a call
             # sharing its result with an argument meets.
-            for name, (_before, state) in args_left.items():
+            for name, (before, state) in args_left.items():
+                if isinstance(before, rewrite_in_place.HeldBefore):
+                    continue  # part of the argument that holds it, named as that
                 if isinstance(state, rewrite_in_place.AttrState):
                     run.observer.replayed_args.append(name)
                 else:
                     run.observer.record(rewrite_in_place.WRITTEN_BACK, name)
+            for name in _held_roots(args_left):
+                if name not in run.observer.replayed_args:
+                    run.observer.replayed_args.append(name)
         elif args_left and run.observer is not None:
             # Changed and not stored after all: what reading the source
             # found on them stands (`PurityChecks.surface_held_mutations`).
-            run.observer.mutated_args = list(args_left)
+            run.observer.mutated_args = list(dict.fromkeys(_root_of(name, args_left) for name in args_left))
         if run.observer is not None and self._purity.holds_mutations(func_name):
             run.observer.unwritable_args = self._unwritable_args(
                 func_name, call.checked or (args, kwargs), call.content_keyed
@@ -3160,6 +3206,68 @@ class CallRunner:
                 lock_cm.__exit__(None, None, None)
             except Exception:  # noqa: BLE001 - releasing failed; compute already done
                 logger.debug("lock release failed for %s", spec.name)
+
+
+#: A finding's target written through an attribute of a parameter
+#: (``self.null_[...] = ...``, ``self.history.append``): the parameter and
+#: the attribute.
+_WRITE_INTO_ATTRIBUTE = re.compile(r"(\w+)\.(\w+)[.\[]")
+
+
+_NOT_HELD = object()
+
+
+def _outer(before: Any) -> Any:
+    """What says the argument an entry of `ArgumentsLeft.states` is part of
+    was in the state stored: *before*, or for an instance it held one level
+    down (`rewrite_in_place.HeldBefore`), the argument's own."""
+    return before.outer if isinstance(before, rewrite_in_place.HeldBefore) else before
+
+
+def _root_of(name: str, args_left: dict[str, tuple[Any, Any]]) -> str:
+    """The argument the entry *name* of *args_left* is part of: itself, or
+    the one that held it (`rewrite_in_place.HeldBefore`)."""
+    before = args_left[name][0]
+    return before.param if isinstance(before, rewrite_in_place.HeldBefore) else name
+
+
+def _held_roots(args_left: dict[str, tuple[Any, Any]]) -> list[str]:
+    """The arguments in *args_left* only through what they held."""
+    return list(
+        dict.fromkeys(
+            before.param for before, _ in args_left.values() if isinstance(before, rewrite_in_place.HeldBefore)
+        )
+    )
+
+
+def _record_held(before: dict[str, tuple], arguments: tuple) -> None:
+    """Record, in *before* (`CallRunner.arguments_before`), the attributes
+    the body binds on each instance of a plain class that a recorded
+    instance holds as a top-level attribute (``est.kernel_transformer``),
+    one level down and no further: a hit replays them on the instance the
+    argument it is handed holds there (`rewrite_in_place.HeldBefore`). One
+    held at more than one place, or that is an argument itself, is not:
+    which of them the call reached it through is not known, and a change to
+    it keeps the refusal."""
+    found: dict[int, list[tuple[str, str, Any, Any]]] = {}
+    skip = {id(value) for value in arguments} | {id(entry[0]) for entry in before.values()}
+    for param, entry in list(before.items()):
+        recording = entry[1]
+        if type(recording) is not rewrite_in_place.AttrRecording:
+            continue
+        for attribute, value in list(recording.state.items()):
+            if type(attribute) is not str or id(value) in skip or not _replays_attributes(value):
+                continue
+            found.setdefault(id(value), []).append((param, attribute, value, entry[2]))
+    for places in found.values():
+        if len(places) != 1:
+            continue
+        param, attribute, value, outer = places[0]
+        try:
+            recording = rewrite_in_place.AttrRecording(value)
+        except Exception:  # noqa: BLE001 - not recorded: a change refuses the store
+            continue
+        before[f"{param}.{attribute}"] = (value, recording, rewrite_in_place.HeldBefore(param, attribute, outer))
 
 
 def _replays_attributes(value: Any) -> bool:

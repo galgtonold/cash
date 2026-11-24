@@ -355,7 +355,7 @@ paths from the project root or pass absolute paths.
 - A result that can't be pickled is not stored
   ([`STORE-FAILED`](warnings.md#store-failed)), unless the function is
   `frozen=True`.
-<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_left @c293daef, cash/decorator/runtime.py:CallRunner._arguments_to_write @57069cf7, cash/rewrite_in_place.py:refusal @abbcccec -->
+<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_left @487d71cc, cash/decorator/runtime.py:CallRunner._arguments_to_write @e4def210, cash/rewrite_in_place.py:refusal @abbcccec -->
 <!-- claim: cash/decorator/runtime.py:CallRunner.arguments_before @50acf221, cash/decorator/arg_hashing.py:ContentKeyed.covers @4d5faf1a -->
 - A call that changed its argument in place is stored with the state it left
   the argument in when the argument is a NumPy array (not of objects), a
@@ -405,7 +405,7 @@ paths from the project root or pass absolute paths.
   writes the stored state into the `out` you pass and returns that very
   object, so `result is out` holds
   ([`CACHE-ARG-WRITTEN-BACK`](warnings.md#cache-arg-written-back)).
-<!-- claim: cash/decorator/attribute_replay.py:AttrVerdict.of @5152391a, cash/rewrite_in_place.py:attribute_refusal @0ad90168, cash/rewrite_in_place.py:AttrState.replay @0e4c9439, cash/decorator/attribute_replay.py:find @618f676b -->
+<!-- claim: cash/decorator/attribute_replay.py:AttrVerdict.of @833f9c5b, cash/rewrite_in_place.py:attribute_refusal @0ad90168, cash/rewrite_in_place.py:AttrState.replay @0e4c9439, cash/decorator/attribute_replay.py:find @3277a98d, cash/decorator/runtime.py:_record_held @63feb88b -->
 - A call that only binds, rebinds or deletes **attributes of an object it
   was handed** (`est.fit(X)` setting `self.coef_` and returning `self`, a
   resampler's `fit_resample` setting `self.sampling_strategy_`, or a
@@ -415,7 +415,16 @@ paths from the project root or pass absolute paths.
   `return self` hands back your object. The binding may happen any number
   of calls deep (`resample(sampler, X, y)` calling `sampler.fit_resample`,
   whose helper binds `est.sampling_strategy_`), in code the key names or
-  in code a call that picks code by name ran. This holds when:
+  in code a call that picks code by name ran. It also covers an object
+  the argument already held as an attribute before the call, one level
+  down and no deeper: a NiMARE estimator's fit gives the kernel transformer
+  it holds `memory_` and `_shelving` (nilearn's `CacheMixin._fit_cache`),
+  and a hit binds them on the kernel transformer your estimator holds,
+  the very object a plain run changes, so anything else that holds it sees
+  the change too. That object is replayed by the same rules as the
+  argument, and only while the argument still holds it under that one
+  name after the call (an object it holds under two names, or that is
+  also an argument, is not). This holds when:
     - the object is an instance of a class of yours or a library's written
       in Python, with no `__slots__`, no `__setattr__` or `__delattr__` of
       its own, and no property setter or other descriptor that runs code
@@ -425,21 +434,25 @@ paths from the project root or pass absolute paths.
     - the cache key holds the object by all it holds (not a
       `__cash_key__`, a registered hasher or a lineage tag of its own);
     - nothing else changed: no value the object already held was changed in
-      place (`self.history.append(x)`, `self.model.partial_fit(...)`,
-      `self.cfg["k"] = 1`), and no other argument either (an array `X`
+      place (`self.history.append(x)`, `self.model.partial_fit(...)` on a
+      model that is not such an object, `self.cfg["k"] = 1`,
+      `self.kernel.cache.append(x)`, or an attribute two levels down,
+      `self.kernel.inner.k = 1`), and no other argument either (an array `X`
       written in place still keeps the call from being stored);
     - each value bound is a number, string or similar, one of the call's
       arguments or the object itself, a module global, a class or function,
       the value of another top-level attribute of an object it changes so
-      that held it before the call and still holds it after, under one name
-      only (`self.a = self.b`, nibabel's
-      `img._data_cache = np.asanyarray(img._dataobj)` on an in-memory image)
+      that held it before the call and still holds it after (`self.a =
+      self.b`, nibabel's `img._data_cache = np.asanyarray(img._dataobj)` on
+      an in-memory image, `self.kernel.memory_ = self.kernel.memory`)
       (a hit binds that very object again, never a copy: for an attribute,
       what your object holds under that name when the hit is served, so
       `img._data_cache is img._dataobj` holds after it as after a plain
-      run), or a new object the call made that nothing outside the call
+      run; an object held under several such names is bound while they all
+      still hold one object, and the call runs again when they do not), or
+      a new object the call made that nothing outside the call
       holds, nor anything inside it: a value the object held before under a
-      name the call rebinds or deletes, or under two names, something a
+      name the call rebinds or deletes, something a
       module or class also holds, or a new object holding one of those, or
       holding an argument, keeps the call running every time. Two
       attributes bound to one new object, or an attribute that is also the
@@ -448,7 +461,7 @@ paths from the project root or pass absolute paths.
   cannot replay it. Sharing cash cannot see stays a limit: an object
   written in C that holds references without telling the garbage collector
   is not looked into.
-<!-- claim: cash/decorator/attribute_replay.py:also_changed @0c99ff5f, cash/decorator/runtime.py:CallRunner._source_changes @6c02f310 -->
+<!-- claim: cash/decorator/attribute_replay.py:also_changed @0c99ff5f, cash/decorator/runtime.py:CallRunner._source_changes @125fad66 -->
 - A call that **writes into a container an argument holds** is not stored,
   and runs every time: a dict, list or array the object keeps as an
   attribute (`data.uns["total"] = ...`, `self.history.append(x)`, a new
@@ -459,7 +472,9 @@ paths from the project root or pass absolute paths.
   attributes, the warning and the miss reason name the change that kept a
   hit from replaying them: the line of your function
   (`self.history.append (line 12)`), or else the container
-  (`an in-place change of the list self.history held`). Where the library
+  (`an in-place change of the list self.history held`). A write into an
+  attribute the call itself bound to a new object (`self.null_ = {}`, then
+  `self.null_["k"] = v`) changed nothing you had, and is never named. Where the library
   offers a form that returns a new object instead (`copy=True`,
   `inplace=False`), use it, or copy first; the call is then cached:
 

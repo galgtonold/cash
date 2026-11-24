@@ -60,6 +60,7 @@ __all__ = [
     "attribute_refusal",
     "put_back",
     "FrameState",
+    "HeldBefore",
     "HeldByCash",
     "KeyedBefore",
     "ResultIsArgument",
@@ -514,6 +515,21 @@ class BoundBefore(NamedTuple):
     name: str
 
 
+class HeldBefore(NamedTuple):
+    """The state an instance was in before the call that an argument (or
+    the instance the callable is bound to) held as its top-level attribute
+    *name* then, and still held after it (``est.kernel_transformer``):
+    *param* names that argument as the call does, *outer* is its own
+    `KeyedBefore` or `BoundBefore`. The key holds the argument by all it
+    holds, this instance included, so a hit's key match says the instance
+    the argument it is handed holds there is in that state; the hit
+    replays the attributes the call bound on it there."""
+
+    param: str
+    name: str
+    outer: Any
+
+
 class ResultIsArgument(NamedTuple):
     """Stored in place of a result that IS an argument the call changed in
     place (``stft(y, out=buf)`` filling and returning ``buf``): the entry
@@ -875,8 +891,10 @@ class Relink(NamedTuple):
     """In an `AttrState`, a value a hit binds by identity instead of a copy:
     ``("argument", parameter)`` -- one of the call's arguments, or the object
     itself --, ``("attribute", parameter, name)`` -- what that argument holds
-    as its attribute *name* on the hit, as it held it before the call --,
-    or ``("global", module, name)``."""
+    as its attribute *name* on the hit, as it held it before the call (or
+    ``(parameter, name, inner)``, what that attribute holds as *inner*) --,
+    ``("attributes", path, path, ...)`` -- the one object several such
+    paths all hold --, or ``("global", module, name)``."""
 
     kind: str
     where: tuple

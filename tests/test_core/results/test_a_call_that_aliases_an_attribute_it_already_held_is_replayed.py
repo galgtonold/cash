@@ -138,7 +138,11 @@ def test_a_change_in_place_to_the_held_object_runs_every_time(disk_cash):
     assert "also changed something else in its arguments in place" in why, why
 
 
-def test_an_object_held_under_two_attributes_is_ambiguous_and_runs_every_time(disk_cash):
+def test_an_object_held_under_two_attributes_is_bound_again_by_identity(disk_cash):
+    """``img.other`` holds the array ``img._dataobj`` holds: a hit binds
+    ``img._data_cache`` to that one object, which both attributes of the
+    image it is handed still hold."""
+
     def make():
         img = Img()
         img.other = img._dataobj
@@ -147,15 +151,22 @@ def test_an_object_held_under_two_attributes_is_ambiguous_and_runs_every_time(di
     plain_img = make()
     plain = _state(plain_img, get_data(plain_img))
     cached, runs = _cached(disk_cash, get_data)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        for _ in range(2):
-            img = make()
-            assert _state(img, cached(img)) == plain
-            assert img._data_cache is img._dataobj is img.other
-    assert len(runs) == 2
-    why = cached.explain(make()).details["why"]
-    assert "img._dataobj and img.other all held before the call, so which of them" in why, why
+    for _ in range(3):
+        img = make()
+        held = img._dataobj
+        assert _state(img, cached(img)) == plain
+        assert img._data_cache is img._dataobj is img.other is held
+    assert len(runs) == 1
+
+
+def test_attributes_that_held_one_object_and_hold_different_ones_now_are_not_resolved():
+    img = Img()
+    img.other = img._dataobj
+    relink = Relink("attributes", (("img", "_dataobj"), ("img", "other")))
+    assert attribute_replay.find(relink, {"img": img}) is img._dataobj
+    img.other = img._dataobj.copy()
+    with pytest.raises(attribute_replay.Unresolved, match=r"img\._dataobj and img\.other held .* different objects"):
+        attribute_replay.find(relink, {"img": img})
 
 
 def test_a_path_that_no_longer_holds_an_attribute_is_not_resolved():

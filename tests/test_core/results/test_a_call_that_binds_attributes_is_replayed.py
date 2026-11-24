@@ -193,6 +193,7 @@ def fit_append(self, X):
 
 
 def fit_nested_change(self, X):
+    # On an instance it held before: replayed there, one level down.
     self.cfg.k = 9
     self.coef_ = X.sum(0)
     return 1
@@ -212,6 +213,14 @@ def fit_hold_global(self, X):
 def fit_hold_pooled(self, X):
     self.pool_ = SHARED["pool"]
     return 1
+
+
+def test_a_change_on_an_instance_it_held_is_replayed(disk_cash):
+    """``self.cfg.k = 9``, one level down, is replayed on the ``cfg`` the
+    instance handed in holds (its own page has the rules)."""
+    runs, same, kept = _check(disk_cash, History, fit_nested_change)
+    assert (runs, same) == (1, True)
+    assert kept[-1].cfg.k == 9
 
 
 class SlotView:
@@ -235,7 +244,7 @@ def fit_write_x(self, X):
 
 @pytest.mark.parametrize(
     "method",
-    [fit_append, fit_nested_change, fit_swap, fit_hold_global, fit_hold_pooled, fit_slot_view, fit_write_x],
+    [fit_append, fit_swap, fit_hold_global, fit_hold_pooled, fit_slot_view, fit_write_x],
 )
 def test_what_a_hit_cannot_replay_runs_every_time(full_warning_text, disk_cash, method):
     with warnings.catch_warnings(record=True) as caught:
