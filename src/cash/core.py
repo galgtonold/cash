@@ -411,6 +411,7 @@ class Cash:
             self._notices,
             KeyCheck(self._backend_slot.local_dir, lambda: self.config.check_cash_keys),
         )
+        self._registry.arg_hasher = self._args
         self._code = CodeSurface(self._args)
         self._pins = OwnSourcePins()
         self._captures = CaptureAnalysis()

@@ -56,7 +56,8 @@ that can change the result without changing an argument:
 | The random seed | For a function seen drawing from the global `random` or `numpy.random` stream: which seed is in force. In a notebook that is the seeding statement. In a script it is where the seeded stream stands at the call, for a `random.seed()` or `np.random.seed()` made at any time before it, by the caller too (module level, or an outer function before it calls this one), and before `import cash` too: numpy's stream shows a seed set before cash watched it, and for `random` cash reads the lines of the script (or the notebook cells) that ran before `import cash`. Re-seeding recomputes, and two draws in a row under one seed are two entries. |
 
 <!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @cb57665a -->
-Two limits. A global that cannot be hashed (a lock, a live connection) is left
+Two limits. A global that cannot be hashed (a live connection, an object
+holding a lock) is left
 out with a [`KEY-UNHASHABLE-GLOBAL`](../warnings.md#key-unhashable-global)
 warning. And reachability is static: code picked at run time, from a dict or
 through `getattr`, is not in the key. On Python 3.12 and newer the call is
@@ -64,6 +65,16 @@ cached on a record of the code it ran, checked before each hit; before 3.12
 it runs uncached with a
 [`KEY-UNTRACKABLE-DEP`](../warnings.md#key-untrackable-dep) warning. Name such
 code with `depends_on=[...]` to key it directly.
+
+<!-- claim: cash/decorator/key_values.py:SYNC_TYPES @fe64ee04, cash/decorator/hit_memo.py:_LOCK_TYPES @41307b73 -->
+Locks carry no data: cash assumes a `threading.Lock()` or `threading.RLock()`
+holds nothing a result is computed from. One that a global, a capture, a
+default or a class attribute holds is keyed by its type alone, so holding
+it, or swapping it for another lock of its type, changes no key. Rebinding
+the name or attribute is still noticed, as any rebinding is, and the state
+a key reads is still remembered across calls that reach a lock
+([A hit met again](#a-hit-met-again)). A lock inside a value cash pickles
+(an object holding one as an attribute) still leaves that value unhashable.
 
 A library's settings are not in the key: a library is keyed by its
 installed version. On Python 3.12 and newer each call records, as its body
@@ -397,7 +408,15 @@ captures and defaults they read) is remembered per function and reused while
 the same watchers show nothing it reads moved and cash's own state it reads
 (registrations, pins, learned mutations, settings) is unchanged. A segment
 that read the random seed state or an environment variable is not
-remembered. `CASH_STATE_MEMO=0` turns this off; `CASH_STATE_MEMO_VERIFY=1`
+remembered.
+<!-- claim: cash/decorator/key_values.py:left_out_whole @78b8afc2, cash/decorator/hit_memo.py:_Scan.global_value @640020ff -->
+A global the key leaves out because its object holds a lock among its
+attributes ([above](#what-goes-into-the-state)) is watched only for what
+keeps it out: which object the name holds, its class and its attributes.
+What those attributes hold is not looked into, as the key reads none of it,
+and the [`KEY-UNHASHABLE-GLOBAL`](../warnings.md#key-unhashable-global)
+warning stands for a reused segment as for a fresh one. Not while a hasher
+is registered, which may read what the object holds. `CASH_STATE_MEMO=0` turns this off; `CASH_STATE_MEMO_VERIFY=1`
 (or `CASH_HITPATH_VERIFY=1`) folds the segment again behind every reuse and
 raises if the two differ.
 
