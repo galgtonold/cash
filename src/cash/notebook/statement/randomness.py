@@ -151,7 +151,12 @@ class StatementRandomness:
         #: consumes the same global stream but had no view of this ledger, and
         #: served a model trained under the previous seed.
         self.seed_epochs: dict[str, str] = {}
-        publish_seed_epochs(self.seed_epochs)
+        #: module -> the `seed_generation` the ledger accounts for: the
+        #: seeds this processor's statements set, or adopted. Published with
+        #: the ledger: a seed set since, where no statement saw it, makes
+        #: ``@cash.cache`` key that stream on its position instead.
+        self._ledgered_generation: dict[str, int] = {}
+        publish_seed_epochs(self.seed_epochs, self._ledgered_generation)
         # Source hashes of entropy-reseed statements already warned about, so the
         # "seed(None) does not make everything below it fresh" note fires once.
         self._warned_entropy_reseed: set[str] = set()
@@ -173,9 +178,6 @@ class StatementRandomness:
         #: `judged_draws` when this statement began: a cached
         #: function inside it that reported its own draw moves it.
         self._draw_warnings_at_start = 0
-        #: module -> the `seed_generation` the ledger accounts for: the
-        #: seeds this processor's statements set, or adopted.
-        self._ledgered_generation: dict[str, int] = {}
         #: Streams whose lineage `adopt_unseen_seeds` set.
         self._adopted: set[str] = set()
         #: Streams a seeding statement of the notebook gave a lineage

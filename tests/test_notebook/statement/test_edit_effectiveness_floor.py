@@ -44,6 +44,7 @@ import pytest
 from IPython.core.interactiveshell import InteractiveShell
 
 from benchmarks.bench_notebook_edit import run_notebook_edit_benchmark
+from cash.tracking.randomness import publish_seed_epochs
 
 # Measured on this notebook at the time of writing. These are CEILINGS on
 # current behaviour, not targets: the goal is zero, and lowering them as
@@ -123,6 +124,10 @@ def edit_report(tmp_path_factory):
         # The driver registers a process-global IPython shell. Clear it so a
         # later test in this worker does not run inside a live session.
         InteractiveShell.clear_instance()
+        # And its statement engine's seed ledger, which nothing else
+        # unpublishes: a module fixture runs before the conftest one that
+        # puts the ledger back, so that one would keep this one published.
+        publish_seed_epochs(None)
 
 
 def test_the_measurement_is_not_vacuous(edit_report):

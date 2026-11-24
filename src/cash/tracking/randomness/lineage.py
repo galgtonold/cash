@@ -64,14 +64,30 @@ def rng_virtual_var(module: str) -> str:
 # The processor PUBLISHES its dict here by reference, so this is a view onto the
 # live ledger rather than a second copy that could drift. A fresh processor
 # replaces the pointer, which also keeps tests isolated.
+#
+# The ledger only knows the seeds the engine saw. A seed set where no
+# statement of the engine runs -- after ``%cash_off``, after the engine's
+# shell is gone, or inside the statement that is running -- leaves it behind
+# the stream. The engine publishes, with the ledger, the `seed_generation`
+# it accounts for per stream; where the process's watch has seen a seed
+# since, the ledger is stale for that stream and `seed_epoch_component`
+# keys it as outside a notebook, on where the seeded stream stands.
 # ---------------------------------------------------------------------------
 _ACTIVE_SEED_EPOCHS: dict[str, str] | None = None
+#: module -> the `seed_generation` the published ledger accounts for, or
+#: None to trust the ledger for every stream.
+_ACTIVE_LEDGERED_GENERATION: dict[str, int] | None = None
 
 
-def publish_seed_epochs(epochs: dict[str, str] | None) -> None:
-    """Expose the statement engine's live seed ledger to other front-ends."""
-    global _ACTIVE_SEED_EPOCHS
+def publish_seed_epochs(epochs: dict[str, str] | None, generations: dict[str, int] | None = None) -> None:
+    """Expose the statement engine's live seed ledger to other front-ends.
+
+    *generations*, by reference too, is the `seed_generation` per stream
+    the ledger accounts for: a stream seeded since is keyed by its
+    position instead (`seed_epoch_component`)."""
+    global _ACTIVE_SEED_EPOCHS, _ACTIVE_LEDGERED_GENERATION
     _ACTIVE_SEED_EPOCHS = epochs
+    _ACTIVE_LEDGERED_GENERATION = generations if epochs is not None else None
     _UNSEEDED_ABOVE.clear()
 
 
@@ -498,20 +514,24 @@ def seed_epoch_component(modules: set[str]) -> str:
     Empty when unseeded, so a function that draws from an unseeded stream keeps
     the key it has today: the freeze contract still applies and the value is
     replayed. Only an actual seed -- or a change to one -- moves the key.
-    Outside a notebook, a stream seeded in this process is keyed by its
+    Outside a notebook, or for a stream seeded since the notebook's ledger
+    last accounted for it, a stream seeded in this process is keyed by its
     position at the call (see `watch_seeds`).
     """
     if not modules:
         return ""
-    if _ACTIVE_SEED_EPOCHS is None:
-        parts = []
-        for m in sorted(modules & _PROCESS_SEEDED):
+    epochs = _ACTIVE_SEED_EPOCHS
+    generations = _ACTIVE_LEDGERED_GENERATION
+    parts = []
+    for m in sorted(modules):
+        if epochs is not None and (generations is None or generations.get(m, 0) == seed_generation(m)):
+            if m in epochs:
+                parts.append(f"{m}:{epochs[m]}")
+        elif m in _PROCESS_SEEDED:
+            # No ledger, or a seed it has not seen: where the stream stands.
             position = _stream_position(m)
             if position is not None:
                 parts.append(f"{m}@{position}")
-        return ":rng:" + ":".join(parts) if parts else ""
-    epochs = _ACTIVE_SEED_EPOCHS
-    parts = [f"{m}:{epochs[m]}" for m in sorted(modules) if m in epochs]
     return ":rng:" + ":".join(parts) if parts else ""
 
 

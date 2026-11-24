@@ -628,10 +628,10 @@ def _process_seeds_put_back():
 
     seeded = lineage._PROCESS_SEEDED
     seeded.clear()
-    published = lineage._ACTIVE_SEED_EPOCHS
+    published = lineage._ACTIVE_SEED_EPOCHS, lineage._ACTIVE_LEDGERED_GENERATION
     yield
     seeded.clear()
-    lineage.publish_seed_epochs(published)
+    lineage.publish_seed_epochs(*published)
 
 
 @pytest.fixture(autouse=True)
