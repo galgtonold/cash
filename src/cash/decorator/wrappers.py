@@ -233,13 +233,22 @@ class Wrappers:
             if fast_state is not None:
                 # A call met before, while nothing its key reads has moved
                 # (`hit_memo`): served without building the key again.
-                result = fast_call(fast_state, args, kwargs)
-                if result is not missed:
-                    if pt is not None:
-                        phases.fast_hit(phase_times.elapsed(pt))
-                    return result
-                if pt is not None:
-                    phase_times.mark(pt, phase_times.FAST_PROBE)
+                if pt is None:
+                    result = fast_call(fast_state, args, kwargs)
+                    if result is not missed:
+                        return result
+                else:
+                    # The copy a fast hit hands out (`InMemoryBackend.get`:
+                    # the kept copy proved unheld, or a new one) is timed
+                    # as its ``read.decode``, as an ordinary hit's is.
+                    window = phase_times.open_window(pt, phase_times.FAST_PROBE)
+                    try:
+                        result = fast_call(fast_state, args, kwargs)
+                    finally:
+                        phase_times.close_window(pt, window)
+                    if result is not missed:
+                        phases.commit(pt, "fast_hit")
+                        return result
                 if fast_state[hit_memo.S_ACC].pending:
                     cf.hit_memo.flush()
             settings = self._config()

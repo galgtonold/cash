@@ -196,3 +196,45 @@ def test_the_file_collects_every_process_and_the_report_adds_them_up(tmp_path):
         run_python("work.py", cwd=tmp_path, env={"CASH_PHASE_TIMES_FILE": str(single)})
     assert len(single.read_text(encoding="utf-8").splitlines()) == 2
     assert phase_report.main([str(single)]) == 0
+
+
+class _TrieNode:
+    __slots__ = ("children", "end")
+
+    def __init__(self):
+        self.end = False
+        self.children = None
+
+
+def _trie(words: int) -> _TrieNode:
+    root = _TrieNode()
+    root.children = {}
+    for i in range(words):
+        node = _TrieNode()
+        node.end = True
+        root.children[str(i)] = node
+    return root
+
+
+@pytest.mark.filterwarnings("ignore::cash.CashImpurityWarning")
+def test_a_fast_hit_shows_the_copy_it_hands_out_as_its_decode(timed):
+    """A fast hit of a value the memory tier keeps as pickle bytes hands
+    out a copy (the one kept, proved unheld, or a new one): that work is
+    its ``read.decode``, as an ordinary hit's is. Counted as one lump with
+    the probe, a walk of fresh processes showed its ordinary hits' decode
+    -- one unpickle per process -- as every hit's."""
+
+    @timed.cache
+    def word_trie():
+        return _trie(3000)
+
+    for _ in range(8):
+        assert len(word_trie().children) == 3000
+
+    times = word_trie.cache_info()["phase_times"]
+    fast = _phases(word_trie.cache_info(), "fast_hit")
+    assert fast["total"]["count"] >= 3
+    assert fast["read.decode"]["count"] == fast["total"]["count"]
+    parts = sum(v["total"] for k, v in fast.items() if k not in _NOT_PHASES)
+    assert parts == pytest.approx(fast["total"]["total"], rel=1e-9, abs=1e-9)
+    assert times["fast_hit.cash"]["total"] == pytest.approx(times["fast_hit.total"]["total"])

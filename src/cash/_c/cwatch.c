@@ -1886,6 +1886,8 @@ static PyObject *weak_target(PyObject *wref) {   /* borrowed or NULL */
 static int verify(Root *R) {
     uintptr_t *s = R->snap, *end = R->snap + R->nsnap;
     Prints c = {0, 0};
+    PyTypeObject *last_t = NULL;   /* the class of the instance before, and its verdict */
+    TypeInfo *last_ti = NULL;
     while (s < end) {
         uintptr_t h = s[0];
         int kind = (int)(h & 0x7F), prints = (h & R_PRINTS) != 0;
@@ -1945,8 +1947,9 @@ static int verify(Root *R) {
             } else if (t->tp_dictoffset != 0 || (t->tp_flags & Py_TPFLAGS_MANAGED_DICT)) {
                 return 0;
             }
-            TypeInfo *ti = verdict_of(t);
+            TypeInfo *ti = t == last_t ? last_ti : verdict_of(t);
             if (!ti || !ti->ok || (size_t)ti->nslots != n) return 0;
+            last_t = t; last_ti = ti;
             for (size_t i = 0; i < n; i++)
                 if (*(uintptr_t *)((char *)o + ti->offsets[i]) != s[4 + i]) return 0;
             if (prints)
