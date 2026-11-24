@@ -49,9 +49,11 @@ Arrow data in memory Arrow allocated itself is shared (`arrow_owned`).
 A big table of numbers and dates is not copied at all (`share_checked`):
 the tier keeps a shallow copy, which pandas copies before writing either
 side, with the digest of its data, and checks that digest before it serves
-the table. Once nothing but the tier reaches that data -- the caller has
-rebound the name (``df = df[...]``) -- the tier takes it over and freezes
-it as its own (`adopt`).
+the table. Its Arrow text in memory that may be someone else's (a frame
+``read_csv`` made) is kept so too, its bytes in the digest. Once nothing
+but the tier reaches that data -- the caller has rebound the name (``df =
+df[...]``) -- the tier takes it over and freezes it as its own (`adopt`),
+copying that Arrow memory then.
 
 Used only where pandas has copy-on-write (pandas 3, or opted in before) and
 these internals behave as described (`enabled`, checked once). Otherwise the
@@ -1027,8 +1029,10 @@ def share_checked(frame: Any) -> tuple[Any, bytes] | None:
     write past pandas (``s.array[0] = ...``, a numpy array the table was
     built over) is not copied first: the digest, taken now, is checked
     before the table is served or written elsewhere, and a table whose data
-    changed is not served. Its labels are copied (`_owned_axis`), and so is
-    its Arrow data where it may be someone else's memory (`_copy_values`).
+    changed is not served. Its labels are copied (`_owned_axis`). Its Arrow
+    columns get wrappers of their own over the same chunks; a chunk that may
+    be someone else's memory is checked with the numbers, and copied once
+    the tier adopts the table (`adopt`).
 
     Only a plain DataFrame `freezable` with *cells_known* (the caller has
     found no object column holding a changeable cell), holding at least
@@ -1098,14 +1102,27 @@ def _share_checked(frame: Any) -> tuple[Any, bytes] | None:
     mgr = frame._mgr
     blocks = []
     checked = []
+    arrow_checked = []
     nbytes = 0
     for block in mgr.blocks:
         parts = _ndarray_parts(block.values)
         if parts is None:
             return None
-        if not parts:  # Arrow-backed: copied where it may be another's memory
-            values = _copy_values(block.values, True)
-            blocks.append(type(block)(values, placement=block._mgr_locs, ndim=block.ndim, refs=None))
+        if not parts:
+            # Arrow-backed: under a wrapper of the tier's own, which a write
+            # past pandas (``s.array[0] = ...``) cannot reach, as a copy's.
+            # Its chunks that may be another's memory (`_owned_arrow`) are
+            # shared too, and checked by their bytes with the numbers
+            # (`checked_digest`): a frame ``read_csv`` made holds its text
+            # in the parser's memory, and copying the four text columns of
+            # p18's 5.6 million lab rows was 0.7 s of each store of them.
+            values = block.values.copy()
+            kept_block = type(block)(values, placement=block._mgr_locs, ndim=block.ndim, refs=None)
+            blocks.append(kept_block)
+            if _unowned_arrow_chunks(values) is None:
+                return None  # neither checked nor known to be Arrow's own
+            if _unowned_arrow_chunks(values):
+                arrow_checked.append(kept_block)
             continue
         for _name, array in parts:
             if array.dtype.hasobject or _flat_bytes(array) is None:
@@ -1122,7 +1139,7 @@ def _share_checked(frame: Any) -> tuple[Any, bytes] | None:
     shared = frame._constructor_from_mgr(shared_mgr, axes=shared_mgr.axes).__finalize__(frame, method="copy")
     if any(kept is not block for kept, block in zip(shared._mgr.blocks, blocks)):
         return None  # pandas rebuilt the blocks: not the ones made here
-    for block in checked:
+    for block in checked + arrow_checked:
         _CHECKED_BLOCKS.add(block)
     digest = checked_digest(shared, keys)
     if digest is None:
@@ -1179,8 +1196,9 @@ def _flat_bytes(array: Any) -> Any:
 
 def checked_digest(frame: Any, keys: dict[tuple, tuple] | None = None) -> bytes | None:
     """The digest of the data a table `share_checked` made keeps in the
-    caller's arrays (its Arrow data and labels are its own); None when an
-    array is no longer in one piece.
+    caller's arrays, and of its Arrow chunks that may be another's memory
+    (`_fold_unowned_arrow`; its labels are its own); None when an array is
+    no longer in one piece.
 
     *keys*: the content key of each block, by its columns' positions
     (`shared_blocks.content_keys`), asked of the frame memo just now; a
@@ -1197,6 +1215,10 @@ def checked_digest(frame: Any, keys: dict[tuple, tuple] | None = None) -> bytes 
     digest = hashlib.sha256(_CHECKED_TAG)
     for block in frame._mgr.blocks:
         if block not in _CHECKED_BLOCKS:
+            continue
+        if _ndarray_parts(block.values) == []:
+            if not _fold_unowned_arrow(digest, block.values):
+                return None
             continue
         key = keys.get(tuple(int(pos) for pos in block.mgr_locs.as_array)) if keys else None
         if key is not None and block_layout(block.values) != key[0]:
@@ -1216,6 +1238,54 @@ def checked_digest(frame: Any, keys: dict[tuple, tuple] | None = None) -> bytes 
     return digest.digest()
 
 
+def _unowned_arrow_chunks(values: Any) -> list[int] | None:
+    """The positions of the chunks of the Arrow-backed *values* that may be
+    memory someone else writes (`_unowned_chunks`); None for a type whose
+    buffers `_fold_unowned_arrow` does not read all of (a dictionary,
+    anywhere in it)."""
+    chunked = values._pa_array
+    if _holds_dictionary(chunked.type):
+        return None
+    return _unowned_chunks(chunked.type, chunked.chunks)
+
+
+def _fold_unowned_arrow(digest: Any, values: Any) -> bool:
+    """Fold into *digest* the bytes of each chunk of the Arrow-backed
+    *values* that may be another's memory (`_unowned_arrow_chunks`), every
+    buffer of it, its children's too, whole; False when that cannot be
+    read. A chunk in memory Arrow allocated is nobody's to write and is
+    not read."""
+    import numpy as np
+
+    from cash import bulk_digest
+
+    todo = _unowned_arrow_chunks(values)
+    if todo is None:
+        return False
+    chunks = values._pa_array.chunks
+    for at in todo:
+        buffers = chunks[at].buffers()
+        digest.update(b"chunk %d %d\0" % (at, len(buffers)))
+        for buffer in buffers:
+            if buffer is None:
+                digest.update(b"-")
+                continue
+            digest.update(b"%d\0" % buffer.size)
+            bulk_digest.fold_buffer(digest, np.frombuffer(buffer, dtype=np.uint8))
+    return True
+
+
+def _own_checked_arrow(frame: Any) -> None:
+    """Copy into memory Arrow allocated the chunks of *frame*'s checked
+    Arrow blocks that may be another's memory (`_owned_arrow`), as a stored
+    copy would hold them: once adopted, nothing checks them any more. Each
+    block's wrapper is the tier's own (`_share_checked`)."""
+    for block in frame._mgr.blocks:
+        if block in _CHECKED_BLOCKS and _ndarray_parts(block.values) == []:
+            values = block.values
+            values._pa_array = _owned_arrow(values._pa_array)
+
+
 def adopt(frame: Any) -> bool:
     """Freeze a table `share_checked` made, in place, when nothing but the
     RAM tier reaches its data any more (`_only_tier_reaches`): the caller's
@@ -1224,7 +1294,10 @@ def adopt(frame: Any) -> bool:
     done, while anything else may still write it. Check its digest first:
     what is frozen is what is served from then on."""
     try:
-        return _adoptable(frame) and _freeze(frame, cells_known=True)
+        if not _adoptable(frame):
+            return False
+        _own_checked_arrow(frame)
+        return _freeze(frame, cells_known=True)
     except Exception:  # unknown internals: left as it is
         logger.debug("cash: could not take over a %s", class_name(type(frame)), exc_info=True)
         return False
@@ -1288,7 +1361,10 @@ def _holders(blocks: list[Any]) -> tuple[dict[int, Any], dict[int, int]] | None:
 
 def _adoptable(frame: Any) -> bool:
     """Would `adopt` take *frame* over now?"""
-    blocks = [block for block in frame._mgr.blocks if block in _CHECKED_BLOCKS]
+    # Checked Arrow blocks aside: their wrappers are the tier's own, and the
+    # memory that may be another's is copied as they are adopted
+    # (`_own_checked_arrow`).
+    blocks = [block for block in frame._mgr.blocks if block in _CHECKED_BLOCKS and _ndarray_parts(block.values)]
     return not blocks or _only_tier_reaches(blocks)  # none: frozen data and its own copies only
 
 
