@@ -1272,6 +1272,11 @@ def _could_spell(pyarrow: Any, chunked: Any) -> Any:
         text = numpy.frombuffer(buffers[2], dtype=numpy.uint8)
         starts, ends = offsets[:-1], offsets[1:]
         lengths = ends - starts
+        if lengths.max() < span:
+            # No value is long enough to spell one: a pass over the lengths
+            # instead of the five below and a read of the text (p18's codes
+            # ``V1``, ``ALT``, ``U/L``: 40-55 ms each per 5.6 million rows).
+            continue
         kept: list[Any] = []
         longer = numpy.flatnonzero(lengths >= 2 * span)
         # 7 to 13 bytes: the bytes every spelling covers, `count` of them

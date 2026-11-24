@@ -176,3 +176,26 @@ def test_a_column_of_digits_is_kept_whole_and_finds_the_same(kind, monkeypatch):
             chunk.buffers()[2].address for chunk in column.chunks
         ]
         assert _read(column, True, monkeypatch) == _read(column, False, monkeypatch)
+
+
+@pytest.mark.parametrize("kind", [pa.string(), pa.large_string()])
+def test_a_chunk_of_values_too_short_to_spell_one_is_passed_over_by_its_lengths(kind, monkeypatch):
+    # p18's codes (``V1``, ``ALT``, ``U/L``): 5.6 million values, none of 7
+    # bytes, were read byte by byte after each statement making a lab frame.
+    read: list[int] = []
+    real = identity_holders._spelling_bytes
+    monkeypatch.setattr(
+        identity_holders, "_spelling_bytes", lambda numpy, found: read.append(len(found)) or real(numpy, found)
+    )
+    short = pa.array(["V1", "ALT", "U/L", None, "", "123456", "0xabcd"] * 200, type=kind)
+    assert len(identity_holders._could_spell(pa, short)) == 0
+    assert read == []
+    # One long enough among them, in the next chunk or the same one: found.
+    held = 0x7F00AA12BC
+    for column in (
+        pa.chunked_array([short, pa.array(["V1", f"run-{held}"] * 600, type=kind)], type=kind),
+        pa.array([*short.to_pylist(), hex(held)], type=kind),
+    ):
+        monkeypatch.setattr(identity_holders, "_NARROWED_CHUNK_ROWS", 1)
+        assert held in _numbers(_read(column, True, monkeypatch))
+        assert _read(column, True, monkeypatch) == _read(column, False, monkeypatch)
