@@ -24,8 +24,22 @@ LOOP = (
 )
 
 
+def _read_the_classes_alive(namespace):
+    """What the measured loop reads once a process, read first. A statement
+    reading a container too big to look through asks whether a class alive
+    has a special method (`special_classes_exist`) and reads the source of
+    those it finds -- in a test process, other tests' classes. The first
+    read of a file in a process digests its text (`_kept_block`), which the
+    counter takes for hashing: 87 KB to 1 MB, by what ran before in that
+    worker. Read here, the count is the loop's own."""
+    from cash.analysis.handed_callables import special_classes_exist
+
+    special_classes_exist(namespace)
+
+
 def test_the_lists_are_not_hashed(cash_magics):
     run_cash_cell(cash_magics, SESSIONS)
+    _read_the_classes_alive(cash_magics.shell.user_ns)
     with hashed_bytes() as hashed:
         run_cash_cell(cash_magics, LOOP)
     assert len(cash_magics.shell.user_ns["user_lst"]) == 100_000
