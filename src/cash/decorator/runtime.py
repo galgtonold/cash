@@ -59,7 +59,17 @@ from ..tracking.randomness import (
     replayable,
 )
 from ..tracking.trace_recorder import other_thread_alive
-from . import attribute_replay, class_memo, code_trace, hit_memo, library_reads, state_memo, walk_scope, warning_state
+from . import (
+    attribute_replay,
+    class_memo,
+    class_writes,
+    code_trace,
+    hit_memo,
+    library_reads,
+    state_memo,
+    walk_scope,
+    warning_state,
+)
 from .arg_hashing import (
     CALL_POLARS,
     CONTENT_KEYED,
@@ -2462,6 +2472,10 @@ class CallRunner:
         # would not set ``np.seterr`` or a logger's level again.
         run.registries = process_registries.snapshot()
         run.observer.registries = run.registries
+        # And what the user's classes it can reach bind: a hit would not
+        # bind ``Cfg.items`` again (`class_writes`).
+        run.class_state = self._class_state(spec, args, kwargs)
+        run.observer.class_state = run.class_state
         # What a waived line, or a function waived from its ``def`` line,
         # changes of them is left out: only for code that carries a waiver.
         waiver_trace = WaiverTrace() if self._carries_waiver(spec) else None
@@ -2682,6 +2696,8 @@ class CallRunner:
             refusal = self._loaded_unread(spec, call)
         if refusal is None:
             refusal = self._refuse_registries(spec, run)
+        if refusal is None:
+            refusal = self._refuse_class_writes(spec, run)
         if refusal is None and args_left and shared:
             # A hit writes the arguments back and hands the result back as a
             # copy, which no longer shares their memory as the call's did.
@@ -3013,6 +3029,45 @@ class CallRunner:
             "cash.assume_safe():` around it; @cash.cache(assume_safe=True) waives the whole function instead.",
         )
         return f"it changed {what}, which no variable holds and a hit would not change again"
+
+    def _class_state(self, spec: CachedFunction, args: tuple, kwargs: dict) -> class_writes.ClassState | None:
+        """What the user classes a call of *spec* can reach bind before its
+        body runs (`class_writes`), or None when nothing is compared:
+        ``assume_safe=True`` waives what it binds on them."""
+        if self._registry.purity_mode(spec.name) == "silent":
+            return None
+        try:
+            functions = self._registry.code_functions(spec.func, spec.name)
+            return class_writes.ClassState(class_writes.candidates(functions, args, kwargs))
+        except Exception:
+            logger.debug("[CORE] %s: classes not read before the body", spec.name, exc_info=True)
+            return None
+
+    def _refuse_class_writes(self, spec: CachedFunction, run: BodyRun) -> str | None:
+        """Why a call that bound an attribute of a user class is not stored:
+        ``Cfg.items = Cfg.items + [x]``, ``Cfg.count += 1``, an equal new
+        list (``Cfg.items = list(Cfg.items)``). Plain Python leaves the class
+        holding the new object after every call; a hit, or a new process,
+        would leave the old one. A waiver where the write is made keeps it
+        stored, as for a process setting (`_refuse_registries`)."""
+        found = class_writes.changed(getattr(run, "class_state", None))
+        if not found:
+            return None
+        what = ", ".join(found[:3]) + (f" and {len(found) - 3} more" if len(found) > 3 else "")
+        func_name = spec.name
+        self._notices.warn_once(
+            CashImpurityWarning,
+            func_name,
+            "class_write",
+            f"@cash.cache on {func_name}: the call bound the class attribute{'s' if len(found) > 1 else ''} "
+            f"{what} to another object, which a cache hit would not do (and a new process would find the class "
+            "as its source left it), so calls that do this run uncached.",
+            code="IMPURE-SCOPE-MUTATION",
+            fix="pass the value in as an argument and return the new one, instead of rebinding it on the class; "
+            "or, if a cache hit may skip the change, put `# @cash:assume-safe` on the line that makes it, or "
+            "`with cash.assume_safe():` around it; @cash.cache(assume_safe=True) waives the whole function.",
+        )
+        return f"it bound {what} to another object, which a hit would not do"
 
     def _refuse_library_reads(self, spec: CachedFunction, run: BodyRun) -> str | None:
         """Why a call that read library state cash cannot compare between

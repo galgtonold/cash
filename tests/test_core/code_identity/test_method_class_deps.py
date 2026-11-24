@@ -173,7 +173,7 @@ class _HitC:
 
     @cash.cache
     def f(self, x):
-        _HitC.ran += 1
+        _HitC.ran += 1  # @cash:assume-safe
         return self.helper(x) + self.R
 
 

@@ -847,7 +847,7 @@ entry. That holds whenever the seed was set: before the function was
 decorated, or before `import cash` in the same script. A function
 whose own body seeds the stream is not keyed by where the caller left it.
 
-<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @fbbeadaa -->
+<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @06ec0bf0 -->
 The same holds for a generator in a module global that the body draws from
 (`rng = np.random.default_rng(42)` at module level, `rng.normal()` inside): the
 key includes where `rng` stands, and a hit moves `rng` on to where the computed
@@ -978,10 +978,11 @@ did (a file written, a request sent, a line printed) does not happen again. On
 the first call, cash reads the function and its helpers and reports what a hit
 would skip or get wrong:
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @045afef4, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/analysis/purity_report.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep", cash/decorator/runtime.py:CallRunner._refuse_registries @1938b99d -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @045afef4, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/analysis/purity_report.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep", cash/decorator/runtime.py:CallRunner._refuse_registries @1938b99d, cash/decorator/runtime.py:CallRunner._refuse_class_writes @1376edfd -->
 | The body... | cash |
 |---|---|
 | Writes, posts, prints to stdout, or changes state outside the function | Warns ([`IMPURE-SIDE-EFFECTS`](warnings.md#impure-side-effects)) and caches |
+| Binds an attribute of one of your classes (`Cfg.items = Cfg.items + [x]`, `Cfg.count += 1`, `setattr(Cfg, "k", v)`) | Warns ([`IMPURE-SCOPE-MUTATION`](warnings.md#impure-scope-mutation)) and does not store that call: a hit, or a new process, would leave the class as it was. A waiver where the write is made caches it, as for a process setting |
 | Reads the network or a database (`requests.get`, `pd.read_sql`) | Warns ([`KEY-NETWORK-READ`](warnings.md#key-network-read)) and caches. `ttl=` answers it and silences the warning |
 | Reads the clock, a random UUID, or an environment variable by computed name | Warns ([`KEY-AMBIENT-READ`](warnings.md#key-ambient-read)) and caches the first value |
 | Reads an environment variable by literal name, the working directory, or the command line (`sys.argv`, `parser.parse_args()`) | Puts the value in the key. No warning |
@@ -1022,7 +1023,7 @@ property of an object of your class that the body reads by a global name
 (`BAG['k']`, `BAG.value`) is read as a helper: a global it changes is reported
 as one the body changes.
 
-<!-- claim: cash/effect_observer.py:EffectObserver @6fa7c0fb broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @987ecb33, cash/effect_observer.py:EffectObserver.record_write @659fb0d2 -->
+<!-- claim: cash/effect_observer.py:EffectObserver @a5e2e88e broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @987ecb33, cash/effect_observer.py:EffectObserver.record_write @659fb0d2 -->
 cash also **watches the first call**. Library code is not read, so a
 `session.post` or an SDK request is invisible to the analysis above.
 

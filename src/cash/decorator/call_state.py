@@ -229,6 +229,7 @@ class BodyRun:
         "args_before",
         "args_reads",
         "registries",
+        "class_state",
     )
 
 
