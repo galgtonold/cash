@@ -301,6 +301,13 @@ _FIXED_C = frozenset(
     }
 )
 
+#: Locks carry no data: a key reads ``threading.Lock()`` and
+#: ``threading.RLock()`` by their type alone (`key_values.SYNC_TYPES`), and
+#: whether one is held is no part of any key. Which lock a name or an
+#: attribute holds is watched as the dict holding it. Exact types: a
+#: subclass of the user's own can carry anything.
+_LOCK_TYPES = frozenset({type(threading.Lock()), type(threading.RLock())})
+
 #: pathlib's own path classes: a path's parts are fixed when it is made
 #: (what it caches besides is computed from them). A subclass of the
 #: user's own can carry anything, so only these exact types.
@@ -610,7 +617,7 @@ class _Scan:
             self.watch(v.keywords, True)
             for item in v.keywords.values():
                 self.value(item, names)
-        elif t in _FIXED_C or (t.__name__ == "ufunc" and t.__module__ == "numpy"):
+        elif t in _FIXED_C or t in _LOCK_TYPES or (t.__name__ == "ufunc" and t.__module__ == "numpy"):
             return
         elif t.__name__ == "_ArrayFunctionDispatcher" and t.__module__ == "numpy":
             # `np.sum`, `np.mean`: a C wrapper whose implementation is fixed
