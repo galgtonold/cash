@@ -266,18 +266,24 @@ class RefusalVerdicts:
 
     def use(self, func_name: str, key: str) -> dict | None:
         """The verdict to run this call uncached by, counted as used; None
-        when there is none, or this call is the one to probe again."""
+        when there is none, or this call is the one to probe again.
+
+        The probe starts the count again: one that settles nothing (its
+        body raised, or it was the first change a process saw, which
+        `CallRunner._settle_verdict` keeps no verdict for) leaves the
+        verdict to the calls after it, as one refused would, instead of
+        each of them building its key until one is refused, in this
+        process and, as the count is kept beside the cache, in the next."""
         verdict = self._verdict(func_name, key)
         if verdict is None:
             return None
         with self._lock:
-            uses = int(verdict.get("uses", 0))
-            if uses + 1 >= REPROBE_EVERY:
-                return None
-            verdict = {**verdict, "uses": uses + 1}
-            self._memo[(func_name, key)] = verdict
-        self._stored_keys.note_refused(func_name, key, verdict, write=False)
-        return verdict
+            uses = int(verdict.get("uses", 0)) + 1
+            probe = uses >= REPROBE_EVERY
+            counted = {**verdict, "uses": 0 if probe else uses}
+            self._memo[(func_name, key)] = counted
+        self._stored_keys.note_refused(func_name, key, counted, write=False)
+        return None if probe else counted
 
     def refused(self, func_name: str, key: str, why: str, warnings: list[dict[str, Any]] | None) -> None:
         """A probed call of *key* was refused for changing its arguments."""

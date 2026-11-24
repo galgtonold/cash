@@ -195,3 +195,32 @@ def test_a_method_bound_to_another_type_keeps_its_own_verdict(disk_cash, monkeyp
         kda(Box())
         kda(Box())
     assert len(builds) == 2, len(builds)
+
+
+def test_a_probe_that_raises_leaves_the_next_call_to_the_verdict(disk_cash, monkeypatch):
+    # The probe raised, so it neither kept nor dropped the verdict: the
+    # calls after it use the verdict again, rather than each building its
+    # key until one is refused (in later processes too, as the count is
+    # kept beside the cache).
+    @disk_cash.cache
+    def fill(box):
+        box.log.append(1)
+        if box.log[0] == "boom":
+            raise ValueError("boom")
+        return len(box.log)
+
+    builds = _counting_builds(disk_cash, monkeypatch)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        assert [fill(Box()) for _ in range(REPROBE_EVERY)] == [1] * REPROBE_EVERY
+        assert len(builds) == 1, len(builds)
+        boom = Box()
+        boom.log.append("boom")
+        with pytest.raises(ValueError, match="boom"):
+            fill(boom)  # the probe
+        assert boom.log == ["boom", 1]
+        assert len(builds) == 2, len(builds)
+        boxes = [Box() for _ in range(5)]
+        assert [fill(b) for b in boxes] == [1] * 5
+    assert all(b.log == [1] for b in boxes)
+    assert len(builds) == 2, len(builds)
