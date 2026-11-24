@@ -92,7 +92,7 @@ See [Custom hashers](custom-hashers.md#registering-a-hasher).
 
 ## Methods that set attributes on `self`
 
-<!-- claim: cash/decorator/attribute_replay.py:AttrVerdict.of @5152391a, cash/rewrite_in_place.py:attribute_refusal @0ad90168 -->
+<!-- claim: cash/decorator/attribute_replay.py:AttrVerdict.of @833f9c5b, cash/rewrite_in_place.py:attribute_refusal @0ad90168 -->
 A method that only sets attributes on `self`, as a model's `fit` does, is
 cached too. The entry keeps the attributes the call set, and a hit sets them
 again on the instance you call it on:
@@ -115,6 +115,10 @@ m2.fit([1, 2, 3])                 # a hit: sets m2.coef_
 print(m2.coef_)                   # 12
 # test:inject: fit = Model.fit  # lets the harness read cache_info
 ```
+
+An object `self` already held as an attribute (a kernel, a config object
+of a plain class) may have attributes set too, one level down: a hit sets
+them on the object your instance holds.
 
 This works when `self` is keyed by all it holds, so not with a `__cash_key__`
 or a registered hasher, and when the call changes nothing in place: a method

@@ -6,7 +6,13 @@ binding, rebinding or deletion of top-level attributes of an instance of a
 plain class (`rewrite_in_place.attribute_refusal`), and the key holds that
 instance by all it holds, the result is stored with the attributes the call
 left (`rewrite_in_place.AttrState`) and a hit binds them on the instance
-handed in.
+handed in. The same holds one level down, and no deeper, for an instance of
+a plain class that such an argument held as a top-level attribute before
+the call and still holds there after it (NiMARE's
+``self.kernel_transformer`` gaining ``memory_``): it is recorded beside the
+argument (`runtime._record_held`, `rewrite_in_place.HeldBefore`), judged by
+the same rules, and a hit binds its attributes on the instance the
+argument it is handed holds there.
 
 `AttrVerdict.of` decides, after the body, whether it can:
 
@@ -17,8 +23,9 @@ handed in.
 * each value bound is either an immutable atom, one of the call's
   arguments or the instance itself, a module global, the value of another
   attribute of a recorded instance that held it before the call and still
-  does (``img._data_cache = img._dataobj``; all bound again by identity on
-  a hit, never a copy), or a fresh object: nothing outside the
+  does (``img._data_cache = img._dataobj``; held under several such names,
+  bound while they all hold one object on the hit; all bound again by
+  identity on a hit, never a copy), or a fresh object: nothing outside the
   instance, the other bound attributes and the result references it
   (counted by ``sys.getrefcount``), it is none of the values the instance
   held before, and the share check of a result finds nothing it holds that
@@ -39,7 +46,17 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from .._type_memo import class_dict, class_module, class_mro, class_name, mro_of
 from .._user_attrs import plain_getattr
-from ..rewrite_in_place import AttrChange, AttrRecording, AttrState, Relink, held_changes, put_back, seal
+from ..rewrite_in_place import (
+    ABSENT,
+    AttrChange,
+    AttrRecording,
+    AttrState,
+    HeldBefore,
+    Relink,
+    held_changes,
+    put_back,
+    seal,
+)
 from ..value_types import IMMUTABLE_LEAF_TYPES
 
 if TYPE_CHECKING:
@@ -47,7 +64,7 @@ if TYPE_CHECKING:
 
     from .call_state import BodyRun
 
-__all__ = ["ALSO_CHANGED", "AttrVerdict", "Unresolved", "also_changed", "recordings"]
+__all__ = ["ALSO_CHANGED", "AttrVerdict", "Unresolved", "also_changed", "held_paths", "recordings"]
 
 #: Bound by value: copies are the same value, whatever their identity.
 _ATOMS = IMMUTABLE_LEAF_TYPES
@@ -60,6 +77,17 @@ def recordings(args_before: dict | None) -> dict[str, AttrRecording]:
     """``{parameter: recording}`` of the instances whose attributes the
     body was recorded changing (`CallRunner.arguments_before`)."""
     return {name: entry[1] for name, entry in (args_before or {}).items() if type(entry[1]) is AttrRecording}
+
+
+def held_paths(args_before: dict | None) -> dict[str, tuple[str, str]]:
+    """``{recording: (parent, attribute)}`` of the instances recorded one
+    level down (`rewrite_in_place.HeldBefore`): what the recorded argument
+    *parent* held as its top-level *attribute* before the call."""
+    return {
+        name: (entry[2].param, entry[2].name)
+        for name, entry in (args_before or {}).items()
+        if type(entry[1]) is AttrRecording and type(entry[2]) is HeldBefore
+    }
 
 
 #: The refusal of a call that changed more in its arguments than the
@@ -104,10 +132,17 @@ class AttrVerdict(NamedTuple):
     #: when *result_checked*.
     result_shared: str | None = None
     result_checked: bool = False
+    #: ``{recording: parameter}`` of each change recorded on an instance an
+    #: argument held one level down (``self.kernel_transformer``), naming
+    #: the argument it is part of.
+    roots: dict[str, str] | None = None
 
     @property
     def names(self) -> list[str]:
-        return list(self.changes)
+        """The arguments the call changed: a change one level down is a
+        change of the argument that holds it."""
+        roots = self.roots or {}
+        return list(dict.fromkeys(roots.get(name, name) for name in self.changes))
 
     @classmethod
     def of(
@@ -133,29 +168,56 @@ class AttrVerdict(NamedTuple):
         recorded = recordings(run.args_before)
         if not recorded:
             return None
+        held = held_paths(run.args_before)
         changes = {name: rec.change for name, rec in recorded.items() if rec.change is not None}
         refused = [rec.why for rec in recorded.values() if rec.why is not None]
         if not changes and not refused:
             return None
+        roots = {name: _root(name, held) for name in changes if name in held} or None
+
+        def verdict(
+            states: dict[str, AttrState] | None,
+            why: str | None,
+            explained: bool,
+            shared: str | None = None,
+            checked: bool = False,
+        ) -> AttrVerdict:
+            return cls(changes, states, why, explained, shared, checked, roots)
+
         if refused:
-            return cls(changes, None, refused[0], False)
+            return verdict(None, refused[0], False)
         if keyed_hash is None:
-            return cls(changes, None, "its arguments were not hashed before the call", False)
+            return verdict(None, "its arguments were not hashed before the call", False)
+        for name in changes:
+            if name in held:
+                parent, attribute = held[name]
+                if recorded[parent].state.get(attribute, ABSENT) is not changes[name].obj:
+                    return verdict(
+                        None,
+                        f"it changed the attributes of {name} and also rebound or deleted {name}, "
+                        "so a hit cannot find that object where it changed it",
+                        False,
+                    )
         for param, change in changes.items():
             holder = held_outside(change.obj)
             if holder is not None:
-                return cls(
-                    changes, None, f"{holder} also holds {param}, which the call may have reached that way", False
-                )
+                return verdict(None, f"{holder} also holds {param}, which the call may have reached that way", False)
         result = run.res
-        classified = _classify(changes, func, named)
+        paths = _paths(changes, recorded, held, named)
+        classified = _classify(changes, func, named, paths)
         if type(classified) is str:
-            return cls(changes, None, classified, False)
+            return verdict(None, classified, False)
         values, fresh = classified
         pinned: dict[int, tuple[Any, Relink]] = {}
         for name, value in named:
             if type(value) not in _ATOMS:
                 pinned.setdefault(id(value), (value, Relink("argument", (name,))))
+        for name, change in changes.items():
+            # An instance an argument holds, which a value bound may hold
+            # too: found again where the argument holds it.
+            path = paths.get(name)
+            if path is not None and len(path) > 1:
+                pinned.setdefault(id(change.obj), (change.obj, Relink("attribute", path)))
         hidden: list[tuple[Any, str]] = []
         why = _held_elsewhere(
             fresh, result, {id(value) for _, value in named} | {id(c.obj) for c in changes.values()}, pinned, hidden
@@ -167,13 +229,13 @@ class AttrVerdict(NamedTuple):
             except Exception:  # noqa: BLE001 - not hashed again: nothing says what else changed
                 explained = False
             if not explained:
-                return cls(changes, None, also_changed(recorded), False)
+                return verdict(None, also_changed(recorded), False)
             if why is None:
                 why = _shared(fresh, shared_outside, hidden)
             result_checked = id(result) not in objects
             result_shared = warn_shared_result(result) if result_checked else None
         if why is not None:
-            return cls(changes, None, why, True, result_shared, result_checked)
+            return verdict(None, why, True, result_shared, result_checked)
         states = {
             param: AttrState(type(change.obj), values[param], change.deleted, change.order)
             for param, change in changes.items()
@@ -181,11 +243,65 @@ class AttrVerdict(NamedTuple):
         if pinned:
             for state in states.values():
                 state.pinned = pinned
-        return cls(changes, states, None, True, result_shared, result_checked)
+        return verdict(states, None, True, result_shared, result_checked)
+
+    def fresh_attributes(self) -> dict[str, set[str]]:
+        """``{parameter: attributes}`` the call bound on an argument to an
+        object that was not there before it (the call's own new dict, say):
+        a write into one of them changed nothing the caller had."""
+        held_before = {id(value) for change in self.changes.values() for value in change.before.values()}
+        found: dict[str, set[str]] = {}
+        for name, change in self.changes.items():
+            if self.roots and name in self.roots:
+                continue
+            found[name] = {
+                key for key, value in change.bound.items() if type(value) not in _ATOMS and id(value) not in held_before
+            }
+        return found
+
+
+def _root(name: str, held: dict[str, tuple[str, str]]) -> str:
+    """The argument the recording *name* is part of."""
+    while name in held:
+        name = held[name][0]
+    return name
+
+
+def _paths(
+    changes: dict[str, AttrChange],
+    recorded: dict[str, AttrRecording],
+    held: dict[str, tuple[str, str]],
+    named: list[tuple[str, Any]],
+) -> dict[str, tuple[str, ...]]:
+    """``{recording: path}`` of each changed instance a hit finds again
+    among its arguments: ``(parameter,)`` for an argument (or the instance
+    the callable is bound to) by identity, ``(parameter, attribute)`` for
+    what one held as its attribute (`held_paths`). Named as *named* names
+    the arguments, which a hit's `find` reads."""
+    arguments: dict[int, tuple[Any, str]] = {}
+    for name, value in named:
+        arguments.setdefault(id(value), (value, name))
+
+    def of(obj: Any) -> tuple[str, ...] | None:
+        found = arguments.get(id(obj))
+        return (found[1],) if found is not None and found[0] is obj else None
+
+    paths: dict[str, tuple[str, ...]] = {}
+    for name, change in changes.items():
+        if name in held:
+            parent, attribute = held[name]
+            base = of(recorded[parent].obj)
+            if base is not None:
+                paths[name] = (*base, attribute)
+        else:
+            path = of(change.obj)
+            if path is not None:
+                paths[name] = path
+    return paths
 
 
 def _classify(
-    changes: dict[str, AttrChange], func: Callable, named: list[tuple[str, Any]]
+    changes: dict[str, AttrChange], func: Callable, named: list[tuple[str, Any]], paths: dict[str, tuple[str, ...]]
 ) -> tuple[dict[str, dict[str, Any]], dict[int, tuple[Any, int, str]]] | str:
     """``(values, fresh)``: per parameter, what each bound attribute is
     stored as (the value, or a `Relink`), and ``{id: (value, number of
@@ -195,7 +311,7 @@ def _classify(
     for name, value in named:
         arguments.setdefault(id(value), (value, name))
     held_before = {id(value) for change in changes.values() for value in change.before.values()}
-    kept = _kept_attributes(changes, arguments)
+    kept = _kept_attributes(changes, paths)
     fresh: dict[int, tuple[Any, int, str]] = {}
     values: dict[str, dict[str, Any]] = {}
     for param, change in changes.items():
@@ -215,14 +331,14 @@ def _classify(
                 continue
             paths = kept.get(id(value), ())
             if len(paths) == 1 and not isinstance(value, enum.Enum):
-                mine[key] = Relink("attribute", paths[0][:2])
+                mine[key] = Relink("attribute", paths[0][0])
                 continue
-            if len(paths) > 1:
-                held = " and ".join(path[2] for path in paths)
-                return (
-                    f"it bound {label} to an object {held} all held before the call, "
-                    "so which of them a hit should bind is ambiguous"
-                )
+            if len(paths) > 1 and not isinstance(value, enum.Enum):
+                # ``self.memory_ = self.kernel.memory`` where ``self.memory``
+                # is that object too: a hit binds it when every one of them
+                # still holds one object (`find`).
+                mine[key] = Relink("attributes", tuple(path for path, _label in paths))
+                continue
             if id(value) in held_before or isinstance(value, enum.Enum):
                 return f"it bound {label} to an object that was there before the call"
             seen = fresh.get(id(value))
@@ -233,28 +349,26 @@ def _classify(
 
 
 def _kept_attributes(
-    changes: dict[str, AttrChange], arguments: dict[int, tuple[Any, str]]
-) -> dict[int, list[tuple[str, str, str]]]:
-    """``{id: [(parameter, name, label), ...]}`` of each object a recorded instance
+    changes: dict[str, AttrChange], paths: dict[str, tuple[str, ...]]
+) -> dict[int, list[tuple[tuple[str, ...], str]]]:
+    """``{id: [(path, label), ...]}`` of each object a recorded instance
     held as its top-level attribute *name* before the call and still holds
     there after it, the call having neither rebound nor deleted that name;
-    *parameter* names the instance as a hit's arguments do (*arguments*,
-    ``{id: (value, parameter)}``). A hit finds it again at that path on the
-    caller's instance (`find`): nibabel's
+    *path* is where a hit finds it again (`find`): the instance's own path
+    (*paths*, `_paths`) and *name*. nibabel's
     ``img._data_cache = np.asanyarray(img._dataobj)`` aliases the array the
     image already held, and a hit leaves that alias, not a copy."""
-    kept: dict[int, list[tuple[str, str, str]]] = {}
+    kept: dict[int, list[tuple[tuple[str, ...], str]]] = {}
     seen: set[int] = set()
     for recorded, change in changes.items():
-        found = arguments.get(id(change.obj))
-        if found is None or found[0] is not change.obj or id(change.obj) in seen:
+        path = paths.get(recorded)
+        if path is None or id(change.obj) in seen:
             continue
         seen.add(id(change.obj))
-        param = found[1]
         for name, value in change.before.items():
             if type(value) in _ATOMS or name in change.bound or change.state.get(name, _ABSENT) is not value:
                 continue
-            kept.setdefault(id(value), []).append((param, name, f"{recorded}.{name}"))
+            kept.setdefault(id(value), []).append(((*path, name), f"{recorded}.{name}"))
     return kept
 
 
@@ -306,34 +420,57 @@ def _by_path(module: str, qualname: str) -> Any:
 
 def find(relink: Relink, named: dict[str, Any]) -> Any:
     """The object *relink* names on a hit: the argument bound to its
-    parameter (*named*), the value of a top-level attribute of that argument
-    (read from its ``__dict__``, as the store read it, before the hit binds
-    anything), or the module global. Raises `LookupError` (`Unresolved`,
-    saying why, for an attribute that is not there or that a property or
-    other descriptor of its class now answers for)."""
+    parameter (*named*), what that argument holds as a top-level attribute
+    (or, one level down, what that attribute holds as one: read from each
+    ``__dict__``, as the store read it, before the hit binds anything), or
+    the module global. Raises `LookupError` (`Unresolved`, saying why, for
+    an attribute that is not there or that a property or other descriptor
+    of its class now answers for)."""
     if relink.kind == "argument":
         return named[relink.where[0]]
     if relink.kind == "attribute":
-        param, name = relink.where
-        obj = named[param]
-        try:
-            state = object.__getattribute__(obj, "__dict__")
-        except AttributeError:
-            state = None
-        if type(state) is not dict or name not in state:
-            raise Unresolved(f"{param}.{name}, the object it bound by identity, is not an attribute of {param} now")
-        for klass in mro_of(type(obj)):
-            found = class_dict(klass).get(name, _ABSENT)
-            if found is not _ABSENT:
-                if hasattr(type(found), "__set__") or hasattr(type(found), "__delete__"):
-                    raise Unresolved(f"{param}.{name}, the object it bound by identity, is a property of its class now")
-                break
-        return state[name]
+        return _held_at(relink.where, named)
+    if relink.kind == "attributes":
+        found = [_held_at(path, named) for path in relink.where]
+        if any(obj is not found[0] for obj in found):
+            held = " and ".join(".".join(path) for path in relink.where)
+            raise Unresolved(f"{held} held the object it bound by identity, and hold different objects now")
+        return found[0]
     module, name = relink.where
     held = _by_path(module, name)
     if held is None:
         raise LookupError(f"{module}.{name}")
     return held
+
+
+def _held_at(path: tuple[str, ...], named: dict[str, Any]) -> Any:
+    """What *path*, a parameter and the attributes under it, holds."""
+    param, *names = path
+    obj, label = named[param], param
+    for name in names:
+        obj = held_attribute(obj, name, label, "the object it bound by identity")
+        label = f"{label}.{name}"
+    return obj
+
+
+def held_attribute(obj: Any, name: str, label: str, what: str) -> Any:
+    """What *obj* (called *label*) holds as its plain attribute *name*,
+    read from its ``__dict__``; `Unresolved` saying that *what* is not
+    there, or that a property or other descriptor of its class now answers
+    for it."""
+    try:
+        state = object.__getattribute__(obj, "__dict__")
+    except AttributeError:
+        state = None
+    if type(state) is not dict or name not in state:
+        raise Unresolved(f"{label}.{name}, {what}, is not an attribute of {label} now")
+    for klass in mro_of(type(obj)):
+        found = class_dict(klass).get(name, _ABSENT)
+        if found is not _ABSENT:
+            if hasattr(type(found), "__set__") or hasattr(type(found), "__delete__"):
+                raise Unresolved(f"{label}.{name}, {what}, is a property of its class now")
+            break
+    return state[name]
 
 
 #: Objects a walk of a bound value visits at most (`_held_elsewhere`):
