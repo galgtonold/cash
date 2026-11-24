@@ -906,8 +906,11 @@ def _imported_modules(code: types.CodeType) -> tuple[str, ...]:
         try:
             # ``dis.get_instructions``'s (opname, argval), read in one loop:
             # it built an object per instruction, and a fresh process's
-            # first keys read the code of every helper they reach.
-            ins = instructions(c)
+            # first keys read the code of every helper they reach. Without
+            # the ``EXTENDED_ARG`` prefixes, whose argument is folded into
+            # the instruction after them: past 255 names, one stood between
+            # the import and its level, and the import went unseen.
+            ins = [i for i in instructions(c) if i[0] != "EXTENDED_ARG"]
         except Exception:  # noqa: BLE001 - code dis cannot read imports nothing it can name
             continue
         for k, (opname, argval) in enumerate(ins):

@@ -1,8 +1,9 @@
 """The modules a function's body imports (`library_versions._imported_modules`,
 which decides the libraries whose versions a key folds) are read from
 ``co_code`` in one loop: the same absolute names, in the same order, as
-reading ``dis.get_instructions`` gives, for nested code, relative imports
-and a body long enough that its arguments take an ``EXTENDED_ARG``.
+reading ``dis.get_instructions`` gives (its ``EXTENDED_ARG`` prefixes left out),
+for nested code, relative imports and a body long enough that an import's
+name takes an ``EXTENDED_ARG``: that import is found too.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ def _with_dis(code: types.CodeType) -> tuple[str, ...]:
     while stack:
         c = stack.pop()
         stack.extend(k for k in c.co_consts if isinstance(k, types.CodeType))
-        ins = list(dis.get_instructions(c))
+        ins = [i for i in dis.get_instructions(c) if i.opname != "EXTENDED_ARG"]
         for k, i in enumerate(ins):
             if i.opname == "IMPORT_NAME" and isinstance(i.argval, str) and k >= 2 and ins[k - 2].argval == 0:
                 found[i.argval] = None
@@ -53,15 +54,17 @@ _SOURCE = textwrap.dedent(
 
 def _code() -> types.CodeType:
     # Enough distinct names that the late import's name index passes 255.
-    names = "\n    ".join(f"v{i} = {i}" for i in range(300)) + "\n    " + "\n    ".join(f"w{i} = q{i}" for i in range(300))
+    names = (
+        "\n    ".join(f"v{i} = {i}" for i in range(300)) + "\n    " + "\n    ".join(f"w{i} = q{i}" for i in range(300))
+    )
     module = compile(_SOURCE.format(names=names), "<imports>", "exec")
     return next(c for c in module.co_consts if isinstance(c, types.CodeType))
 
 
-def test_the_imported_modules_match_dis():
+def test_an_import_past_255_names_is_found():
     code = _code()
     expected = _with_dis(code)
-    assert {"json", "os", "xml.dom.minidom", "csv", "collections"} <= set(expected)
+    assert {"json", "os", "xml.dom.minidom", "csv", "collections", "email.utils"} <= set(expected)
     assert "pkg" not in expected and "sibling" not in expected
     assert _imported_modules(code) == expected
 
