@@ -23,7 +23,8 @@ function is keyed by what it can reach in it instead
 - the build configuration (``setup.py``, ``setup.cfg``, ``pyproject.toml``)
   next to the package, in a canonical form without the metadata that
   cannot change what is compiled (`canonical_build_config`): a version
-  bump does not move the key of every helper.
+  bump does not move the key of every helper, whether it is a ``setup()``
+  keyword or an entry of a dict only ever passed as ``setup(**dict)``.
 - for each local module it cimports (a ``cdef`` function called through
   its ``.pxd`` runs from THAT module's binary): the blocks the names in use
   reach in its ``.pyx``, by the same rules and through its own cimports, or
@@ -39,7 +40,9 @@ own reader does, so a CRLF checkout keys like an LF one.
 
 ``None`` -- the caller keeps the whole-binary digest -- whenever the parts
 cannot be trusted to be what the binary holds: no Cython, no ``.pyx``, a
-``.pyx`` (or any file keyed above) newer than the binary, a function of the
+``.pyx`` (or any file keyed above) newer than the binary -- unless this
+binary, by its content, was seen with every keyed file older than it and
+that file holding what it holds now (`_refuse_newer_than`) --, a function of the
 binary whose name and first line do not match a block of the parsed
 ``.pyx`` (a stale or foreign build), a parse failure, a ``cdef extern``
 in the module's own files from anything but a header of numpy's or
@@ -83,6 +86,7 @@ import hashlib
 import importlib.machinery
 import json
 import os
+import re
 import sys
 import threading
 import types
@@ -275,8 +279,9 @@ def canonical_build_config(path: str, data: bytes) -> bytes:
     what cannot change the compiled result: the distribution metadata
     (version, description, authors, classifiers, ...) of ``pyproject.toml``'s
     ``[project]``, of ``setup.cfg``'s ``[metadata]`` and of the keywords of
-    a ``setup(...)`` call in ``setup.py``, and the comments and layout of
-    each. Everything else stays. A file that does not parse is its bytes."""
+    a ``setup(...)`` call in ``setup.py`` (or of a dict only passed to it
+    as ``**``, `_setup_only_dicts`), and the comments and layout of each.
+    Everything else stays. A file that does not parse is its bytes."""
     name = os.path.basename(path)
     try:
         if name == "pyproject.toml":
@@ -318,17 +323,137 @@ def _canonical_setup_cfg(data: bytes) -> bytes:
     return b"cfg:" + json.dumps(doc, sort_keys=True).encode("utf-8")
 
 
+def _is_setup_call(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else ""
+    return name == "setup"
+
+
 def _canonical_setup_py(data: bytes) -> bytes:
     tree = ast.parse(data)
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else ""
-        if name == "setup":
-            node.keywords = [k for k in node.keywords if k.arg not in _SETUP_METADATA]
+        if _is_setup_call(node):
+            node.keywords = [k for k in node.keywords if k.arg not in _SETUP_METADATA]  # type: ignore[attr-defined]
+    for value in _setup_only_dicts(tree):
+        kept = [
+            (k, v)
+            for k, v in zip(value.keys, value.values)
+            if not (
+                isinstance(k, ast.Constant)
+                and k.value in _SETUP_METADATA
+                and not any(isinstance(n, (ast.Call, ast.NamedExpr, ast.Await, ast.Yield)) for n in ast.walk(v))
+            )
+        ]
+        value.keys = [k for k, _ in kept]
+        value.values = [v for _, v in kept]
     options = {"show_empty": True} if sys.version_info >= (3, 13) else {}
     return b"py:" + ast.dump(tree, annotate_fields=True, include_attributes=False, **options).encode("utf-8")
+
+
+#: Names through which a module can reach its globals other than by name.
+_GLOBALS_BY_OTHER_MEANS = frozenset({"globals", "locals", "vars", "eval", "exec", "compile", "__import__"})
+
+
+def _setup_only_dicts(tree: ast.Module) -> list[ast.Dict]:
+    """The dict displays of ``setup.py`` whose only use is ``setup(**name)``.
+
+    ``configuration = {...}`` then ``setup(**configuration)`` (hdbscan's
+    form) puts the metadata in a dict: its ``version`` is a ``setup()``
+    keyword only by way of ``**``. Its metadata entries are dropped as
+    ``setup()``'s own are, only when that is provably all the dict is: a
+    name bound once, at module level outside any function or class, to a
+    dict display, and every other mention of the name anywhere in the file
+    is the ``**`` argument of a call named ``setup``. A name read anywhere
+    else (passed to a function, subscripted, mutated, rebound, ``del``-ed,
+    named in ``global``, spelled in a string) or a module that can reach
+    its globals by other means (``globals()``, ``eval``, ...) keeps the
+    dict keyed whole."""
+    if any(
+        (isinstance(n, ast.Name) and n.id in _GLOBALS_BY_OTHER_MEANS)
+        or (isinstance(n, ast.Attribute) and n.attr in ("__dict__", "modules"))
+        for n in ast.walk(tree)
+    ):
+        return []
+    candidates: dict[str, ast.Dict] = {}
+    bound_more: set[str] = set()
+    for stmt in _module_level_statements(tree.body):
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
+            name = stmt.targets[0].id
+            if isinstance(stmt.value, ast.Dict) and name not in candidates:
+                candidates[name] = stmt.value
+            else:
+                bound_more.add(name)
+    if not candidates:
+        return []
+    starred: set[int] = set()
+    for node in ast.walk(tree):
+        if _is_setup_call(node):
+            for keyword in node.keywords:  # type: ignore[attr-defined]
+                if keyword.arg is None and isinstance(keyword.value, ast.Name):
+                    starred.add(id(keyword.value))
+    binds = {id(a.targets[0]) for a in _candidate_assigns(tree) if any(a.value is v for v in candidates.values())}
+    uses: dict[str, list[str]] = {name: [] for name in candidates}
+    for node in ast.walk(tree):
+        names: list[tuple[str, str]] = []
+        if isinstance(node, ast.Name):
+            kind = "starred" if id(node) in starred else "bind" if id(node) in binds else "other"
+            names.append((node.id, kind))
+        elif isinstance(node, ast.Attribute):
+            names.append((node.attr, "other"))
+        elif isinstance(node, ast.arg):
+            names.append((node.arg, "other"))
+        elif isinstance(node, ast.keyword) and node.arg is not None:
+            names.append((node.arg, "other"))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.append((node.name, "other"))
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            names.extend((n, "other") for n in node.names)
+        elif isinstance(node, ast.alias):
+            names.extend((part, "other") for part in (node.asname or node.name).split("."))
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            names.append((node.name, "other"))
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+            names.append((node.name, "other"))
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            names.append((node.rest, "other"))
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            names.extend((name, "other") for name in uses if re.search(rf"\b{re.escape(name)}\b", node.value))
+        for name, kind in names:
+            if name in uses:
+                uses[name].append(kind)
+    return [
+        value
+        for name, value in candidates.items()
+        if name not in bound_more and uses[name].count("bind") == 1 and set(uses[name]) == {"bind", "starred"}
+    ]
+
+
+def _module_level_statements(body: list[ast.stmt]) -> Iterator[ast.stmt]:
+    """The statements of *body* that run at module level: into ``if``,
+    ``try``, ``with``, ``for`` and ``while`` blocks, not into a function or
+    a class."""
+    for stmt in body:
+        yield stmt
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        for field_name in ("body", "orelse", "finalbody", "handlers", "cases"):
+            inner = getattr(stmt, field_name, None)
+            if isinstance(inner, list):
+                for item in inner:
+                    if isinstance(item, (ast.ExceptHandler, ast.match_case)):
+                        yield from _module_level_statements(item.body)
+                    elif isinstance(item, ast.stmt):
+                        yield from _module_level_statements([item])
+
+
+def _candidate_assigns(tree: ast.Module) -> list[ast.Assign]:
+    return [
+        s
+        for s in _module_level_statements(tree.body)
+        if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name)
+    ]
 
 
 def _source_text(data: bytes) -> str:
@@ -443,7 +568,7 @@ def _analysis_of(module: types.ModuleType, binary: str, co_filename: str, pyx: s
                 # What a stored record cannot say: the timestamps of today's
                 # files against the binary, and that the loaded binary's
                 # functions are where the analysis places them.
-                _refuse_newer_than(analysis.newer_keyed, binary)
+                _refuse_newer_than(analysis.newer_keyed, binary, module)
                 _check_built_from(analysis, module)
     except _Fallback:
         analysis = None
@@ -1522,11 +1647,86 @@ def _find_cimport(name: str, level: int, importer: str, package_root: str, inclu
     raise _Fallback(f"cimport {name} not found")
 
 
-def _refuse_newer_than(paths: Iterable[str], binary: str) -> None:
+#: The layout of a stored record of what a binary was seen built from
+#: (`_refuse_newer_than`).
+_BUILT_FROM_KIND = "cython-built-from-v1"
+
+
+def _refuse_newer_than(paths: Iterable[str], binary: str, module: types.ModuleType | None = None) -> None:
+    """Raise `_Fallback` when a keyed file may hold what the binary was not
+    built from.
+
+    A file newer than the binary may have been edited after the build: the
+    per-function key would then describe source the binary does not hold,
+    and a result of the old binary stored under it would be served again
+    after the rebuild. So such a file falls back to the whole binary --
+    unless this binary, by its content digest, was seen before with every
+    keyed file older than it and this file with the same content then (by
+    its canonical form for a build configuration). An incremental build
+    leaves a binary whose sources did not change as it was, older than a
+    ``pyproject.toml`` whose version was bumped or a file a checkout
+    rewrote with the same text: what it was built from is what is there.
+
+    Every time all files are older than the binary, their digests are
+    stored for its digest (`_note_built_from`): what the timestamp rule
+    trusts now is what a later process may trust them by."""
+    paths = tuple(paths)
     built = os.stat(binary).st_mtime_ns
+    newer = [path for path in paths if os.stat(path).st_mtime_ns > built]
+    if not newer:
+        if module is not None:
+            try:
+                _note_built_from(module, binary, paths, built)
+            except Exception:  # noqa: BLE001 - not noting it only costs a later fallback
+                pass
+        return
+    if module is None or not _seen_built_from(module, binary, newer):
+        raise _Fallback(f"{newer[0]} is newer than the build")
+
+
+def _keyed_digest(path: str) -> str:
+    """The digest a file is keyed by: a build configuration's canonical
+    form (`canonical_build_config`), any other file's bytes."""
+    return _digest_now(path, os.path.basename(path) in _CONFIG_FILES)
+
+
+def _built_from_record(module: types.ModuleType, binary: str) -> tuple[str, dict | None]:
+    from .analysis import scan_store
+
+    digest = _binary_digest(module, binary)
+    return digest, scan_store.load_record(_BUILT_FROM_KIND, _norm(binary), digest)
+
+
+def _note_built_from(module: types.ModuleType, binary: str, paths: tuple[str, ...], built: int) -> None:
+    """Store the digest of each of *paths*, all older than the binary, for
+    the binary's digest. Best effort; a file that changes while it is read
+    is not noted."""
+    from .analysis import scan_store
+
+    files: dict[str, str] = {}
     for path in paths:
-        if os.stat(path).st_mtime_ns > built:
-            raise _Fallback(f"{path} is newer than the build")
+        before = os.stat(path)
+        digest = _keyed_digest(path)
+        after = os.stat(path)
+        if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size) or after.st_mtime_ns > built:
+            return
+        files[path] = digest
+    digest, stored = _built_from_record(module, binary)
+    if stored is None or stored.get("files") != files:
+        scan_store.save_record(_BUILT_FROM_KIND, _norm(binary), digest, {"files": files})
+
+
+def _seen_built_from(module: types.ModuleType, binary: str, newer: list[str]) -> bool:
+    """Was this binary (its content) seen with each of *newer* older than
+    it and holding what it holds now?"""
+    try:
+        _digest, stored = _built_from_record(module, binary)
+        files = stored.get("files") if stored is not None else None
+        if not isinstance(files, dict):
+            return False
+        return all(files.get(path) == _keyed_digest(path) for path in newer)
+    except Exception:  # noqa: BLE001 - what cannot be shown falls back
+        return False
 
 
 def _label(path: str, root: str) -> str:

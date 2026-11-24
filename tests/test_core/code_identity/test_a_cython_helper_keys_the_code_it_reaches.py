@@ -515,3 +515,98 @@ def test_a_config_recorded_by_its_canonical_form_survives_a_version_bump(tmp_pat
     assert cython_digest._inputs_unchanged(stored)
     setup.write_text('from setuptools import setup\nsetup(name="q", version="2")\n', encoding="utf-8")
     assert not cython_digest._inputs_unchanged(stored)
+
+
+def test_a_config_bumped_and_not_rebuilt_keeps_the_per_function_key(cython_compiler, tmp_path):
+    """An incremental build does not rebuild a module whose sources did not
+    change, so a version bump leaves ``setup.py`` newer than the binary.
+    That fell back to the whole-binary key: every helper re-ran on the
+    bump, and again when the next rebuild brought the per-function key
+    back. The binary was seen with every file older than it, and the
+    configuration's canonical form is what it was then: the key stays."""
+    proj = _project(tmp_path, setup=SETUP_MACRO)
+    assert _run(proj) == ("7", True)
+    setup = proj / "setup.py"
+    setup.write_text(SETUP_MACRO.replace('version="0.8.40"', 'version="0.8.41"'), encoding="utf-8")
+    assert _run(proj) == ("7", False), "a version bump the build skipped re-ran the Cython helper"
+    pyx = proj / "fastops.pyx"
+    pyx.write_text(PYX, encoding="utf-8")
+    assert _run(proj) == ("7", False), "a .pyx rewritten with the same text re-ran the Cython helper"
+    _build(proj)
+    assert _run(proj) == ("7", False), "the rebuild after a version bump re-ran the Cython helper"
+
+
+def test_a_config_changed_and_not_rebuilt_still_falls_back(cython_compiler, tmp_path):
+    """What the binary was not seen built from still keys the whole binary:
+    a macro changed and not rebuilt, then the rebuild."""
+    proj = _project(tmp_path, setup=SETUP_MACRO)
+    assert _run(proj) == ("7", True)
+    (proj / "setup.py").write_text(SETUP_MACRO.replace('LEVEL = "1"', 'LEVEL = "2"'), encoding="utf-8")
+    assert _run(proj) == ("7", True), "a macro the binary was not built with keyed the per-function key"
+    _build(proj)
+    assert _run(proj) == ("7", True), "the rebuild with a new macro was served the old result"
+
+
+def test_a_source_seen_with_another_binary_does_not_vouch_for_this_one(cython_compiler, tmp_path):
+    """What a binary was seen built from is recorded by the binary's
+    content: a ``.pyx`` put back to an older text, newer than the binary
+    built since, matches the record of the OLD binary only. Keyed by that
+    text, the rebuilt binary would be served the old binary's result."""
+    proj = _project(tmp_path)
+    assert _run(proj) == ("7", True)
+    _edit(proj, "return h(x) + 1", "return h(x) + 2")
+    assert _run(proj) == ("8", True)
+    (proj / "fastops.pyx").write_text(PYX, encoding="utf-8")
+    assert _run(proj) == ("8", True), "the rebuilt binary was served the result of the binary before it"
+
+
+SETUP_DICT = """\
+from setuptools import setup
+V = "1"
+configuration = {
+    "name": "p",
+    "version": "1",
+    "description": "d",
+    "ext_modules": m(V),
+}
+setup(**configuration)
+"""
+
+
+def test_the_canonical_setup_py_drops_metadata_of_a_dict_only_passed_to_setup():
+    """hdbscan keeps its metadata in ``configuration = {...}`` and calls
+    ``setup(**configuration)``: its version bump moved the key."""
+    same = SETUP_DICT.replace('"version": "1"', '"version": "2"').replace('"d"', '"e"')
+    assert _canonical("setup.py", SETUP_DICT) == _canonical("setup.py", same)
+    assert _canonical("setup.py", SETUP_DICT) != _canonical("setup.py", SETUP_DICT.replace('V = "1"', 'V = "2"'))
+    assert _canonical("setup.py", SETUP_DICT) != _canonical("setup.py", SETUP_DICT.replace('"p"', '"q"'))
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        'print(configuration["version"])\n',
+        'configuration["define_macros"] = [("V", configuration["version"])]\n',
+        "other(**configuration)\n",
+        "configuration = dict(configuration)\n",
+        "x = globals()\n",
+        'getattr(mod, "configuration")\n',
+        "def f(configuration):\n    pass\n",
+        "configuration |= {}\n",
+        "import __main__\n__main__.configuration\n",
+    ],
+)
+def test_the_canonical_setup_py_keeps_a_dict_used_elsewhere(extra):
+    """Any other use of the dict -- read, mutated, rebound, passed on,
+    reachable by other means -- keeps every entry keyed."""
+    base = SETUP_DICT + extra
+    bumped = base.replace('"version": "1"', '"version": "2"')
+    assert _canonical("setup.py", base) != _canonical("setup.py", bumped), extra
+
+
+def test_the_canonical_setup_py_keeps_a_metadata_value_that_calls():
+    """A metadata entry whose value calls something may do more than name
+    the version: it stays keyed."""
+    base = SETUP_DICT.replace('"version": "1"', '"version": version("1")')
+    bumped = base.replace('version("1")', 'version("2")')
+    assert _canonical("setup.py", base) != _canonical("setup.py", bumped)
