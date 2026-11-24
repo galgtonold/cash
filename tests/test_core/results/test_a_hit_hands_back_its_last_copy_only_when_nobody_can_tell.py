@@ -64,6 +64,12 @@ class Trie(ABC):
         return sorted(found)
 
 
+class OtherNode(Trie.Node):
+    """A node class laid out as `Trie.Node`."""
+
+    __slots__ = ()
+
+
 def word_list(n=4000, seed=7):
     rnd = random.Random(seed)
     return ["".join(rnd.choice("abcdef") for _ in range(rnd.randint(3, 9))) for _ in range(n)]
@@ -118,6 +124,11 @@ def test_a_copy_the_caller_still_holds_is_not_handed_back(word_trie):
         pytest.param(lambda t: setattr(t.root.children["a"].children["b"].children["c"], "end", "x"), id="a-deep-slot"),
         pytest.param(lambda t: t.root.children["a"].children["b"].children.clear(), id="a-deep-dict"),
         pytest.param(lambda t: t.root.children["f"].children.update(z=Trie.Node()), id="a-node-added"),
+        # The watchers look a class's slots up once for a run of its
+        # instances: one among them made another class is still seen.
+        pytest.param(
+            lambda t: setattr(t.root.children["c"].children["d"], "__class__", OtherNode), id="a-node-reclassed"
+        ),
     ],
 )
 def test_a_copy_the_caller_changed_is_not_handed_back(word_trie, change):
