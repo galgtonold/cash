@@ -94,7 +94,7 @@ from ._type_memo import class_module, class_name
 from ._user_attrs import module_file, plain_getattr
 from .tracking.tracker_context import untracked
 
-__all__ = ["canonical_build_config", "cimported_binaries_digest", "cython_function_digest"]
+__all__ = ["canonical_build_config", "cimported_binaries_digest", "cython_function_digest", "keyed_files"]
 
 _CYFUNCTION_TYPES = frozenset({"cython_function_or_method", "fused_cython_function"})
 
@@ -377,6 +377,27 @@ def cython_function_digest(fn: object) -> str | None:
             except Exception:  # noqa: BLE001 - any failure keys the whole binary
                 analysis.digests[key] = None
         return analysis.digests[key]
+
+
+def keyed_files(fn: object) -> tuple[str, ...]:
+    """The files the key of *fn*, a Cython function of a user's build, was
+    worked out from so far in this process: the built file it was loaded
+    from, and the user's files the analysis of that build read (the
+    ``.pyx``, its ``.pxd`` / ``.pxi`` files, the build configuration), once
+    it has run (`cython_function_digest`). Empty for anything else. For a
+    memo that serves a key part again only while none of them changed on
+    disk (`hit_memo`). Never raises."""
+    fn = plain_getattr(fn, "__func__", fn) if isinstance(fn, types.MethodType) else fn
+    if not is_cyfunction(fn):
+        return ()
+    module = sys.modules.get(plain_getattr(fn, "__module__", None) or "")
+    binary = module_file(module)
+    if module is None or not isinstance(binary, str):
+        return ()
+    cached = _MODULES.get(binary)
+    if cached is None or cached[0] is not module or cached[1] is None:
+        return (binary,)
+    return (binary, *cached[1].newer_keyed)
 
 
 def cimported_binaries_digest(fn: object) -> str | None:

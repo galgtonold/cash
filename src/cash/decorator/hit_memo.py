@@ -619,6 +619,8 @@ class _Scan:
                 self.value(v.__self__, names)
         elif self.content and _library_cython(v, t):
             return
+        elif self.content and self._user_cython(v, t, names):
+            return
         elif t is types.MethodWrapperType:
             self.value(v.__self__, names)
         elif t is staticmethod or t is classmethod:
@@ -738,6 +740,39 @@ class _Scan:
         if isinstance(v, tuple):
             for item in tuple.__iter__(v):
                 self.value(item, names)
+        return True
+
+    def _user_cython(self, v: Any, t: type, names: frozenset) -> bool:
+        """The state memo's scan: a Cython function of the user's own build
+        (`_library_cython` takes a library's). True when *v* is one and is
+        watched now.
+
+        A key names it by the Cython code it can reach in its ``.pyx``, or
+        by its whole built file where that cannot be trusted
+        (`code_digest.compiled_identity`, `cython_function_digest`), worked
+        out once per loaded module: a process cannot load a rebuilt file in
+        place of the one it runs. What else the key reads of it is its
+        module and that module's file, its names, its code and its
+        attributes (``__dict__``: a mark of cash's, a JIT's). No watcher
+        sees any of that nor an edit to its files, so a probe reads it
+        again before every reuse (`_cython_reads`): the same module, file,
+        names, code and ``__dict__`` by identity, and every file its key
+        was worked out from (`cython_digest.keyed_files`) with the same
+        size and times. The ``__dict__`` is watched as a function's
+        attributes are, and what it holds looked into as any value."""
+        from ..code_digest import extension_file_digest
+        from ..cython_digest import is_cyfunction
+
+        if not is_cyfunction(v) or extension_file_digest(v) is None:
+            return False
+        held = plain_getattr(v, "__dict__", None)
+        if type(held) is not dict:
+            return False
+        probe = ContentProbe(v, _cython_reads)
+        self.watch(held, True)
+        for item in list(held.values()):
+            self.value(item, names)
+        self.probes[probe] = probe.digest
         return True
 
     def _jit_dispatcher(self, v: Any, t: type, names: frozenset) -> bool:
@@ -1399,7 +1434,12 @@ def _resolve(mod_name: str, chain: tuple) -> Any:
 
 
 def scan(
-    spec: CachedFunction, registry: Any, *, environment_ok: bool = False, content: bool = False
+    spec: CachedFunction,
+    registry: Any,
+    *,
+    environment_ok: bool = False,
+    content: bool = False,
+    reports: list | None = None,
 ) -> tuple[tuple, tuple, list, _Family | None]:
     """Watch the world of *spec*'s key. Returns the cells and the class
     tags a fast hit compares, the states of the cached functions it
@@ -1408,7 +1448,8 @@ def scan(
     each variable a segment read before serving it) an analysis that keys
     an environment read does not make it ineligible. With *content* (the
     state memo too) a list or an array met is read again on every reuse
-    (`ContentProbe`) instead of making it ineligible."""
+    (`ContentProbe`) instead of making it ineligible. *reports*, when
+    given, collects the analyses the scan resolved helpers by."""
     func, name = spec.func, spec.name
     s = _Scan(plain_getattr(func, "__module__", None), func)
     s.content = content
@@ -1424,6 +1465,8 @@ def scan(
             raise Ineligible("a data source")
         report = registry.report_for(func, name) if node == name else registry.purity_reports.get(node)
         if report is not None:
+            if reports is not None:
+                reports.append(report)
             if report.unwalkable or report.unkeyable or (report.environment_reads and not environment_ok):
                 raise Ineligible("its analysis keys an environment read or could not finish")
             for mod_name, chain in report.helper_resolution_paths.values():
@@ -1694,7 +1737,7 @@ def _library_cython(v: Any, t: type) -> bool:
     function, by its module and name, its code keyed by the library's
     version: like one (`_Scan.function`), there is nothing in it to watch,
     and rebinding the name is a module event. One the user compiled is
-    keyed by its source, which no watcher sees: not this."""
+    keyed by its source, which no watcher sees: not this (`_Scan._user_cython`)."""
     if t.__name__ not in ("cython_function_or_method", "fused_cython_function"):
         return False
     if not t.__module__.startswith("_cython_"):
@@ -1706,6 +1749,38 @@ def _library_cython(v: Any, t: type) -> bool:
     if mod is None or name == "cash" or name.startswith("cash."):
         return False
     return not is_user_code_module(mod)
+
+
+def _cython_reads(v: Any) -> tuple:
+    """What a key reads of *v*, a Cython function of the user's build
+    (`_Scan._user_cython`): its module, the module's file, its names, code
+    and ``__dict__``, compared by identity, and the size and times of every
+    file its key was worked out from."""
+    from .._user_attrs import module_file
+    from ..cython_digest import keyed_files
+
+    name = plain_getattr(v, "__module__", None)
+    module = sys.modules.get(name) if isinstance(name, str) else None
+    parts = (
+        type(v),
+        name,
+        module,
+        module_file(module),
+        plain_getattr(v, "__qualname__", None),
+        plain_getattr(v, "__name__", None),
+        plain_getattr(v, "__code__", None),
+        plain_getattr(v, "__dict__", None),
+    )
+    paths = keyed_files(v)
+    stats = []
+    for path in paths:
+        try:
+            st = os.stat(path)
+        except OSError:
+            stats.append(None)
+        else:
+            stats.append((st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino))
+    return (_Items(parts), paths, tuple(stats))
 
 
 def _attribute_count(v: Any) -> int:

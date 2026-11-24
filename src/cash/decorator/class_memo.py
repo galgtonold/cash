@@ -47,7 +47,7 @@ from typing import Any
 from .. import _native, _weak
 from .._memo import LruMemo
 from .._type_memo import class_module, class_qualname
-from . import hit_memo, state_memo
+from . import hit_memo, main_rebinding, state_memo
 
 __all__ = [
     "CALLEE_STATES_BUILT",
@@ -113,6 +113,7 @@ class _Proof:
         "cells",
         "family",
         "gen",
+        "outside",
         "reaches_cached",
         "served",
         "skipped",
@@ -134,6 +135,10 @@ class _Proof:
         self.cells: tuple = ()
         self.tags: tuple = ()
         self.family: Any = None
+        #: The namespaces the class's world provably reads nothing of
+        #: (`_outside_namespaces`): a plain rebinding there moves the world
+        #: epoch, not this watch.
+        self.outside: frozenset[int] = frozenset()
         #: Reuses since the last scan, calls skipped since, and how many to skip.
         self.served = 0
         self.skipped = 0
@@ -144,7 +149,10 @@ class _Proof:
         return self._cls()
 
     def holds(self) -> bool:
-        if self.world < 0 or self.world != _cw.world_epoch() or self.gen != state_memo.GEN[0]:
+        if self.world < 0 or self.gen != state_memo.GEN[0]:
+            return False
+        world = _cw.world_epoch()
+        if self.world != world and not (self.outside and _moved_only_in(self.world, self.outside)):
             return False
         # Once a round of checks (`hit_memo.probe_round`): a key build asks
         # again for the watch of each class it meets, about 30 times for an
@@ -159,6 +167,9 @@ class _Proof:
             return False
         if self.family is not None and not self.family.holds([None] * 11):
             return False
+        # Every move since was a plain rebinding outside the world: it
+        # holds at the epoch now, and the next check looks only past it.
+        self.world = world
         if seen is not None:
             seen[mark] = (self.stamp, self.world, self.gen)
         return True
@@ -183,9 +194,13 @@ class _Proof:
             if cls is None:
                 return False
             reached: list = []
-            cells, tags, self.family = hit_memo.watch_class(cls, found, reached if self.callees_ok else None)
+            watched: set[int] = set()
+            cells, tags, self.family = main_rebinding.watching(
+                watched, lambda: hit_memo.watch_class(cls, found, reached if self.callees_ok else None)
+            )
             self.reaches_cached = bool(reached)
             self.cells, self.tags = _weakened(cells), _weakened(tags)
+            self.outside = _outside_namespaces(cls, found, cells, tags, watched)
         except Exception:  # noqa: BLE001 - Ineligible, or a scan that broke: folded every time
             STATS["refused"] += 1
             self.backoff = _MAX_BACKOFF
@@ -198,6 +213,20 @@ class _Proof:
 
 
 _proofs: LruMemo[tuple, _Proof] = LruMemo(_PROOFS)
+
+#: `cwatch.world_moved_only_in`, or None with an extension without it.
+_moved_only_in = getattr(_cw, "world_moved_only_in", None)
+
+
+def _outside_namespaces(cls: type, reports: Any, cells: tuple, tags: tuple, watched: set[int]) -> frozenset[int]:
+    """The namespaces a plain rebinding in which leaves *cls*'s watch
+    standing (`main_rebinding.outside_namespaces`): ``__main__``, unless the
+    class's world reads it. A notebook rebinds its variables on every cell,
+    and each one whose name the scanned code names moved the world epoch, so
+    a class handed to every call was folded again on each, hits included."""
+    if _moved_only_in is None:
+        return frozenset()
+    return main_rebinding.outside_namespaces(reports, cells, tags, watched, (class_module(cls),))
 
 
 class _WeakType:
