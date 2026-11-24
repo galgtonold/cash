@@ -435,6 +435,15 @@ def _records() -> tuple:
     )
 
 
+def collecting() -> tuple[bool, ...]:
+    """Which of the key build's records this build keeps. A real call keeps
+    them all, ``explain()`` no drift-guard watch, the key verify mode builds
+    behind a fast hit neither watch nor ledger: a fold captured in one kind
+    of build holds only what that kind keeps (`captured`), so it serves only
+    a build that keeps the same ones."""
+    return tuple(v.get() is not None for v in _records())
+
+
 def _outside() -> tuple:
     from ..dependency_state import OUTSIDE_READS_FOLDED
     from ..effects import ENVIRONMENT_READS
