@@ -104,7 +104,15 @@ def _settled_text(path: str, st: os.stat_result) -> tuple[bytes, str] | None:
     version once the file has settled (`stat_has_settled`, asked before the
     read): a module whose ``.pyc`` proves nothing (an install that wrote it
     in the source's mtime tick) was read and digested again for each of its
-    functions a key checked."""
+    functions a key checked.
+
+    Only where the change time moves with every write (`_HAS_CHANGE_TIME`):
+    on Windows ``st_ctime`` is the creation time, so the file version of a
+    same-size save that put the mtime back is the old one, and the text kept
+    under it is the old text -- exactly the save `loaded_code_matches_disk`
+    reads the file there to catch. Windows reads the text every time."""
+    if not _HAS_CHANGE_TIME:
+        return _read_text(path)
     version = file_version(st)
     held = _TEXTS.get(path)
     if held is not None and held[0] == version:

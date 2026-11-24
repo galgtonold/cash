@@ -205,14 +205,27 @@ def _counting_compiles(monkeypatch):
     return compiled
 
 
+def _windows_stat(monkeypatch):
+    """The stat Windows gives: ``st_ctime`` is the creation time, which an
+    in-place save keeps, so the file version a memo is kept under does not
+    move with a same-size save that put the mtime back."""
+    from cash import source_reading
+
+    real = loaded_code.file_version
+    monkeypatch.setattr(loaded_code, "_HAS_CHANGE_TIME", False)
+    monkeypatch.setattr(source_reading, "_HAS_CHANGE_TIME", False)
+    monkeypatch.setattr(loaded_code, "file_version", lambda st: (*real(st)[:2], 0, real(st)[3]))
+
+
 def test_without_a_change_time_a_later_process_compares_by_the_texts_digest(helper, tmp_path, monkeypatch):
     """Windows' cost: compiling every helper file in every process. What the
     text compiles to is kept on disk under the text's digest, so a later
     process reads and digests the file and compiles nothing -- and a
     same-size save with the mtime put back, a different text, finds no
-    record and is compiled and caught."""
+    record and is compiled and caught, in this process too: no memo of the
+    text kept by file version may hide it."""
     monkeypatch.setenv("CASH_ANALYSIS_STORE", str(tmp_path / "store"))
-    monkeypatch.setattr(loaded_code, "_HAS_CHANGE_TIME", False)
+    _windows_stat(monkeypatch)
     name, path = helper
     old = time.time() - 100
     os.utime(path, (old, old))
