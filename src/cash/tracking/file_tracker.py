@@ -247,6 +247,11 @@ class FileAccessTracker:
         # what the body read -- and served, stale, forever after.
         # Comparing against this is what lets the store step refuse instead.
         self.read_stats: dict[str, tuple[int, int, int]] = {}
+        #: path -> the stat the read itself took of the file (its ``lstat``,
+        #: `realpath_of_read_this_run`), identity and all, where `read_stats`
+        #: came from one: what records taken a while after the read record
+        #: the file as read by (`snapshot_file_deps`'s *read_lstats*).
+        self.read_lstats: dict[str, os.stat_result] = {}
         #: path -> its `regular_file_stat` as the call's snapshot took it, for
         #: `inputs_changed_since_read`; None when no snapshot is pending.
         self.snapshot_stats: dict[str, tuple[int, int, int] | None] | None = None
@@ -955,6 +960,8 @@ class FileAccessTracker:
                     self.listed_stats[abs_path] = folder
             if st is not None:
                 self.read_stats[abs_path] = st
+                if lstat is not None:
+                    self.read_lstats[abs_path] = lstat
                 if self._hash_on_read:
                     if digest is None:
                         self.read_hashed_at[abs_path] = time.time()

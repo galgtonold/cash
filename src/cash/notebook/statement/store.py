@@ -95,6 +95,7 @@ def _snapshot_with_inherited(
     checked: Mapping[str, Any] | None = None,
     referred: Iterable[str] = (),
     as_read: Mapping[str, tuple[int, int, int]] | None = None,
+    read_lstats: Mapping[str, Any] | None = None,
 ) -> dict[str, dict]:
     """Snapshot the files a statement read itself; take the ones it only
     inherited from its inputs' producers as they recorded them. *known* are
@@ -107,7 +108,9 @@ def _snapshot_with_inherited(
     records the entry refers to (`_InheritedRecords.refs`): not recorded
     here. *as_read*: the stats the reads took, for a snapshot taken a while
     after them; a file no longer as read is recorded as never fresh
-    (`snapshot_file_deps`). The stats this cell run holds already
+    (`snapshot_file_deps`); *read_lstats*: the stats the reads took of the
+    files themselves, which it records them as read by where the digest
+    under them is known. The stats this cell run holds already
     (`own_stats_this_run`) are taken where they say what a stat taken now
     would: the first statement stored below an unstored read of 13,000
     photos stat-ed each again, and each of their 5,700 folders."""
@@ -127,6 +130,7 @@ def _snapshot_with_inherited(
         checked=checked,
         as_read=as_read,
         taken=own_stats_this_run() if own else None,
+        read_lstats=read_lstats,
     )
     for path, recorded in inherited_snapshots.items():
         snapshot.setdefault(path, recorded)
@@ -170,9 +174,10 @@ class _RecordsAsRun:
         probes: dict[str, str] | None,
         checked: Mapping[str, Any] | None,
         read_stats: Mapping[str, tuple[int, int, int]] | None = None,
+        read_lstats: Mapping[str, Any] | None = None,
     ) -> None:
         self.key = key
-        self._args = (file_dependencies, accessed_remote, known, probes, checked, read_stats)
+        self._args = (file_dependencies, accessed_remote, known, probes, checked, read_stats, read_lstats)
         self._inherited = inherited
         self._snapshot: dict[str, dict] | None = None
         self._held: tuple[str, str] | None = None
@@ -186,7 +191,7 @@ class _RecordsAsRun:
         """The records, as made (`_snapshot_with_inherited`), but for those
         of the entries it refers to."""
         if self._snapshot is None:
-            deps, remote, known, probes, checked, read_stats = self._args
+            deps, remote, known, probes, checked, read_stats, read_lstats = self._args
             inherited = self._inherited
             if inherited is not None:
                 inherited.settle()
@@ -199,6 +204,7 @@ class _RecordsAsRun:
                 checked,
                 referred=inherited.referred if inherited is not None else (),
                 as_read=read_stats,
+                read_lstats=read_lstats,
             )
             self._args = None
         return self._snapshot
@@ -225,12 +231,13 @@ class _RecordsAsRun:
         return found
 
 
-def _as_read(tracker: Any, written: Iterable[str]) -> dict[str, tuple[int, int, int]] | None:
+def _as_read(tracker: Any, written: Iterable[str], field: str = "read_stats") -> dict[str, Any] | None:
     """The `stat_key` each read of *tracker*'s block took, by path: what its
     records, taken a while after (`_RecordsAsRun`), tell a file written
     since by. Not for a file the block wrote itself, nor one whose change
-    time moves with no write (``ctime_unreliable``)."""
-    read_stats = attribute_or(tracker, "read_stats", None)
+    time moves with no write (``ctime_unreliable``). With *field*
+    ``"read_lstats"``, the stats themselves, where a read took one."""
+    read_stats = attribute_or(tracker, field, None)
     if not isinstance(read_stats, dict) or not read_stats:
         return None
     left_out = set(written) | set(attribute_or(tracker, "ctime_unreliable", ()))
@@ -653,6 +660,12 @@ class StatementStore:
         """*run*'s records as it ran (`_RecordsAsRun`), kept for the
         statements below when there is any."""
         tracker = execution.file_tracker
+        # The stats `inputs_moved` just took: the files as the value was built from them.
+        checked = attribute_or(tracker, "take_checked_stats", dict)()
+        read_lstats = _as_read(tracker, execution.written_paths, "read_lstats")
+        if read_lstats and checked:
+            # Not kept twice: a file checked is recorded by that stat.
+            read_lstats = {path: st for path, st in read_lstats.items() if path not in checked} or None
         as_run = _RecordsAsRun(
             run.cache_key,
             all_file_deps,
@@ -660,9 +673,9 @@ class StatementStore:
             inherited,
             tracker.known_reads() if tracker is not None else None,
             execution.probes,
-            # The stats `inputs_moved` just took: the files as the value was built from them.
-            attribute_or(tracker, "take_checked_stats", dict)(),
+            checked,
             _as_read(tracker, execution.written_paths),
+            read_lstats,
         )
         if run.cache_key and (all_file_deps or execution.accessed_remote or execution.probes):
             self.tracking_state.records_as_run[run.cache_key] = as_run
