@@ -90,6 +90,12 @@ _WRITERS_LOCK = threading.Lock()
 # Every FileBackend alive in the process, for `_reset_after_fork_in_child`.
 _LIVE_BACKENDS: weakref.WeakSet = _weak.WeakSet()
 
+#: ``entry``: ``(backend, key, id(value), stream)``, the pickle stream the
+#: last `FileBackend.get` on this thread unpickled its value from, kept only
+#: when ``wanted`` asked for it (`FileBackend.want_read_stream`), for
+#: `FileBackend.take_read_stream`.
+_READ_STREAM = threading.local()
+
 
 class _Flusher:
     """The one thread that writes every `FileBackend`'s access stamps back.
@@ -612,6 +618,8 @@ class FileBackend(CacheBackend):
         return self.get_metadata(key)
 
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
+        wanted = _READ_STREAM.__dict__.pop("wanted", False)
+        _READ_STREAM.entry = None
         self._ensure_initialized()
         if self._unusable:
             return None, None
@@ -684,6 +692,12 @@ class FileBackend(CacheBackend):
                 value = rebuild(PickleSerializer().deserialize_split, payload.stream, payload.buffers)
             else:
                 value = restore_value(metadata, payload)
+                if (
+                    wanted
+                    and type(payload) is bytes
+                    and metadata.get("serializer_cls", PickleSerializer) is PickleSerializer
+                ):
+                    _READ_STREAM.entry = (self, key, id(value), payload)
             if phase is not None:
                 phase_times.sub_end(phase)
 
@@ -692,6 +706,29 @@ class FileBackend(CacheBackend):
         except (OSError, *RESTORE_ERRORS) as exc:
             logger.debug("Cache get failed for key %r: %s", key, exc)
             return None, None
+
+    @staticmethod
+    def want_read_stream() -> None:
+        """Have the next `get` on this thread keep the pickle stream it reads
+        its value out of, for `take_read_stream`."""
+        _READ_STREAM.wanted = True
+
+    def take_read_stream(self, key: str, value: Any) -> bytes | None:
+        """The pickle stream the last `get` on this thread read *value*, the
+        value it returned for *key*, out of, when `want_read_stream` asked
+        for it; None when that get kept none (a split payload, another
+        serializer, a miss) or read another value.
+
+        The stream is the entry's bytes as they were read (inflated, under
+        ``compress``), a new ``bytes`` nothing else holds: a faster tier may
+        keep it as the bytes the value is held in
+        (`InMemoryBackend.keep_read`), since unpickling it again gives what
+        a read of the file gives. Taken once."""
+        entry = getattr(_READ_STREAM, "entry", None)
+        _READ_STREAM.entry = None
+        if entry is None or entry[0] is not self or entry[1] != key or entry[2] != id(value):
+            return None
+        return entry[3]
 
     def _wait_for_writes(self, key: str) -> None:
         """Wait for every live write to *key* in this cache directory.
