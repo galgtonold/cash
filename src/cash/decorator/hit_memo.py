@@ -85,6 +85,7 @@ from ..source_reading import own_source
 from ..tracking.tracker_context import active_tracker
 from . import library_reads
 from .call_state import NESTED_CASH_SECONDS
+from .key_values import left_out_whole
 from .user_code import (
     cash_wrapped,
     is_cash_wrapper,
@@ -531,6 +532,10 @@ class _Scan:
         #: (`finish`).
         self.meta_props: set[str] = set()
         self.count = 0
+        #: The state memo's scan: may a global the key leaves out whole be
+        #: watched for that alone (`global_value`)? Not with a hasher
+        #: registered.
+        self.left_out_ok = False
 
     def _first(self, key: Any, obj: Any) -> bool:
         if key in self.seen:
@@ -541,6 +546,19 @@ class _Scan:
         if self.count > _SCAN_LIMIT:
             raise Ineligible("too much to watch")
         return True
+
+    def global_value(self, v: Any, names: frozenset) -> None:
+        """A value a global or a module attribute holds, as the key reads it
+        (`GlobalValues.safe_global_hash`). The state memo's scan: one the
+        key leaves out whole (`key_values.left_out_whole`) is watched for
+        what keeps it left out, its class and its ``__dict__``, and not
+        looked into. Rebinding the name moves the namespace watched already."""
+        if self.left_out_ok and self.content and left_out_whole(v):
+            if self._first(("left out", id(v)), v):
+                self.watch(object.__getattribute__(v, "__dict__"), True)
+                self._keeps_class_and_dict(v)
+            return
+        self.value(v, names)
 
     def watch(self, d: dict, unkeyed: bool) -> None:
         if type(d) is not dict:
@@ -935,7 +953,7 @@ class _Scan:
                         # whatever it holds; rebinding the name moves the
                         # module's watched namespace.
                         continue
-                    self.value(md[name], names)
+                    self.global_value(md[name], names)
         finally:
             self.in_module = in_module
 
@@ -1060,7 +1078,7 @@ class _Scan:
             if name in g:
                 if g is _OS_GLOBALS and name in _OS_ENVIRON:
                     continue  # ``os.getenv``'s ``environ``: as in `module`
-                self.value(g[name], names)
+                self.global_value(g[name], names)
             elif type(b) is dict and name in b:
                 self.value(b[name], names)
         # Defaults, closure and attributes are read in full: a default
@@ -1376,6 +1394,9 @@ def scan(
     func, name = spec.func, spec.name
     s = _Scan(plain_getattr(func, "__module__", None), func)
     s.content = content
+    hashers = plain_getattr(registry, "arg_hasher", None)
+    # A registered hasher may key what a value holds, lock and all.
+    s.left_out_ok = content and not (hashers is not None and (hashers.type_hashers or hashers.override_hashers))
     s.value(func, frozenset())
     graph = registry.graph
     stack, visited = [name], {name}

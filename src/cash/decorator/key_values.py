@@ -4,6 +4,7 @@ holds is keyed by what that code does."""
 
 from __future__ import annotations
 
+import copyreg
 import functools
 import threading
 import types
@@ -63,6 +64,34 @@ SYNC_TYPES: tuple[type, ...] = (
     threading.Event,
     threading.Semaphore,
 )
+
+
+#: The lock types a key's pickle refuses wherever it meets one
+#: (`kept_state`).
+_LOCK_TYPES = (type(threading.Lock()), type(threading.RLock()))
+
+
+def left_out_whole(value: Any) -> bool:
+    """Is *value*, read as a global, left out of the key whole however its
+    attributes change, while its class and ``__dict__`` stay what they
+    are? True for an object that pickles as its class and its ``__dict__``
+    (`_state_is_its_dict`: no reduce, state or slots of its own, nor a
+    ``copyreg`` reducer or ``__cash_key__``) whose ``__dict__`` holds a
+    lock itself: the key's pickle refuses the lock, so the global is left
+    out with KEY-UNHASHABLE-GLOBAL (`GlobalValues.safe_global_hash`).
+    Not a callable, a class or a module, which other channels key."""
+    t = type(value)
+    if t.__module__ == "builtins" or isinstance(value, (type, types.ModuleType)) or callable(value):
+        return False
+    if t in copyreg.dispatch_table or plain_getattr(t, "__cash_key__", None) is not None:
+        return False
+    try:
+        state = object.__getattribute__(value, "__dict__")
+    except AttributeError:
+        return False
+    if type(state) is not dict or not _state_is_its_dict(t):
+        return False
+    return any(type(v) in _LOCK_TYPES for v in state.values())
 
 
 def reduced_state(value: Any) -> Any:

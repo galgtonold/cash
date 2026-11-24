@@ -175,6 +175,9 @@ class FunctionRegistry:
         self.data_sources: dict[str, DataSource] = state_memo.GenerationDict()
         #: Edges from a cached function to what it calls or declares.
         self.graph = DependencyGraph()
+        #: The `ArgHasher` keying this cash's calls, set by `Cash`: whether a
+        #: hasher is registered decides what a key reads of a value.
+        self.arg_hasher: Any = None
         #: func_name -> its purity report. Helper source hashes from it fold
         #: into the key's state hash, so cross-process helper edits invalidate.
         #: For a closure this is only the latest one analysed under the name;
