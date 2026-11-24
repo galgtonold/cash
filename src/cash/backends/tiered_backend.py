@@ -334,6 +334,12 @@ class TieredBackend(CacheBackend):
         for i, backend in enumerate(self.backends):
             started = time.perf_counter()
             modules = len(sys.modules)
+            # The second read of a key the RAM tier did not keep on its
+            # first: the bytes it is read out of are kept, for that tier to
+            # keep as they are (`InMemoryBackend.keep_read`).
+            want_stream = getattr(backend, "want_read_stream", None) if i > 0 and key in self._read_once else None
+            if want_stream is not None:
+                want_stream()
             try:
                 metadata, value = backend.get(key)
             except Exception as e:  # noqa: BLE001 - a tier that cannot read is a miss there
@@ -355,6 +361,7 @@ class TieredBackend(CacheBackend):
                 except Exception:  # an expired copy is not served either way
                     logger.debug("Could not drop expired %r from %s", key, class_name(type(backend)), exc_info=True)
                 continue
+            stream = backend.take_read_stream(key, value) if want_stream is not None else None
             if metadata is not None and i > 0:
                 restore_s = time.perf_counter() - started
                 # A read during which modules were imported is not what the
@@ -385,6 +392,7 @@ class TieredBackend(CacheBackend):
                 # Read-Repair / Promotion to faster tiers
                 # If found in Tier 2 (File), promote to Tier 1 (Memory)
                 read_before = self._read_once.pop(key, False) is None
+                laid_out = False
                 # One kept on disk alone stays there: each hit reads it again.
                 for j in range(0 if metadata.get(DISK_ALONE) else i):
                     # Always offered: a faster tier should hold what is being
@@ -396,10 +404,21 @@ class TieredBackend(CacheBackend):
                     # (`InMemoryBackend.promote`): the value just read is the
                     # caller's own, and most are read once per process.
                     promote = getattr(self.backends[j], "promote", None)
+                    keep_read = getattr(self.backends[j], "keep_read", None) if stream is not None else None
                     try:
                         if promote is not None and not read_before:
                             if not promote(key, value, metadata):
                                 self._remember_read(key)
+                            continue
+                        if keep_read is not None and j == 0:
+                            # Handed the value as its only reference: the
+                            # tier may keep it as the copy handed out.
+                            holder, value = [value], None
+                            try:
+                                keep_read(key, holder, metadata, stream, restore_s)
+                            finally:
+                                value = holder[0]
+                            laid_out = True
                             continue
                         self.backends[j].set(key, value, metadata)
                     except Exception as e:  # noqa: BLE001 - backend errors must not propagate
@@ -413,7 +432,7 @@ class TieredBackend(CacheBackend):
 
                 # Inject source information
                 metadata["source"] = backend.source_label
-                if i > 0:
+                if i > 0 and not laid_out:
                     # The RAM tier lays out its own copies.
                     set_order.restore(value, metadata)
 

@@ -97,12 +97,21 @@ class _Marshalled:
     2.3 s for a million nested records, more than building them took.
     Kept as bytes, the store writes it once (0.2 s) and a hit reads it
     (0.4 s), and the tier holds 50 MB where the copy took 700 MB.
+
+    A copy a hit of a whole value kept so hands out may be handed back by
+    the next one, as for `_Pickled` (`handed_copies`): a dictionary trie
+    of nested dicts read 70 ms a hit.
     """
 
-    __slots__ = ("data",)
+    __slots__ = ("clones", "data", "handed", "misses")
 
     def __init__(self, data: bytes) -> None:
         self.data = data
+        #: As `_Pickled`'s: the copy kept for the next hit, the hits in a
+        #: row that could not reuse one, and the copies made from a held one.
+        self.handed: handed_copies.Handed | None = None
+        self.misses = 0
+        self.clones = 0
 
     def __deepcopy__(self, memo: dict) -> Any:
         # A copy that falls back to deepcopy (`_deepcopy_with_frames`) reads
@@ -174,14 +183,16 @@ class _Pickled:
 
 
 class _ReadOut:
-    """What `InMemoryBackend._read_pickled` hands `get`: the value, the
-    kept bytes it came from, how long reading it took, whether it is the
-    copy handed out before, and whether it was made from that copy while
+    """What `InMemoryBackend._read_pickled` or `_read_marshalled` hands
+    `get`: the value, the kept bytes it came from, how long reading it
+    took, whether it is the copy handed out before, and whether it was made from that copy while
     something outside held it (`handed_copies`)."""
 
     __slots__ = ("cloned", "kept", "reused", "seconds", "value")
 
-    def __init__(self, value: Any, kept: _Pickled, seconds: float, reused: bool, cloned: bool = False) -> None:
+    def __init__(
+        self, value: Any, kept: _Pickled | _Marshalled, seconds: float, reused: bool, cloned: bool = False
+    ) -> None:
         self.value = value
         self.kept = kept
         self.seconds = seconds
@@ -729,7 +740,7 @@ class InMemoryBackend(CacheBackend):
         self._handoff: tuple[str, MetadataDict, Any] | None = None
         #: Keys whose kept bytes keep the copy a hit handed out for the next
         #: one (`handed_copies`), least recently handed first.
-        self._handed: dict[str, _Pickled] = {}
+        self._handed: dict[str, _Pickled | _Marshalled] = {}
 
     #: How far the machine's memory percent must climb within one pressure
     #: episode before the tier takes a fresh share rather than holding flat.
@@ -1409,6 +1420,39 @@ class InMemoryBackend(CacheBackend):
             _remember_own_polars(frame)  # read from disk: its store is a clone
         return self.set(key, value, metadata) is not False
 
+    def keep_read(self, key: str, holder: list, metadata: MetadataDict, stream: bytes, seconds: float) -> None:
+        """Keep ``holder[0]``, a value a slower tier just unpickled out of
+        *stream* and nothing has touched since, as `set` keeps it; *holder*
+        is its only reference, and holds the value to hand out after.
+
+        A value this tier keeps as pickle bytes (`_Pickled`) is kept as
+        *stream* itself, not pickled again: unpickling those bytes gives
+        what a read of the slower tier gives. A trie of 450,000 nodes read
+        from disk took 0.8 s to pickle again on its second read, twice its
+        read. The value itself is what pickle made of those bytes, so it is
+        kept as the copy handed out (`_keep_handed`), set out as stored
+        first (`set_order`): the next hit may hand it back, under the rules
+        any handed copy is (`handed_copies`), instead of reading a new copy
+        and watching that one. *seconds* is what reading it took."""
+        value = holder[0]
+        kind = type(value)
+        top_class = None if kind is dict or _copied_as_data(kind) else class_key(kind)
+        kept = _Pickled(stream, [], [], top_class)
+        _PREMADE.entry = (value, kept)
+        try:
+            stored = self.set(key, value, metadata)
+        finally:
+            _PREMADE.entry = None
+        del value
+        set_order.restore(holder[0], metadata)
+        if stored is False:
+            return
+        with self._lock:
+            entry = self._store.get(key)
+            if entry is None or entry[1] is not kept:
+                return
+        self._keep_handed(key, _ReadOut(None, kept, seconds, False), holder)
+
     def peek_metadata(self, key: str) -> MetadataDict | None:
         """The metadata, without counting an access. See `BaseBackend.peek_metadata`."""
         held_reads.flush()
@@ -1586,13 +1630,14 @@ class InMemoryBackend(CacheBackend):
         set_order.restore(value, metadata)
         return metadata, value
 
-    def _keep_handed(self, key: str, read: _ReadOut) -> Any:
+    def _keep_handed(self, key: str, read: _ReadOut, holder: list | None = None) -> Any:
         """Hand out *read*'s copy, kept for the next hit of *key* when it
         may be reused (`handed_copies.retain`). *read* holds the only
-        reference to it."""
+        reference to it; or *holder*, a list of it alone, when given."""
         kept = read.kept
-        holder = [read.value]
-        read.value = None
+        if holder is None:
+            holder = [read.value]
+            read.value = None
         if kept.misses >= handed_copies.MAX_MISSES:
             return holder[0]
         with self._lock:
@@ -1658,7 +1703,7 @@ class InMemoryBackend(CacheBackend):
         if checked is not None:
             known_cells = self._adopt_tables(key, value, checked, known_cells)
         if type(value) is _Marshalled:
-            return metadata, _plain_data.marshal_loads(value.data)
+            return self._read_marshalled(key, metadata, value)
         if type(value) is _Pickled:
             return self._read_pickled(key, metadata, value)
         if holds_bytes or shared:
@@ -1724,6 +1769,53 @@ class InMemoryBackend(CacheBackend):
                 self._checked.pop(key, None)
             return cells
 
+    def _reuse_handed(self, key: str, metadata: MetadataDict, kept: _Pickled | _Marshalled) -> tuple | None:
+        """A hit of *kept*, whose last copy handed out is kept: that copy
+        when nothing can tell it from a new one, or a new copy made from it
+        when it is unchanged but held (`handed_copies`), as ``(metadata,
+        _ReadOut)``; None, the kept copy let go, when the hit reads a new
+        copy out of the bytes."""
+        with self._lock:
+            entry = self._store.get(key)
+            handed = kept.handed
+            if handed is not None and entry is not None and entry[1] is kept:
+                started = time.perf_counter()
+                found = handed_copies.reuse(handed)
+                if found is not handed_copies.NONE:
+                    made, reused = found
+                    if reused:
+                        kept.misses = kept.clones = 0
+                    kept.clones += not reused
+                    if reused or kept.clones != _ADOPT_AT_CLONE:
+                        # The kept copy, or one made from it while
+                        # something outside holds it: either way laid
+                        # out as the bytes lay it out, and nothing to keep.
+                        self._handed[key] = self._handed.pop(key, kept)
+                        return metadata, _ReadOut(made, kept, 0.0, True)
+                    # Held again: the holder keeps it, so the new copy is
+                    # kept in its place (`_keep_handed`), and the hits
+                    # after, whose callers let go, hand that one back
+                    # instead of copying the held one every time. Once
+                    # per run of such hits: a caller holding every copy
+                    # it gets is not paid a new watch for each.
+                    self._release_handed(key)
+                    return metadata, _ReadOut(made, kept, time.perf_counter() - started, False, True)
+                kept.misses += 1
+            self._release_handed(key)
+        return None
+
+    def _read_marshalled(self, key: str, metadata: MetadataDict, kept: _Marshalled) -> tuple[MetadataDict, Any]:
+        """A hit of a value kept as marshal bytes: a new copy read out of
+        them, or the copy the last hit handed out, or one made from it, as
+        for pickle bytes (`_read_pickled`), as a `_ReadOut`."""
+        if kept.handed is not None:
+            found = self._reuse_handed(key, metadata, kept)
+            if found is not None:
+                return found
+        started = time.perf_counter()
+        value = _plain_data.marshal_loads(kept.data)
+        return metadata, _ReadOut(value, kept, time.perf_counter() - started, False)
+
     def _read_pickled(self, key: str, metadata: MetadataDict, kept: _Pickled) -> tuple[MetadataDict | None, Any]:
         """A hit of a value kept as pickle bytes: a new copy read out of them,
         or the copy the last hit handed out when nothing can tell the two
@@ -1737,33 +1829,9 @@ class InMemoryBackend(CacheBackend):
         out of this tier from now on (it is handed out this once). Bytes
         that no longer load (a class gone) are a miss, as on disk."""
         if kept.handed is not None:
-            with self._lock:
-                entry = self._store.get(key)
-                handed = kept.handed
-                if handed is not None and entry is not None and entry[1] is kept:
-                    started = time.perf_counter()
-                    found = handed_copies.reuse(handed)
-                    if found is not handed_copies.NONE:
-                        made, reused = found
-                        if reused:
-                            kept.misses = kept.clones = 0
-                        kept.clones += not reused
-                        if reused or kept.clones != _ADOPT_AT_CLONE:
-                            # The kept copy, or one made from it while
-                            # something outside holds it: either way laid
-                            # out as the bytes lay it out, and nothing to keep.
-                            self._handed[key] = self._handed.pop(key, kept)
-                            return metadata, _ReadOut(made, kept, 0.0, True)
-                        # Held again: the holder keeps it, so the new copy is
-                        # kept in its place (`_keep_handed`), and the hits
-                        # after, whose callers let go, hand that one back
-                        # instead of copying the held one every time. Once
-                        # per run of such hits: a caller holding every copy
-                        # it gets is not paid a new watch for each.
-                        self._release_handed(key)
-                        return metadata, _ReadOut(made, kept, time.perf_counter() - started, False, True)
-                    kept.misses += 1
-                self._release_handed(key)
+            found = self._reuse_handed(key, metadata, kept)
+            if found is not None:
+                return found
         started = time.perf_counter()
         try:
             value = kept.load()

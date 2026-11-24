@@ -1289,9 +1289,6 @@ def cells_hold(cells: tuple) -> bool:
     return True
 
 
-_warnings = sys.modules.get("warnings")
-
-
 def _c_part(v: Any, name: str) -> Any:
     """*name* of a C-made typing object (``int | None``, ``list[int]``)."""
     try:
@@ -1312,23 +1309,44 @@ _OS_GLOBALS = os.__dict__
 #: code names them (``world_names``), and then a change still counts.
 _WARNING_HOOKS = ("showwarning", "_showwarnmsg_impl")
 
+#: Module -> the names of callables it holds that a library sets and puts
+#: back around nearly every call, which no key reads unless scanned code
+#: names them (`_WARNING_HOOKS`). pytest's assertion plugin binds
+#: ``_reprcompare`` (and ``_assertion_pass`` when a plugin implements that
+#: hook) around every test item and puts ``None`` back after it: each test
+#: moved the world twice, so a function a test suite called once or twice
+#: per test was never served from its memo (PyThaiNLP's ``word_dict_trie``,
+#: 1673 hits across a test walk, none fast).
+_QUIET_HOOKS = {
+    "warnings": _WARNING_HOOKS,
+    "_pytest.assertion.util": ("_reprcompare", "_assertion_pass"),
+}
+
 
 def _quiet_warnings() -> None:
-    """Make `_WARNING_HOOKS` quiet in the ``warnings`` namespace, for every
-    scan: `watch_helper` watches that namespace as soon as a helper names
-    ``warnings``, while only `_watch_modules` made the hooks quiet, and a
-    function whose own scan stopped early (`Ineligible`) never reaches it.
-    Every ``catch_warnings(record=True)`` its body ran then moved the world
-    twice, and no helper fold was served again."""
-    if _QUIET_DONE[0] or _warnings is None or not hasattr(_cw, "world_quiet"):
+    """Make `_QUIET_HOOKS` quiet in their modules' namespaces, for every
+    scan: `watch_helper` watches the ``warnings`` namespace as soon as a
+    helper names ``warnings``, while only `_watch_modules` made the hooks
+    quiet, and a function whose own scan stopped early (`Ineligible`) never
+    reaches it. Every ``catch_warnings(record=True)`` its body ran then moved
+    the world twice, and no helper fold was served again. A module not yet
+    loaded is made quiet once it is."""
+    if len(_QUIET_DONE) == len(_QUIET_HOOKS) or _cw is None or not hasattr(_cw, "world_quiet"):
         return
-    md = plain_getattr(_warnings, "__dict__", None)
-    if type(md) is dict:
-        _cw.world_quiet(md, _WARNING_HOOKS)
-        _QUIET_DONE[0] = True
+    for name, hooks in _QUIET_HOOKS.items():
+        if name in _QUIET_DONE:
+            continue
+        module = sys.modules.get(name)
+        if module is None:
+            continue
+        md = plain_getattr(module, "__dict__", None)
+        if type(md) is dict:
+            _cw.world_quiet(md, hooks)
+            _QUIET_DONE.add(name)
 
 
-_QUIET_DONE = [False]
+#: The modules of `_QUIET_HOOKS` made quiet so far.
+_QUIET_DONE: set[str] = set()
 
 
 def _watch_modules() -> None:
