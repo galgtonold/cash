@@ -117,6 +117,10 @@ def test_the_memo_answers_what_inspect_answers(tmp_path, monkeypatch):
 
 
 def test_a_settled_file_is_read_once(tmp_path, monkeypatch):
+    # This process's memo alone: a block another process (or an earlier
+    # test in this one) cut from the same text is not asked of ``inspect``
+    # at all (`source_reading._kept_block`).
+    monkeypatch.setenv("CASH_ANALYSIS_STORE", "0")
     module, _ = _load(tmp_path, monkeypatch)
     calls = []
     real = inspect.getsourcelines

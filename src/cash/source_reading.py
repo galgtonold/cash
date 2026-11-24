@@ -382,10 +382,83 @@ def _inspect_source_lines(obj: object) -> tuple[list[str], int]:
     if target[0] == "class" and _CLASS_SOURCE_PARSES_FILE:
         lines, first = _class_source_lines(obj, version)
     else:
-        lines, first = _getsourcelines(obj)
+        lines, first = _kept_block(obj, version, target)
     if source_version_unchanged(version):
         _SOURCE_LINES[key] = (tuple(lines), first)
     return lines, first
+
+
+#: (path, *file_version) -> (the ``linecache`` entry digested, the digest of
+#: its lines): each file's text digested once per process and version.
+_LINE_DIGESTS: LruMemo[tuple, tuple[tuple, str]] = LruMemo(MODULE_ANALYSES)
+
+
+def _block_start(lines: list[str], target: tuple) -> int | None:
+    """The 0-based line ``inspect`` cuts *target*'s block from in *lines*,
+    when that follows from *target* and *lines* alone: a code object's
+    first line (walked back to its ``def`` before 3.13, as ``findsource``
+    walks it), a class's ``__firstlineno__``. None otherwise."""
+    if target[0] == "code":
+        lnum = target[1] - 1
+        if _WALKS_BACK_TO_DEF and 0 <= lnum < len(lines):
+            while lnum > 0 and not _FINDSOURCE_DEF_LINE.match(lines[lnum]):
+                lnum -= 1
+    elif target[0] == "class" and not _CLASS_SOURCE_PARSES_FILE and type(target[2]) is int:
+        lnum = target[2] - 1
+    else:
+        return None
+    return lnum if 0 <= lnum < len(lines) else None
+
+
+def _kept_block(obj: object, version: tuple[str, int, int, int, int], target: tuple) -> tuple[list[str], int]:
+    """`_getsourcelines` (*obj*), whose source is in the settled file at
+    *version* (`settled_source_version`), with the length of its block kept
+    across processes (`text_store`): ``inspect.getblock`` tokenises the
+    block to find where it ends, ~0.1 ms a function, and a fresh process's
+    first calls read the text of every helper their keys and analyses
+    reach -- some 400 for a few of nilearn's functions, each process.
+
+    The block is a function of the file's text and where it starts
+    (`_block_start`), so its length is kept under a digest of the very
+    lines ``linecache`` holds for the file -- the ones ``inspect`` cuts it
+    from -- and the start. It is kept only when ``inspect``'s answer, worked
+    out here, is that many lines of those lines from that start, read from
+    that same ``linecache`` entry; anything else is worked out as before."""
+    path = version[0]
+    lines = linecache.getlines(path)
+    entry = linecache.cache.get(path)
+    start = _block_start(lines, target) if lines else None
+    if start is None or entry is None or len(entry) != 4 or entry[2] is not lines:
+        return _getsourcelines(obj)
+    held = _LINE_DIGESTS.get(version)
+    if held is not None and held[0] is entry:
+        digest = held[1]
+    else:
+        import hashlib
+
+        text = "".join(lines).encode("utf-8", "surrogatepass")
+        digest = hashlib.blake2b(text, digest_size=20).hexdigest()
+        _LINE_DIGESTS[version] = (entry, digest)
+
+    def compute() -> tuple[list[str], int, bool]:
+        found, first = _getsourcelines(obj)
+        same = linecache.cache.get(path) is entry and first == start + 1 and found == lines[start : start + len(found)]
+        return found, first, same
+
+    def encode(answer: tuple[list[str], int, bool]) -> int:
+        if not answer[2]:
+            raise ValueError("not cut from the lines digested")
+        return len(answer[0])
+
+    def decode(n: object) -> tuple[list[str], int, bool]:
+        if type(n) is not int or not 0 < n <= len(lines) - start:
+            raise ValueError("not a block of these lines")
+        return lines[start : start + n], start + 1, True
+
+    from .analysis import text_store
+
+    found, first, _ = text_store.kept("source-block", digest, repr(target), compute, encode, decode)
+    return found, first
 
 
 def _getsourcelines(obj: object) -> tuple[list[str], int]:
@@ -557,12 +630,14 @@ def settled_source_version(obj: object) -> tuple[str, int, int, int, int] | None
             return None
         obj = module
     with untracked():
-        try:
-            path = inspect.getsourcefile(obj)  # type: ignore[arg-type]
-        except TypeError:
-            return None
+        path = _plain_source_file(obj)
         if path is None:
-            return None
+            try:
+                path = inspect.getsourcefile(obj)  # type: ignore[arg-type]
+            except TypeError:
+                return None
+            if path is None:
+                return None
         try:
             st = os.stat(path)
         except OSError:
@@ -571,6 +646,24 @@ def settled_source_version(obj: object) -> tuple[str, int, int, int, int] | None
     if not stat_has_settled(st) or not _disk_backed(path):
         return None
     return (path, *file_version(st))
+
+
+def _plain_source_file(obj: object) -> str | None:
+    """``inspect.getsourcefile`` (*obj*) for a function, method or code
+    object compiled from a ``.py`` file, or None to ask ``inspect``: its
+    ``co_filename``, which ``getsourcefile`` hands back as it is when the
+    file exists -- and when it does not, no stat of it follows. The key and
+    analysis of a fresh process ask this of every helper, several times:
+    ``inspect`` tests the name against every bytecode and extension
+    suffix and stats it before the stat that follows."""
+    if type(obj) is types.MethodType:
+        obj = obj.__func__
+    if type(obj) is types.FunctionType:
+        obj = obj.__code__
+    if type(obj) is not types.CodeType:
+        return None
+    filename = obj.co_filename
+    return filename if filename.endswith(".py") else None
 
 
 def source_version_unchanged(version: tuple[str, int, int, int, int]) -> bool:
