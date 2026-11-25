@@ -539,6 +539,7 @@ class StatementLineage:
         tree: ast.Module | None,
         virtual_modules: set[str],
         virtual_lineage: Mapping[str, str] | None = None,
+        bound_above: Mapping[str, str] | None = None,
     ) -> tuple[StatementEffects, set[str], set[str]]:
         """*stmt_code*'s effects, and what it reads and writes, as its key sees them.
 
@@ -549,7 +550,14 @@ class StatementLineage:
         to a helper that mutates its argument has no Store target, so the
         receivers the runtime treats as mutated are writes too. The globals a
         callee writes (``effects.callee_globals``) are left to the caller.
+
+        Whether a name a called function changes is a variable of the
+        notebook's is asked of what the simulation bound above the statement
+        (*bound_above*, else *virtual_lineage*) as of the kernel's namespace:
+        after a restart the kernel holds none of them.
         """
+        if bound_above is None:
+            bound_above = virtual_lineage
         effects = statement_effects(
             stmt_code,
             tree,
@@ -557,6 +565,7 @@ class StatementLineage:
             resolve_source=self._function_source,
             control_body=is_control_body(stmt_code),
             virtual_modules=virtual_modules,
+            simulated=_SimulatedVariables(bound_above or {}, virtual_modules),
         )
         inputs, outputs = set(effects.inputs), set(effects.outputs)
         if tree is not None:
@@ -1680,6 +1689,21 @@ class StatementLineage:
 
 #: The kinds ``carrier_kind_from_producer`` gives a random generator.
 _GENERATOR_KINDS = frozenset({"numpy Generator", "random.Random"})
+
+
+class _SimulatedVariables:
+    """The names a simulation holds as variables: each it has a lineage for
+    that it did not bind to a module. A container to ask, not a set built
+    for every statement."""
+
+    __slots__ = ("_lineage", "_modules")
+
+    def __init__(self, lineage: Mapping[str, str], modules: set[str] | frozenset[str]) -> None:
+        self._lineage = lineage
+        self._modules = modules
+
+    def __contains__(self, name: object) -> bool:
+        return name in self._lineage and name not in self._modules
 
 
 def _apply_deletes(tree: ast.Module | None, virtual_lineage: dict[str, str], virtual_modules: set[str]) -> None:

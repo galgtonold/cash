@@ -21,7 +21,7 @@ import inspect
 import os
 import pathlib
 import types
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Container, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -1685,6 +1685,7 @@ def statement_effects(
     resolve_source: SourceResolver,
     control_body: bool = False,
     virtual_modules: frozenset[str] | set[str] = frozenset(),
+    simulated: Container[str] = frozenset(),
 ) -> StatementEffects:
     """What *code* reads and writes, resolving called functions through
     *resolve_source*.
@@ -1693,7 +1694,10 @@ def statement_effects(
     top-level ``await``): the inputs and outputs are then read from a
     magic-tolerant parse, and ``callee_globals`` and ``arg_mutations`` are
     empty. *virtual_modules* are names the simulation bound to modules that
-    the kernel does not hold yet.
+    the kernel does not hold yet, *simulated* the variables it bound above
+    the statement, held by the kernel or not: a global a called function
+    changes is the notebook's variable when the namespace or the simulation
+    binds it. The runtime passes none; what it reads is in its namespace.
 
     Each called name is resolved once, however many of the questions above
     ask about it.
@@ -1705,7 +1709,7 @@ def statement_effects(
     try:
         with one_reading():
             inputs, outputs = CodeAnalyzer.analyze_code_block(
-                code, tree=tree, resolve_source=resolve_source, user_ns=namespace
+                code, tree=tree, resolve_source=resolve_source, user_ns=namespace, simulated=simulated
             )
             handed = handed_callables(tree, namespace, scope="no_control_bodies") if not control_body else None
         if handed is not None:
@@ -1723,13 +1727,13 @@ def statement_effects(
                 # What the draws change is unknown: any variable may be.
                 callee_globals |= every_variable(namespace)
             if namespace is not None:
-                callee_globals = capturable_globals(callee_globals, namespace)
+                callee_globals = capturable_globals(callee_globals, namespace, simulated)
             unreadable = handed.unreadable + undrawn
         arg_mutations = frozenset(
             v for v in function_arg_mutations(tree, resolve_source) if not is_module_name(v, namespace, virtual_modules)
         )
     except AnalysisBudgetExceeded:
-        return _effects_past_the_budget(code, tree, namespace, resolve_source, control_body, virtual_modules)
+        return _effects_past_the_budget(code, tree, namespace, resolve_source, control_body, virtual_modules, simulated)
     except Exception as exc:  # noqa: BLE001 - unknown writes must not read as no writes
         # What the called functions write is unknown, so the statement keeps
         # its own reads and writes and is marked to run uncached.
@@ -1783,6 +1787,7 @@ def _effects_past_the_budget(
     resolve_source: SourceResolver,
     control_body: bool,
     virtual_modules: frozenset[str] | set[str],
+    simulated: Container[str] = frozenset(),
 ) -> StatementEffects:
     """`statement_effects` when reading what the statement's calls are
     handed ran past the statement's analysis budget (`analysis_budget`).
@@ -1803,8 +1808,10 @@ def _effects_past_the_budget(
                 callee_globals = callee_global_mutations(tree, resolve_source, scope="no_control_bodies")
             every = callee_global_mutations(tree, resolve_source)
             if namespace is not None:
-                callee_globals = capturable_globals(callee_globals, namespace)
-                every = capturable_globals(every, namespace) | notebook_global_rebinds(tree, resolve_source, namespace)
+                callee_globals = capturable_globals(callee_globals, namespace, simulated)
+                every = capturable_globals(every, namespace, simulated) | notebook_global_rebinds(
+                    tree, resolve_source, namespace, simulated
+                )
             outputs = set(outputs) | set(every)
             arg_mutations = frozenset(
                 v
