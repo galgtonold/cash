@@ -129,7 +129,6 @@ LIFETIMES: dict[str, dict[str, str]] = {
         "_WRITERS": _P,
         "_CLEARED": _B,
     },
-    "cash.notebook.string_lookups": {"_FACTS": _P, "_STATEMENT_CODES": _P, "_TRACEABLE": _P},
     # The differences a verify run found: the tests read and empty it.
     "cash.notebook.upstream.virtual_lineage": {"VERIFY_FAILURES": _P},
     "cash.notebook.vscode_backup": {"_answers": _P, "_headers": _P},
