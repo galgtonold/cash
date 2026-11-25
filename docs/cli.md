@@ -269,7 +269,7 @@ Running `on` again with the same mode does nothing. To switch modes, run
 `cash autoload off` first, or pass `--force`: `on` refuses to overwrite an
 existing hook with a different body.
 
-<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @1442fa70 -->
+<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @09a53d69 -->
 ## Exit codes
 
 | Code | When |

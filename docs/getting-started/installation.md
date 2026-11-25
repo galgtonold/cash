@@ -3,7 +3,7 @@
 !!! info "Applies to: both paths"
     Everyone installing cash, for scripts or for notebooks.
 
-<!-- claim: cash/config/schema.py:CashConfig @88bfaf9e broad="the requires-python floor and the one-install claim are properties of the package, checked against the docs by test_docs_install_cash_with_no_extra" -->
+<!-- claim: cash/config/schema.py:CashConfig @f6ffea97 broad="the requires-python floor and the one-install claim are properties of the package, checked against the docs by test_docs_install_cash_with_no_extra" -->
 cash needs Python 3.10 or newer. One install gives you everything cash needs:
 
 ```bash
@@ -38,7 +38,7 @@ big inputs and computes them again; it never serves one install's entry to
 the other. Give every machine that shares a cache (a team's S3 or Redis
 backend, CI and laptops) the same install to keep their hits.
 
-<!-- claim: cash/_native.py:_load @0ee246a3, cash/__main__.py:cmd_info @1442fa70, cash/notebook/ipython/magics.py:CashMagics.cash_status @17cd0ee5, cash/backends/set_order.py:restore @d4e04f7d -->
+<!-- claim: cash/_native.py:_load @0ee246a3, cash/__main__.py:cmd_info @09a53d69, cash/notebook/ipython/magics.py:CashMagics.cash_status @c37db8ff, cash/backends/set_order.py:restore @d4e04f7d -->
 ## The C fast path
 
 On CPython 3.12 or newer, pip installs a wheel with a small C extension for

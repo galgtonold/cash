@@ -61,7 +61,7 @@ so and does nothing.
 ```
 
 ### `%cash_off`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_off @c73748cd -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_off @b38b65dd -->
 
 **Usage:** `%cash_off`
 
@@ -149,7 +149,7 @@ explains each line.
 ```
 
 ### `%cash_status`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @17cd0ee5 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @c37db8ff -->
 
 **Usage:** `%cash_status [dict|json]`
 

@@ -151,7 +151,7 @@ explains the size caps.
 
 ## Scripted access
 
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @17cd0ee5 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @c37db8ff -->
 `status = %cash_status dict` returns the last cell's statements (status, code,
 times) and the session's tracking state, for tools and agents. It uses the enum
 names `COMPUTED` (the badge's EXECUTED) and `RESTORED` (CACHED), and `MIXED`

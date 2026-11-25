@@ -14,7 +14,7 @@ Every cash warning starts with a code in square brackets, such as
 
 ## How much a warning says {#warning-detail}
 
-<!-- claim: cash/diagnostics.py:short_diagnostic @aa9e9b1c, cash/decorator/reporting.py:Notices._displayed @f33ddf79, cash/diagnostics.py:repeat_diagnostic @cb619e23 -->
+<!-- claim: cash/diagnostics.py:short_diagnostic @c2ec4888, cash/decorator/reporting.py:Notices._displayed @f33ddf79, cash/diagnostics.py:repeat_diagnostic @cb619e23 -->
 By default a warning is one line: the code, what happened, the fix,
 and where to read more. A list of findings or effects
 is cut to how many there are and the first one. The rest is in the code's
@@ -209,7 +209,7 @@ argument back. See [Silencing one code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/core.py:Cash.cache @2248de10 -->
+<!-- claim: cash/core.py:Cash.cache @1db754d3 -->
 **What happened.** You put `@cash.cache` on an async generator (an
 `async def` that `yield`s). cash does not cache those, so it returned your
 function unwrapped.
@@ -1199,7 +1199,7 @@ several lines in a row, wrap them in `with cash.assume_safe():` instead. A line
 that changes an argument in place is better fixed than waived: return a
 modified copy.
 
-<!-- claim: cash/decorator/reporting.py:Notices._not_shown_before @7e3fc337, cash/decorator/reporting.py:Notices.warn_once @26b61dee -->
+<!-- claim: cash/decorator/reporting.py:Notices._not_shown_before @7e3fc337, cash/decorator/reporting.py:Notices.warn_once @772110d6 -->
 **When it is safe to ignore.** When every line is a `print` to stdout or a
 progress bar: you only lose the printout on hits. Never ignore
 `mutable_global` or `dynamic_pattern`. This warning is shown once per cache,

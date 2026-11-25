@@ -622,7 +622,7 @@ argument carries stays in the key whatever the key function returns
 
 ## Parameters
 
-<!-- claim: cash/core.py:Cash.cache @2248de10 -->
+<!-- claim: cash/core.py:Cash.cache @1db754d3 -->
 All parameters are keyword-only and optional:
 
 | Parameter | Default | What it does |
