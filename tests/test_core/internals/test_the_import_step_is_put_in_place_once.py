@@ -69,7 +69,9 @@ def test_snapshots_taken_and_ended_on_other_threads_do_not_fail_an_import(step_a
     real_list = process_registries._open.__class__.__iter__
 
     def listing(self):
-        order.append("listed under the lock" if process_registries._open_lock._is_owned() else "listed unlocked")
+        # The class is shared by every weak set of cash's: only this one.
+        if self is process_registries._open:
+            order.append("listed under the lock" if process_registries._open_lock._is_owned() else "listed unlocked")
         return real_list(self)
 
     monkeypatch.setattr(process_registries._open.__class__, "__iter__", listing)
