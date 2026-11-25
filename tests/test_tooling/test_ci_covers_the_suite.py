@@ -479,3 +479,22 @@ class TestTheWheelIsChecked:
         selftest = (TESTS_DIR / "_wheel_selftest.py").read_text(encoding="utf-8")
         for runs in ('"tests/test_core/watchers"', "tests.test_core.watchers._fuzz", '"CASH_CWATCH_VERIFY": "1"'):
             assert runs in selftest, f"tests/_wheel_selftest.py no longer runs {runs}"
+
+
+class TestTheOldestPythonInstallsFromWheels:
+    """cash's oldest Python hangs on its dependencies still releasing for it.
+    pip says nothing when one stops (it installs the last release that
+    does), so a nightly job installs cash from wheels only on that Python
+    and reports a dependency that fell behind."""
+
+    def test_the_nightly_job_runs_on_the_oldest_supported_python(self):
+        job = _job(NIGHTLY_YML.read_text(encoding="utf-8"), "oldest-python-install")
+        assert f'python-version: "{_supported_pythons()[0]}"' in job, job
+
+    def test_it_installs_wheels_only_and_reports(self):
+        job = _job(NIGHTLY_YML.read_text(encoding="utf-8"), "oldest-python-install")
+        install = _step_run(job, "Install it from wheels only")
+        assert "--only-binary=:all:" in install, install
+        assert "b.ALGORITHM == 'blake3'" in install, install
+        assert "tools/dependency_floor.py" in _step_run(job, "Report dependencies that left this Python behind")
+        assert (REPO_ROOT / "tools" / "dependency_floor.py").is_file()

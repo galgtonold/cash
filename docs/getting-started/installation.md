@@ -10,6 +10,12 @@ cash needs Python 3.10 or newer. One install gives you everything cash needs:
 pip install cash-lib
 ```
 
+cash is tested on CPython, on Linux, macOS and Windows. On another
+interpreter (PyPy) the install leaves out the `blake3` package, which has no
+wheels there, and cash hashes with SHA-256 instead
+([Hashing big data](#hashing-big-data)); nothing else about such an install
+is tested.
+
 cash does not install Jupyter or IPython: the notebook path runs in the
 kernel you already use. In JupyterLab, the install adds a small extension (`cash-live-cells`) that sends your unsaved cells to
 the kernel, so cash sees your latest edits without a save.
@@ -23,8 +29,9 @@ installs with cash. On a CPU without SHA instructions BLAKE3 hashes a
 100 MiB array in about a tenth of the time SHA-256 needs; on one with them
 (most recent x86 and ARM chips) the gain is smaller.
 
-Where the `blake3` package cannot load, cash falls back to SHA-256 from
-Python's standard library. Entries written by an install hashing with BLAKE3
+Where the `blake3` package is not installed (pip asks for it on CPython
+only) or cannot load, cash falls back to SHA-256 from Python's standard
+library. Entries written by an install hashing with BLAKE3
 and one hashing with SHA-256 are keyed
 apart, so a cache folder shared between the two only misses for the other's
 big inputs and computes them again; it never serves one install's entry to

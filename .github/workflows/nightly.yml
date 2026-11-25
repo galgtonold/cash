@@ -6,8 +6,9 @@ name: Nightly integration
 # parallel. tools/test_selection/shard.py assigns each test to one shard by a
 # stable hash of its node id, so the shards never overlap and together run
 # every test. The wheel-gate job runs alongside the shards, and so do the
-# held-unit job (the unit tests too slow for every push) and the self-check
-# job (the unit suite and the core set with every memo checked).
+# held-unit job (the unit tests too slow for every push), the self-check
+# job (the unit suite and the core set with every memo checked) and the
+# wheels-only install on the oldest Python.
 on:
   schedule:
     - cron: "0 2 * * *"
@@ -184,6 +185,48 @@ jobs:
         run: >-
           python -m pytest @tools/test_selection/core_set.txt
           -n auto --tb=short -q -o timeout=180
+
+  # The oldest Python cash supports, installed as a user installs it: the
+  # wheel, and every dependency as a wheel. A dependency that stops releasing
+  # for that Python fails nothing: pip installs its last release that still
+  # does. The last step says so (tools/dependency_floor.py), and the step
+  # before it fails if BLAKE3, which has compiled code, did not come along:
+  # cash would hash with SHA-256 there, and key apart from every other install.
+  # About 2 min.
+  oldest-python-install:
+    name: Wheels-only install on the oldest Python
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # Keep in step with the first Python classifier in pyproject.toml
+      # (tests/test_tooling/test_ci_covers_the_suite.py checks).
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Build the pure-Python wheel
+        env:
+          CASH_PURE_PYTHON: "1"
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel
+
+      # Outside the checkout, so nothing but the installed package is imported.
+      - name: Install it from wheels only
+        working-directory: ${{ runner.temp }}
+        run: |
+          python -m venv v
+          v/bin/python -m pip install -q --upgrade pip
+          v/bin/python -m pip install --only-binary=:all: "$GITHUB_WORKSPACE"/dist/*.whl packaging
+          v/bin/python -c "import cash, cash.bulk_digest as b; print('cash', cash.__version__, 'hashes with', b.ALGORITHM); assert b.ALGORITHM == 'blake3', 'blake3 did not install or load'"
+
+      - name: Report dependencies that left this Python behind
+        working-directory: ${{ runner.temp }}
+        run: v/bin/python "$GITHUB_WORKSPACE/tools/dependency_floor.py"
 
   # The wheel gate (scripts/wheel_gate.py): builds the wheel, installs it into
   # a fresh venv and drives a real Jupyter server through kernel restarts. The
