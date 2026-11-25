@@ -173,8 +173,9 @@ pytest tests/docs
 ```
 
 The integration core set is the few hundred integration tests that together
-cover every line, feature and step sequence of the whole suite; the whole
-suite runs nightly. Don't run the whole suite while iterating. To re-pick the
+cover every line, feature and step sequence of the whole suite, plus at least
+5% of each feature folder's tests; the whole suite runs nightly on Python
+3.10, 3.12 and 3.14. Don't run the whole suite while iterating. To re-pick the
 core set after large changes, see `tools/test_selection/`.
 
 **Show that a new test fails without your fix:**

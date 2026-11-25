@@ -323,9 +323,11 @@ pytest @tools/test_selection/core_set.txt
 ```
 
 The core set is the few hundred integration tests that together cover every
-line, feature, feature pair and step sequence the whole suite covers. The whole
-suite runs nightly in shards (`.github/workflows/nightly.yml`); to run one
-shard locally, add `-p tools.test_selection.shard --shard=2/6` to
+line, feature, feature pair and step sequence the whole suite covers, plus at
+least 5% of each feature folder's tests. The whole suite runs nightly in
+shards on Python 3.10, 3.12 and 3.14 (`.github/workflows/nightly.yml`), on the
+merge branch when it is scheduled and on the chosen branch when started by
+hand; to run one shard locally, add `-p tools.test_selection.shard --shard=2/6` to
 `python -m pytest tests/test_notebook_integration`.
 
 To re-pick the core set after the suite has changed a lot:
@@ -338,7 +340,14 @@ python tools/test_selection/select_core.py    # re-pick from an existing baselin
 `select_core.py` greedily picks the passing tests that add new covered lines,
 features, feature pairs or step sequences per second of runtime, and writes
 `.testsel/core_set.txt` plus a report. Copy both over the committed ones in
-`tools/test_selection/`.
+`tools/test_selection/`. It then tops each feature folder up to the 5% floor.
+After adding many tests to one folder without a new baseline,
+`python tools/test_selection/select_core.py --top-up` adds what the floor
+asks for to the committed list; run the tests it prints before committing.
+
+A workflow names each action by commit hash with the version in a comment
+(`uses: actions/checkout@<40 hex> # v6`), and sets `permissions: contents:
+read` at the top; a job that needs more asks for it itself.
 
 ### Before reporting work as done
 

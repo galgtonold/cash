@@ -5,34 +5,61 @@ name: Nightly integration
 # night and by hand from the Actions tab, split into shards that run in
 # parallel. tools/test_selection/shard.py assigns each test to one shard by a
 # stable hash of its node id, so the shards never overlap and together run
-# every test. The wheel-gate job runs alongside the shards, and so do the
-# held-unit job (the unit tests too slow for every push), the self-check
-# job (the unit suite and the core set with every memo checked) and the
-# wheels-only install on the oldest Python.
+# every test. The shards run on the oldest, a middle and the newest Python,
+# on the merge branch when there is one. The wheel-gate job runs alongside
+# the shards, and so do the held-unit job (the unit tests too slow for every
+# push), the self-check job (the unit suite and the core set with every memo
+# checked), the wheels-only install on the oldest Python and the speed
+# report.
 on:
   schedule:
     - cron: "0 2 * * *"
   workflow_dispatch:
 
+# What the workflow's token may do unless a job asks for more: read the
+# repository, nothing else.
+permissions:
+  contents: read
+
 jobs:
+  # Every shard on three Pythons: 3.10 (no C extension, no run-time trace,
+  # so a different engine keys and watches the body), 3.12 and the newest.
+  # A scheduled run starts from the default branch; the first step moves to
+  # the merge branch, where the next change to main is, so the whole suite
+  # has run on that commit the morning after. A run started by hand tests
+  # the branch it was started on.
   integration:
-    name: Integration shard ${{ matrix.shard }}
+    name: Integration ${{ matrix.python }} shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      # N in --shard=I/N is the number of jobs, so the matrix must hold nothing
-      # but the shard numbers 1..N (tests/test_tooling/test_ci_covers_the_suite.py checks).
+      # The step below divides the suite by SHARDS, which must be the count of
+      # shard numbers here: with a second axis the job total no longer is
+      # (tests/test_tooling/test_ci_covers_the_suite.py checks both).
       matrix:
+        python: ["3.10", "3.12", "3.14"]
         shard: [1, 2, 3, 4, 5, 6]
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      # The merge branch: claude/batch and the highest number.
+      - name: Check out the merge branch
+        if: github.event_name == 'schedule'
+        run: |
+          branch=$(git ls-remote --heads origin 'refs/heads/claude/batch*' \
+            | sed 's|.*refs/heads/||' | grep -E '^claude/batch[0-9]+$' \
+            | sort -t h -k 2 -n | tail -1)
+          if [ -n "$branch" ]; then git checkout -q "origin/$branch"; fi
+          echo "Testing ${branch:-the default branch} at $(git log -1 --format='%H %s')"
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
 
       - name: Install dependencies
         run: |
@@ -42,10 +69,12 @@ jobs:
       # `python -m` puts the repo root on sys.path, which `-p` needs to import
       # the plugin by its module name.
       - name: Run integration shard
+        env:
+          SHARDS: "6"
         run: >-
           python -m pytest tests/test_notebook_integration
           -p tools.test_selection.shard
-          --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+          --shard=${{ matrix.shard }}/$SHARDS
           -n auto --tb=short -q
 
   # The unit suite on Windows with Python 3.10, the slowest job of all (45 min
@@ -62,7 +91,7 @@ jobs:
         shard: [1, 2]
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
 
@@ -77,7 +106,7 @@ jobs:
           if [ -n "$branch" ]; then git checkout -q "origin/$branch"; fi
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.10"
           cache: pip
@@ -114,10 +143,10 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
 
@@ -152,10 +181,10 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
 
@@ -199,12 +228,12 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       # Keep in step with the first Python classifier in pyproject.toml
       # (tests/test_tooling/test_ci_covers_the_suite.py checks).
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.10"
 
@@ -228,6 +257,63 @@ jobs:
         working-directory: ${{ runner.temp }}
         run: v/bin/python "$GITHUB_WORKSPACE/tools/dependency_floor.py"
 
+  # Report only: the speed set's ratios (cash over plain Python, per scenario)
+  # on the tested commit against main. Both sides are measured in this job,
+  # on this runner, in alternating runs (benchmarks/speed_compare.py), so the
+  # runner's own speed cancels out. A shared runner is still noisy: a flagged
+  # scenario is a reason to measure on a quiet machine, and this job never
+  # fails the run. About 10 min.
+  speed:
+    name: Speed set against main (report only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Check out the merge branch
+        if: github.event_name == 'schedule'
+        run: |
+          branch=$(git ls-remote --heads origin 'refs/heads/claude/batch*' \
+            | sed 's|.*refs/heads/||' | grep -E '^claude/batch[0-9]+$' \
+            | sort -t h -k 2 -n | tail -1)
+          if [ -n "$branch" ]; then git checkout -q "origin/$branch"; fi
+          echo "Measuring ${branch:-the default branch} at $(git log -1 --format='%H %s')"
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # Exit 1 means a scenario moved by more than the threshold: reported
+      # as a warning. Exit 2 means the comparison itself did not run.
+      - name: Compare the speed set with main
+        run: |
+          status=0
+          python benchmarks/speed_compare.py origin/main HEAD --json speed.json > speed.txt || status=$?
+          cat speed.txt
+          { echo '```'; cat speed.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$status" = 1 ]; then echo "::warning::The speed set moved against main; see the job summary."; fi
+          if [ "$status" -gt 1 ]; then exit "$status"; fi
+
+      - name: Keep the measurements
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: speed-set
+          path: |
+            speed.json
+            speed.txt
+          if-no-files-found: ignore
+
   # The wheel gate (scripts/wheel_gate.py): builds the wheel, installs it into
   # a fresh venv and drives a real Jupyter server through kernel restarts. The
   # unit and integration suites run the editable install through nbclient, so
@@ -238,10 +324,10 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
 

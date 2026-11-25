@@ -255,11 +255,16 @@ class TestBothTiersRunTheSuite:
         assert macos <= 5, macos
 
 
-def _step_run(text: str, name: str) -> str:
-    """The ``run:`` body of the step called *name*, up to the next step."""
+def _step(text: str, name: str) -> str:
+    """The step called *name*, up to the next step."""
     start = text.index(f"- name: {name}")
     nxt = text.find("- name:", start + 1)
-    step = text[start:] if nxt == -1 else text[start:nxt]
+    return text[start:] if nxt == -1 else text[start:nxt]
+
+
+def _step_run(text: str, name: str) -> str:
+    """The ``run:`` body of the step called *name*."""
+    step = _step(text, name)
     assert "run:" in step, f"step {name!r} has no run:"
     return step.split("run:", 1)[1]
 
@@ -329,23 +334,86 @@ class TestTheIntegrationSuiteRuns:
         assert re.search(r"^\s*workflow_dispatch:", text, re.MULTILINE), text
 
     def test_the_nightly_workflow_runs_the_whole_folder_in_shards(self):
-        run = _step_run(NIGHTLY_YML.read_text(encoding="utf-8"), "Run integration shard")
+        step = _step(NIGHTLY_YML.read_text(encoding="utf-8"), "Run integration shard")
+        run = step.split("run:", 1)[1]
         assert re.search(r"pytest\s+" + INTEGRATION + r"\s", run), run
         assert "-p tools.test_selection.shard" in run
-        assert "--shard=${{ matrix.shard }}/${{ strategy.job-total }}" in run
+        assert "--shard=${{ matrix.shard }}/$SHARDS" in run
         pytest_args = run.split("pytest", 1)[1]
         for narrowing in ("--ignore", "--deselect", " -k ", " -m ", "::"):
             assert narrowing not in pytest_args, f"the nightly run is narrowed by {narrowing.strip()!r}: {run}"
 
-    def test_the_nightly_matrix_is_the_shard_numbers_one_to_n(self):
-        """N is the job count, so any other matrix axis would skip shards."""
+    def test_the_nightly_shards_are_one_to_n_and_n_is_what_the_step_divides_by(self):
+        """A shard number missing from the matrix, or a divisor other than
+        their count, leaves tests that no job runs."""
         text = NIGHTLY_YML.read_text(encoding="utf-8")
-        m = re.search(r"^(?P<indent>\s*)matrix:\s*\n(?P<body>(?:(?P=indent)\s+.*\n)+)", text, re.MULTILINE)
-        assert m, "no matrix in nightly.yml"
+        job = _job(text, "integration")
+        m = re.search(r"^(?P<indent>\s*)matrix:\s*\n(?P<body>(?:(?P=indent)\s+.*\n)+)", job, re.MULTILINE)
+        assert m, "no matrix in the integration job"
         keys = re.findall(r"^\s*([\w-]+):", m.group("body"), re.MULTILINE)
-        assert keys == ["shard"], f"the nightly matrix must hold only `shard`, found {keys}"
+        assert keys == ["python", "shard"], f"the nightly matrix holds `python` and `shard`, found {keys}"
         values = [int(v) for v in re.search(r"shard:\s*\[([^\]]+)\]", m.group("body")).group(1).split(",")]
         assert values == list(range(1, len(values) + 1)), values
+        step = _step(text, "Run integration shard")
+        assert re.search(r'SHARDS: "(\d+)"', step).group(1) == str(len(values)), step
+        # The job total counts the Pythons too, so it cannot be the divisor.
+        assert "strategy.job-total" not in job
+
+    def test_the_nightly_shards_run_on_the_oldest_and_the_newest_python(self):
+        """3.10 has no C extension and no run-time trace: another engine keys
+        the code and watches the body there."""
+        job = _job(NIGHTLY_YML.read_text(encoding="utf-8"), "integration")
+        pythons = re.findall(r'"(3\.\d+)"', re.search(r"python: \[([^\]]+)\]", job).group(1))
+        supported = _supported_pythons()
+        assert {supported[0], supported[-1]} <= set(pythons), (pythons, supported)
+        assert "python-version: ${{ matrix.python }}" in job
+
+    def test_a_scheduled_run_tests_the_merge_branch(self):
+        """A schedule starts from the default branch, which a change reaches
+        last: the whole suite would only ever run on what is already main."""
+        job = _job(NIGHTLY_YML.read_text(encoding="utf-8"), "integration")
+        checkout = job.index("- name: Check out the merge branch")
+        assert checkout < job.index("- name: Install dependencies")
+        step = job[checkout : job.index("- name: Set up Python")]
+        # By hand, the branch the run was started on is the one tested.
+        assert "if: github.event_name == 'schedule'" in step
+        assert "claude/batch" in step and "git checkout" in step
+
+
+class TestWorkflowsAreLockedDown:
+    """An action named by a tag or a branch is whatever that name points at
+    on the day of the run, with the workflow's token in its hands; a commit
+    hash is one reviewed version. The token itself reads the repository and
+    no more, unless a job asks."""
+
+    WORKFLOWS = sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml"))
+
+    @pytest.mark.parametrize("workflow", WORKFLOWS, ids=lambda p: p.name)
+    def test_every_action_is_pinned_to_a_commit(self, workflow):
+        used = re.findall(r"^\s*(?:- )?uses:\s*(\S+)", workflow.read_text(encoding="utf-8"), re.MULTILINE)
+        assert used, f"{workflow.name} uses no action: the check would pass on nothing"
+        loose = [u for u in used if not u.startswith("./") and not re.fullmatch(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}", u)]
+        assert not loose, f"{workflow.name}: pin by commit hash, with the version in a comment: {loose}"
+
+    @pytest.mark.parametrize("workflow", WORKFLOWS, ids=lambda p: p.name)
+    def test_the_token_only_reads_unless_a_job_asks_for_more(self, workflow):
+        text = workflow.read_text(encoding="utf-8")
+        assert re.search(r"^permissions:\n  contents: read\n(?=\S|\n)", text, re.MULTILINE), workflow.name
+
+
+class TestTheSpeedSetIsReported:
+    def test_the_nightly_workflow_compares_the_speed_set_with_main(self):
+        job = _job(NIGHTLY_YML.read_text(encoding="utf-8"), "speed")
+        assert "benchmarks/speed_compare.py origin/main HEAD" in job
+        assert (REPO_ROOT / "benchmarks" / "speed_compare.py").is_file()
+        # Both refs must be in the checkout to be compared.
+        assert "fetch-depth: 0" in job
+
+    def test_a_slower_scenario_warns_and_does_not_fail_the_run(self):
+        """A shared runner's timings are too noisy to gate on."""
+        job = _job(NIGHTLY_YML.read_text(encoding="utf-8"), "speed")
+        assert "continue-on-error: true" in job
+        assert "::warning::" in job
 
 
 class TestTheHeldTestsRunNightly:
