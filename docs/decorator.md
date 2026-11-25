@@ -14,9 +14,12 @@ instead of running the body. This page covers where results go, how to see what
 cash did, what makes an entry go stale, the parameters, and the limits.
 
 Good candidates are file loads, ETL steps, model fits, simulations and paid
-API calls. A function that takes microseconds gains little: building the key
-of a call costs about a tenth of a millisecond. With the C extension, a hit
-met again is served in about half a microsecond while nothing it reads has
+API calls. A function that takes microseconds gains little: the first hit
+of a key costs about <!-- docnum:cc_cash_small_first_hit -->278 µs<!-- /docnum --> and a miss about
+<!-- docnum:cc_cash_small_miss -->2.2 ms<!-- /docnum -->
+([Per call of a decorated function](benchmarks.md#per-call-of-a-decorated-function)).
+With the C extension, a hit met again is served in about
+<!-- docnum:cc_cash_small_hit -->0.43 µs<!-- /docnum --> while nothing it reads has
 changed; see [a hit met again](how-it-works/decorator-path.md#a-hit-met-again).
 
 ## The minimum

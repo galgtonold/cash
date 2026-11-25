@@ -408,8 +408,9 @@ hits and misses on the statement's badge; see
 ## A hit met again
 
 With the C extension, cash remembers each hit it serves and serves the same
-call again without building the key: about half a microsecond instead of a
-tenth of a millisecond. It does so only while nothing the key reads has
+call again without building the key: about <!-- docnum:cc_cash_small_hit -->0.43 µs<!-- /docnum -->
+instead of about <!-- docnum:cc_cash_small_first_hit -->278 µs<!-- /docnum -->
+([measured](../benchmarks.md#per-call-of-a-decorated-function)). It does so only while nothing the key reads has
 changed, which the interpreter's watchers report as it happens: the
 function's code, defaults and closure, the globals, classes and helpers it
 reads, a list or dict argument edited in place, cash's settings and

@@ -74,33 +74,43 @@ key lookup) on top of the write.
 ### Per call of a decorated function
 
 What one call through `@cash.cache` costs when the function body does
-almost nothing, next to `functools.lru_cache` and `joblib.Memory`. A hit on
-a small argument costs about 0.1 ms and a miss about 1 ms. An 8 MB array
-argument adds the time to hash its content, about 6 ms, to both.
+almost nothing, next to `functools.lru_cache` and `joblib.Memory`. With a
+small argument, a miss costs about <!-- docnum:cc_cash_small_miss -->2.2 ms<!-- /docnum -->, the first hit
+of a key in a process about <!-- docnum:cc_cash_small_first_hit -->278 µs<!-- /docnum -->, and the same
+call met again about <!-- docnum:cc_cash_small_hit -->0.43 µs<!-- /docnum -->. An 8 MB array argument is
+hashed by content on every call: about <!-- docnum:cc_cash_array_hit -->2.0 ms<!-- /docnum --> on a hit.
 
 **Per-call cost, with a body that does almost nothing:**
 
-| Cache | Hit, small argument | Miss, small argument | Hit, 8 MB array | Miss, 8 MB array |
-|---|---:|---:|---:|---:|
-| `@cash.cache` | 110 µs | 1.0 ms | 5.8 ms | 12 ms |
-| `lru_cache` | 0.04 µs | 0.07 µs | not supported | not supported |
-| `joblib.Memory` | 166 µs | 1.2 ms | 13 ms | 15 ms |
+| Cache | Hit met again | First hit of a key | Miss | Hit, 8 MB array | Miss, 8 MB array |
+|---|---:|---:|---:|---:|---:|
+| `@cash.cache` | <!-- docnum:cc_cash_small_hit -->0.43 µs<!-- /docnum --> | <!-- docnum:cc_cash_small_first_hit -->278 µs<!-- /docnum --> | <!-- docnum:cc_cash_small_miss -->2.2 ms<!-- /docnum --> | <!-- docnum:cc_cash_array_hit -->2.0 ms<!-- /docnum --> | <!-- docnum:cc_cash_array_miss -->6.2 ms<!-- /docnum --> |
+| `lru_cache` | <!-- docnum:cc_lru_cache_small_hit -->0.03 µs<!-- /docnum --> | <!-- docnum:cc_lru_cache_small_first_hit -->0.04 µs<!-- /docnum --> | <!-- docnum:cc_lru_cache_small_miss -->0.08 µs<!-- /docnum --> | not supported | not supported |
+| `joblib.Memory` | <!-- docnum:cc_joblib_small_hit -->125 µs<!-- /docnum --> | <!-- docnum:cc_joblib_small_first_hit -->169 µs<!-- /docnum --> | <!-- docnum:cc_joblib_small_miss -->1.4 ms<!-- /docnum --> | <!-- docnum:cc_joblib_array_hit -->14 ms<!-- /docnum --> | <!-- docnum:cc_joblib_array_miss -->14 ms<!-- /docnum --> |
 
 - **A hit** in the same process comes from cash's memory tier. A hit in a
   later process reads from disk: add the restore cost above.
+- **The first hit of a key** in a process builds the key and looks it up.
+  **Met again**, with the same arguments and nothing the key reads changed,
+  the call is served without building the key
+  ([A hit met again](how-it-works/decorator-path.md#a-hit-met-again)); that
+  needs the C extension, which the wheels for CPython 3.12 and later carry.
+  Without it every hit costs what a first hit costs.
 - **A miss** is what the caller waits for: building the key, running the
   body and serialising the result. The disk write finishes in the
   background.
-- **`lru_cache`** is a dictionary lookup, thousands of times cheaper. It cannot
+- **`lru_cache`** is a dictionary lookup, cheaper still. It cannot
   take an array, forgets everything when the process ends, and does not
   notice when the function's code changes.
 - **`joblib.Memory`** keeps results on disk only, so each hit reads a file.
 
 Source: `python benchmarks/measure_call_cost.py`, the median of three
 rounds, committed as `benchmarks/call_cost.frozen.csv` with the machine it
-ran on: a 4-core 2.1 GHz Xeon virtual machine (Linux, Python 3.11, cash
-0.11.0, joblib 1.6.0, NumPy 2.4.6), shared with other jobs at the time.
-Read the figures as order of magnitude, and run the script for your own.
+ran on: a 4-core 2.1 GHz Xeon virtual machine (Linux, Python
+<!-- docnum:cc_python -->3.14<!-- /docnum -->, cash <!-- docnum:cc_cash_version -->0.15.0<!-- /docnum -->, joblib
+<!-- docnum:cc_joblib_version -->1.6.0<!-- /docnum -->, NumPy <!-- docnum:cc_numpy_version -->2.5.5<!-- /docnum -->), shared with other
+jobs at the time. Read the figures as order of magnitude, and run the
+script for your own.
 
 Decorate a function whose body takes well over a millisecond. For a cheap
 function called in a hot loop, where the cache only needs to last the

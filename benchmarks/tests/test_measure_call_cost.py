@@ -16,11 +16,14 @@ def test_quick_run_writes_every_case_with_its_machine(tmp_path):
         rows = list(csv.DictReader(fh))
     cases = {(r["tool"], r["argument"], r["outcome"]) for r in rows}
     # lru_cache cannot take an array; every other pairing is measured.
-    assert len(cases) == 10, sorted(cases)
+    # Three outcomes each: a miss, the first hit of a key, a hit met again.
+    assert len(cases) == 15, sorted(cases)
+    assert {outcome for _, _, outcome in cases} == {"miss", "first_hit", "hit"}
     assert all(float(r["seconds_per_call"]) > 0 for r in rows)
     assert all(r["cpu"] and r["python"] and r["cash_version"] for r in rows)
     assert "| `@cash.cache` |" in proc.stdout
     assert "not supported" in proc.stdout
+    assert "| Hit met again | First hit of a key | Miss |" in proc.stdout
 
 
 def test_seconds_are_shown_in_the_unit_the_page_uses():

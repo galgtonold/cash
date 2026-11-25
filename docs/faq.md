@@ -30,8 +30,9 @@ link to the page that has the details.
     It depends on compute time against reload time, so cash quotes no
     multiplier. The first run is slightly slower; later runs skip the work.
     [Benchmarks](benchmarks.md) shows what a restore costs and how to work out
-    your own number. A call through `@cash.cache` adds about a tenth of a
-    millisecond on a hit and a millisecond on a miss; see
+    your own number. A call through `@cash.cache` adds about
+    <!-- docnum:cc_cash_small_miss -->2.2 ms<!-- /docnum --> on a miss and about
+    <!-- docnum:cc_cash_small_first_hit -->278 µs<!-- /docnum --> on the first hit of a key; see
     [Per call of a decorated function](benchmarks.md#per-call-of-a-decorated-function).
 
 ??? question "Where is the cache, and how do I clear it?"

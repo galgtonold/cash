@@ -500,6 +500,13 @@ Edit only `__version__ = "..."` in `src/cash/__init__.py`. `pyproject.toml` read
 `tests/test_core/project/test_docs_version_currency.py` fails if a user-facing page names
 another version.
 
+For a new minor version, measure the per-call cost again on a quiet machine
+and refresh the pages that quote it (the benchmarks page, *Why cash*, the
+FAQ, the threads guide):
+`python benchmarks/measure_call_cost.py --out benchmarks/call_cost.frozen.csv`,
+then `python scripts/doc_numbers.py --update`. The same test file fails while
+the CSV names another minor version.
+
 Then move the try-it notebooks to the new version: run
 `python scripts/build_try_cash_colab.py` and set the `cash-lib~=X.Y.0` pin in
 `binder/requirements.txt`. `tests/docs/test_try_cash_notebooks_in_sync.py`

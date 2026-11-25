@@ -1,7 +1,7 @@
 """What one call through ``@cash.cache`` costs, next to lru_cache and joblib.
 
-Times a hit and a miss of a function whose body does almost nothing, so the
-figure is the cache's own cost per call:
+Times a miss, the first hit of a key and a hit met again, of a function whose
+body does almost nothing, so the figure is the cache's own cost per call:
 
 * **small argument**: ``f(i)`` with an ``int``;
 * **large array**: ``f(a)`` with an 8 MB ``float64`` array, which every cache
@@ -14,7 +14,10 @@ the array cost is the argument's hashing, not the result's writing.
 array. ``joblib.Memory`` keeps them on disk only, so its hit reads a file.
 A cash hit in the same process comes from its RAM tier; a hit in a later
 process reads from disk, which the restore table on ``docs/benchmarks.md``
-covers.
+covers. The first hit of a key in a process builds the key; with the C
+extension a hit met again is served without building it, so the two are
+timed apart (``first_hit``: every stored key called once more; ``hit``: one
+key called over and over).
 
 Usage:
     python benchmarks/measure_call_cost.py [--out PATH] [--rounds N] [--quick]
@@ -44,9 +47,11 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+_REPO = Path(__file__).resolve().parent.parent
+sys.path[:0] = [str(_REPO / "src"), str(_REPO)]
 
 import cash
+from benchmarks._seconds import format_seconds
 from cash import Cash
 
 ARRAY_ELEMENTS = 1_000_000  # 8 MB of float64
@@ -135,11 +140,12 @@ def measure(tool: str, argument: str, quick: bool) -> dict[str, tuple[float, int
                 fn(a)
             fn(hit_arg)
             miss = _median_per_call(fn, misses, batch_miss)
+            first_hit = _median_per_call(fn, misses, batch_miss)
             hit = _median_per_call(fn, [hit_arg] * n_hits, batch_hit)
         finally:
             if owner is not None:
                 owner.shutdown()
-    return {"hit": (hit, n_hits), "miss": (miss, len(misses))}
+    return {"hit": (hit, n_hits), "first_hit": (first_hit, len(misses)), "miss": (miss, len(misses))}
 
 
 def machine() -> dict[str, str]:
@@ -161,22 +167,13 @@ def machine() -> dict[str, str]:
     }
 
 
-def format_seconds(s: float) -> str:
-    """The unit the page uses: µs below a millisecond, ms from there."""
-    if s < 1e-3:
-        us = s * 1e6
-        return f"{us:.2f} µs" if us < 1 else f"{us:.0f} µs" if us >= 10 else f"{us:.1f} µs"
-    ms = s * 1e3
-    return f"{ms:.0f} ms" if ms >= 10 else f"{ms:.1f} ms"
-
-
 def markdown(rows: list[dict[str, str]]) -> str:
     got = {(r["tool"], r["argument"], r["outcome"]): float(r["seconds_per_call"]) for r in rows}
-    cols = [("small", "hit"), ("small", "miss"), ("array", "hit"), ("array", "miss")]
+    cols = [("small", "hit"), ("small", "first_hit"), ("small", "miss"), ("array", "hit"), ("array", "miss")]
     names = {"cash": "`@cash.cache`", "lru_cache": "`lru_cache`", "joblib": "`joblib.Memory`"}
     out = [
-        "| Cache | Hit, small argument | Miss, small argument | Hit, 8 MB array | Miss, 8 MB array |",
-        "|---|---:|---:|---:|---:|",
+        "| Cache | Hit met again | First hit of a key | Miss | Hit, 8 MB array | Miss, 8 MB array |",
+        "|---|---:|---:|---:|---:|---:|",
     ]
     for tool in TOOLS:
         cells = [format_seconds(got[(tool, *c)]) if (tool, *c) in got else "not supported" for c in cols]
@@ -212,7 +209,7 @@ def main(argv: list[str] | None = None) -> int:
                             **info,
                         }
                     )
-                    print(f"{tool:10} {argument:6} {outcome:5} {format_seconds(seconds)}", file=sys.stderr)
+                    print(f"{tool:10} {argument:6} {outcome:9} {format_seconds(seconds)}", file=sys.stderr)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open("w", newline="", encoding="utf-8") as fh:

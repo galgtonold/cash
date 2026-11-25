@@ -16,7 +16,7 @@ yourself. Figures on this page are derived from the repository by
 ## The suites
 
 **<!-- docnum:tests_total -->~32,000<!-- /docnum --> tests** in
-<!-- docnum:test_files -->~3,020<!-- /docnum --> files:
+<!-- docnum:test_files -->~3,050<!-- /docnum --> files:
 
 | Suite | Size | What it covers |
 |---|---|---|
@@ -80,7 +80,7 @@ test that passes without the fix proves nothing and is rewritten.
   For a decorated function, it checks that the hits and misses match the
   example's comments (`# cache hit`, `# cache miss`).
 - **Claims are pinned to the code.** About
-  <!-- docnum:claims -->~620<!-- /docnum --> statements about behaviour carry an
+  <!-- docnum:claims -->~640<!-- /docnum --> statements about behaviour carry an
   anchor naming the source that decides them, with a fingerprint of that
   source. When the code changes, the claim is listed for re-reading. Pull
   requests report drift without failing; a release fails on it.
