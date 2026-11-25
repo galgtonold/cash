@@ -46,7 +46,7 @@ def test_every_function_replaced_while_a_call_is_tracked_pickles_as_the_original
     tracker is open pickles, loads back as what stands under that name, and
     is the original again once the tracker has closed."""
     import numpy  # noqa: F401 - loaded so their readers are among the replaced
-    import pandas  # noqa: F401
+    import pandas  # noqa: F401 - loaded so their readers are among the replaced
 
     before = _module_callables()
     replaced = {}
