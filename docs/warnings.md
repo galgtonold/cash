@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @3b2080e7 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @0aed2303 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -3190,7 +3190,7 @@ statement, on the line above it or at the end of its line. It turns off the
 rewind as well as caching, and the statement no longer raises this warning.
 `# @cash:allow-random` only silences the warning.
 
-<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @923fc9d4 -->
+<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @f47b657d -->
 With `@cash.cache`: the check runs when the decorator is applied, once per
 function, and reads only that function's source. A draw from the global
 `random` or `numpy.random` stream is not reported when a seed of that stream
@@ -3500,9 +3500,9 @@ multiple of 8 inside the memory the process uses.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.inputs_moved_during_call @7d2264c0, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @803cd545 -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.inputs_moved_during_call @7d2264c0, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @56f98d79 -->
 <!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @4364ed7d, cash/tracking/file_dep_snapshot.py:snapshot_file_deps @c3b72772 -->
-<!-- claim: cash/notebook/statement/store.py:StatementStore.inputs_moved @0669c2ad, cash/notebook/statement/processor.py:StatementProcessor._post_execute @a8c3dc59 -->
+<!-- claim: cash/notebook/statement/store.py:StatementStore.inputs_moved @e60eaaeb, cash/notebook/statement/processor.py:StatementProcessor._post_execute @a8c3dc59 -->
 === "Decorator"
 
     **What happened.** A file the function read changed before it returned,
@@ -3724,7 +3724,7 @@ time, pass the value in as an argument.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.work_outlived_call @0f141a00, cash/tracking/reader_patches.py:_patch_thread_pool_submit @b3742318, cash/tracking/reader_patches.py:_patch_thread_start @1b59e2a1, cash/tracking/file_tracker.py:FileAccessTracker.__exit__ @690809e9 -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.work_outlived_call @0f141a00, cash/tracking/reader_patches.py:_patch_thread_pool_submit @bc00fd4f, cash/tracking/reader_patches.py:_patch_thread_start @1b59e2a1, cash/tracking/file_tracker.py:FileAccessTracker.__exit__ @2fb104a9 -->
 **What happened.** The function handed work to a `ThreadPoolExecutor`
 (`submit`, `map`) or started a `threading.Thread`, and returned while some of
 it was still running: it never waited for the future or joined the thread,

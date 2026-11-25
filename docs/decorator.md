@@ -831,7 +831,7 @@ miss costs.
 
 ### `allow_random=`
 
-<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @923fc9d4 -->
+<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @f47b657d -->
 When the body draws from an unseeded random generator, cash warns
 ([`RANDOM-UNSEEDED`](warnings.md#random-unseeded)): the first draw is stored and
 every later call gets the same "random" value. The fix is a generator seeded
