@@ -282,7 +282,7 @@ def _distribution_map() -> dict[str, list[tuple[str, Any]]]:
                 if saved is not None:
                     return saved
         by_top, saveable = _packages_distributions()
-    except Exception:  # noqa: BLE001 - broken metadata: no versions to fold
+    except Exception:  # noqa: BLE001 - fails open: broken metadata: no library version reaches the key
         return {}
     if fingerprint is not None and saveable is not None:
         _save_map(fingerprint, saveable)
@@ -334,7 +334,7 @@ def _shared_map(fingerprint: dict, shared: dict) -> dict[str, list[tuple[str, An
         result = _map_rows(by_top)
         closures = saved.get("closures")
         closures = closures if isinstance(closures, dict) else {}
-    except Exception:  # noqa: BLE001 - anything off in the file: build it again
+    except Exception:  # noqa: BLE001 - fails closed: anything off in the file: build it again
         return None
     if result is None:
         return None
@@ -571,7 +571,7 @@ def _saved_map(header: list) -> dict[str, list[tuple[str, Any]]] | None:
             return None
         closures = saved.get("closures")
         closures = closures if isinstance(closures, dict) else {}
-    except Exception:  # noqa: BLE001 - anything off in the file: build it again
+    except Exception:  # noqa: BLE001 - fails closed: anything off in the file: build it again
         return None
     global _SLOT_FINGERPRINT, _SAVED_CLOSURES
     _SLOT_FINGERPRINT = {"header": header, "paths": refreshed}
@@ -641,7 +641,7 @@ def _version(dist: str) -> str | None:
             folder = _metadata_folder(found)
             if folder is not None:
                 _RECORD_PATHS[dist] = os.path.join(folder, "RECORD")
-        except Exception:  # noqa: BLE001 - no metadata: nothing to fold
+        except Exception:  # noqa: BLE001 - fails open: no metadata: this library's version does not reach the key
             _VERSIONS[dist] = None
     return _VERSIONS[dist]
 
@@ -721,7 +721,7 @@ def _requires(dist: str) -> list[str]:
     """The distributions *dist* requires unconditionally (no ``extra ==``)."""
     try:
         lines = importlib_metadata.requires(dist) or []
-    except Exception:  # noqa: BLE001 - no metadata: requires nothing we can name
+    except Exception:  # noqa: BLE001 - fails open: no metadata: what it requires is not followed
         return []
     names = []
     for line in lines:
@@ -786,7 +786,7 @@ def _kept_closure(dist: str) -> frozenset[str] | None:
             if not (record is None or isinstance(record, str)):
                 return None
             rows.append((name, version, record))
-    except Exception:  # noqa: BLE001 - not kept, or not whole: read again
+    except Exception:  # noqa: BLE001 - fails closed: not kept, or not whole: read again
         return None
     for name, version, record in rows:
         if name not in _VERSIONS:  # a version is read once a process, kept or not
@@ -876,7 +876,7 @@ def library_owns(bound: Any, imported: tuple[str, tuple[str, ...]]) -> bool:
     try:
         owner = plain_getattr(bound, "__module__", None)
         name = plain_getattr(bound, "__name__", None)
-    except Exception:  # noqa: BLE001 - an object answering attributes with its own code: keyed by itself
+    except Exception:  # noqa: BLE001 - fails closed: an object answering attributes with its own code: keyed by itself
         return False
     expected = prefix[-1] if prefix else None
     return isinstance(owner, str) and top_package(owner) == top and expected is not None and name == expected
@@ -897,7 +897,7 @@ def _imported_modules(code: types.CodeType) -> tuple[str, ...]:
         stack.extend(k for k in c.co_consts if isinstance(k, types.CodeType))
         try:
             imports = imports_of(c)
-        except Exception:  # noqa: BLE001 - code that cannot be read imports nothing it can name
+        except Exception:  # noqa: BLE001 - fails open: the imports of code that cannot be read are not followed
             continue
         for level, module, _names in imports:
             if level == 0:  # absolute

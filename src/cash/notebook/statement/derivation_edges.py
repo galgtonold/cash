@@ -47,7 +47,7 @@ from typing import Any, Callable
 
 from cash._user_attrs import attribute_or, instance_of
 
-from ... import _plain_data
+from ... import _pandas_compat, _plain_data
 from ...analysis.ast_util import parse_cached, walk_tree
 from ..borrowed_memory import borrowed_memory_names, borrowers_in, data_arrays, memory_home
 from ..lineage_formula import record_lineage_alias, resolve_lineage_alias
@@ -657,25 +657,26 @@ def _pandas_refholder_types() -> tuple[type, ...]:
         return ()
     types_list: list[type] = []
     try:
-        from pandas.core.groupby.generic import DataFrameGroupBy, SeriesGroupBy
+        DataFrameGroupBy = _pandas_compat.internal("DataFrameGroupBy")
+        SeriesGroupBy = _pandas_compat.internal("SeriesGroupBy")
 
         types_list += [DataFrameGroupBy, SeriesGroupBy]
     except ImportError:
         pass
     try:
-        from pandas.core.window.rolling import Rolling
+        Rolling = _pandas_compat.internal("Rolling")
 
         types_list.append(Rolling)
     except ImportError:
         pass
     try:
-        from pandas.core.window.expanding import Expanding
+        Expanding = _pandas_compat.internal("Expanding")
 
         types_list.append(Expanding)
     except ImportError:
         pass
     try:
-        from pandas.core.window.ewm import ExponentialMovingWindow
+        ExponentialMovingWindow = _pandas_compat.internal("ExponentialMovingWindow")
 
         types_list.append(ExponentialMovingWindow)
     except ImportError:

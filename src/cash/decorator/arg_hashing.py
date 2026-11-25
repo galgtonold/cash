@@ -18,7 +18,7 @@ import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from .. import _cash_views, _plain_data, _weak, kept_state, value_watch
+from .. import _cash_views, _pandas_compat, _plain_data, _weak, kept_state, value_watch
 from .._clock import perf_counter as _perf_counter
 from .._memo import ARGUMENTS, FRAMES, LruMemo
 from .._type_memo import TypeMemo, class_dict, class_module, class_name, class_qualname, type_key
@@ -363,24 +363,51 @@ ARG_COST = threading.local()
 
 
 def is_cow_pandas(value: Any) -> bool:
-    """Is *value* a pandas DataFrame/Series under copy-on-write?
+    """Is *value* a pandas DataFrame/Series under copy-on-write, of a
+    pandas the frame memo may be used with?
 
     Copy-on-write is the only mode in pandas 3 and opt-in before. Checked
     without importing pandas: a pandas object means it is already loaded.
+    The first frame met decides for the process
+    (`cash._pandas_compat.frame_memo_usable`): a pandas newer than the
+    newest one tested, or one on which the memo misses a write in the
+    start-up check, is treated as one without copy-on-write, so every
+    frame is hashed each time.
     """
     global _COW_PANDAS
     t = type(value)
     if class_name(t) not in ("DataFrame", "Series") or not from_family(t, "pandas"):
         return False
     if _COW_PANDAS is None:
-        try:
-            import pandas as pd
-
-            major = int(pd.__version__.split(".", 1)[0])
-            _COW_PANDAS = major >= 3 or pd.options.mode.copy_on_write is True
-        except Exception:  # noqa: BLE001 - unknown pandas: no memo, hash every time
-            _COW_PANDAS = False
+        usable = _pandas_compat.frame_memo_usable(_probe_remember, _probe_vouched)
+        if _pandas_compat.frame_memo_state() is None:
+            return usable  # this thread is running the start-up check
+        _PROBE_MEMO.clear()
+        _COW_PANDAS = usable
     return _COW_PANDAS
+
+
+def _probe_remember(frame: Any) -> bool:
+    """Store *frame* in the start-up check's own memo (`_PROBE_MEMO`), as
+    `FrameDigests.hash_frame` would after reading it."""
+    memo = _probe_memo()
+    memo.store(frame, "probe", exposure_mark())
+    return id(frame) in memo
+
+
+def _probe_vouched(frame: Any) -> bool:
+    return _probe_memo().lookup(frame) is not None
+
+
+def _probe_memo() -> FrameDigests:
+    if not _PROBE_MEMO:
+        _PROBE_MEMO.append(FrameDigests(64))
+    return _PROBE_MEMO[0]
+
+
+#: The memo the start-up check of pandas stores its small frames in, while
+#: it runs; emptied when the verdict is in.
+_PROBE_MEMO: list = []
 
 
 def frame_memoable(value: Any) -> bool:
@@ -395,7 +422,7 @@ def frame_memoable(value: Any) -> bool:
         return False
     try:
         return not frame_borrows_its_data(value, since=sys.maxsize)
-    except Exception:  # noqa: BLE001 - a pandas internals change: no memo
+    except Exception:  # noqa: BLE001 - fails closed: a pandas internals change: no memo
         return False
 
 
@@ -422,7 +449,7 @@ def frame_signature(obj: Any) -> tuple:
     handle pandas hands out, which is recorded (`watch_array_handles`), or
     is not memoised at all (`frame_borrows_its_data`).
     """
-    mgr = obj._mgr
+    mgr = _pandas_compat.manager(obj)
     blocks = tuple(_array_signature(block.values) for block in mgr.blocks)
     attrs = pickle.dumps(stable_key_repr(obj.attrs, BUILTIN_CONTENT), protocol=4) if obj.attrs else None
     index = (id(obj.index), _axis_arrays_signature(obj.index), tuple(obj.index.names))
@@ -448,12 +475,12 @@ def _array_signature(values: Any) -> tuple:
     ``set_categories``) is a new dtype on a new categorical; the memo's
     shallow copy holds the old ones, so no new one can take their ids.
     """
-    signature: tuple = (id(values), id(getattr(values, "_pa_array", None)))
+    signature: tuple = (id(values), id(_pandas_compat.arrow_data(values)))
     dtype = getattr(values, "dtype", None)
     if class_name(type(dtype)) == "CategoricalDtype":
         categories = dtype.categories
         signature += (
-            id(values._ndarray),
+            id(_pandas_compat.inner_ndarray(values)),
             id(dtype),
             dtype.ordered,
             id(categories),
@@ -469,8 +496,8 @@ def _axis_arrays(axis: Any) -> list:
     if kind == "RangeIndex":
         return []
     if kind == "MultiIndex":
-        return [level._data for level in axis._levels] + list(axis._codes)
-    return [axis._data]
+        return _pandas_compat.multi_index_arrays(axis)
+    return [_pandas_compat.index_data(axis)]
 
 
 def frame_borrows_its_data(
@@ -544,7 +571,7 @@ def frame_borrows_its_data(
             extra - _cash_views.held(array) != baseline
             for array, extra in zip(arrays, _refs_beyond(arrays, pandas_refs))
         )
-    except Exception:  # noqa: BLE001 - a pandas internals change: re-hash, the safe answer
+    except Exception:  # noqa: BLE001 - fails closed: a pandas internals change: re-hash, the safe answer
         return True
 
 
@@ -560,7 +587,8 @@ def _frame_memory(
     """
     import numpy as np
     import pandas as pd
-    from pandas.core.indexes.frozen import FrozenList
+
+    FrozenList = _pandas_compat.internal("FrozenList")
 
     date_arrays = (pd.arrays.DatetimeArray, pd.arrays.TimedeltaArray)
     # Strings held as Python objects (pandas 3 without pyarrow, or
@@ -588,7 +616,7 @@ def _frame_memory(
             todo.append(holder)
 
     for frame in (obj, held) if held is not None else (obj,):
-        for block in frame._mgr.blocks:
+        for block in _pandas_compat.blocks(frame):
             hold(block)
         hold(frame.index)
         if hasattr(frame, "columns"):
@@ -607,23 +635,23 @@ def _frame_memory(
             if key in pandas_refs:
                 pandas_refs[key] += 1
                 return True
-            if getattr(array, "_pa_array", None) is not None:
+            if _pandas_compat.arrow_data(array) is not None:
                 # Immutable; a write swaps the Arrow array, which the
                 # signature sees. Only strings: a numeric Arrow array can
                 # be a zero-copy view of an ndarray someone else writes.
-                return _is_arrow_string(array._pa_array.type)
+                return _is_arrow_string(_pandas_compat.arrow_data(array).type)
             pandas_refs[key] = 1
             arrays.append(array)
             if isinstance(array, date_arrays) or type(array) is string_array:
-                array = array._ndarray
+                array = _pandas_compat.inner_ndarray(array)
             elif wrapper and type(array) is numpy_wrapper:
-                array = array._ndarray
+                array = _pandas_compat.inner_ndarray(array)
             elif type(array) is categorical and _categoricals_watched():
                 # A categorical keeps its values as codes in an ndarray and
                 # its labels in the categories, an Index its dtype holds:
                 # that Index is vouched for as an axis is.
                 hold(array.categories)
-                array = array._ndarray
+                array = _pandas_compat.inner_ndarray(array)
             elif type(array) is not np.ndarray:
                 return False
             elif array.base is None:
@@ -649,12 +677,16 @@ def _frame_memory(
                     vouched.add(_object_view(values))
             if not reference(values):
                 return None
-            shared = holder.refs.referenced_blocks
+            shared = _pandas_compat.sharers(_pandas_compat.block_refs(holder))
         elif isinstance(holder, pd.MultiIndex):
-            for level in holder._levels:
+            for level in _pandas_compat.multi_index_levels(holder):
                 hold(level)
-            hold(holder._codes)  # a list indexes made by ``_view`` share
-            shared = holder._references.referenced_blocks if holder._references is not None else ()
+            hold(_pandas_compat.multi_index_codes(holder))  # a list indexes made by ``_view`` share
+            shared = (
+                _pandas_compat.sharers(_pandas_compat.index_refs(holder))
+                if _pandas_compat.index_refs(holder) is not None
+                else ()
+            )
             _hold_cached_indexes(holder, hold, pd)
         elif isinstance(holder, pd.RangeIndex):
             continue
@@ -662,17 +694,17 @@ def _frame_memory(
             if not all(reference(codes) for codes in holder):
                 return None
             continue
-        elif class_module(type(holder)) == "pandas._libs.index":
+        elif class_module(type(holder)) == _pandas_compat.INDEX_ENGINE_MODULE:
             if not reference(holder.values):
                 return None
             continue
         elif isinstance(holder, pd.Index):
-            values = holder._data
+            values = _pandas_compat.index_data(holder)
             if type(values) is np.ndarray and values.dtype == object and not immutable_labels(values):
                 return None  # labels that are Python objects change in place too
             if not reference(values):
                 return None
-            cache = holder._cache
+            cache = _pandas_compat.index_cache(holder)
             handed = cache.get("array")
             if handed is not None and id(cache) not in caches:
                 # ``Index.array`` keeps what it hands out in the cache: the
@@ -689,7 +721,11 @@ def _frame_memory(
                 # pandas' lookup table for the labels; indexes made from this
                 # one by ``_view`` share it, so it is counted once, as a holder.
                 hold(engine)
-            shared = holder._references.referenced_blocks if holder._references is not None else ()
+            shared = (
+                _pandas_compat.sharers(_pandas_compat.index_refs(holder))
+                if _pandas_compat.index_refs(holder) is not None
+                else ()
+            )
             _hold_cached_indexes(holder, hold, pd)
         else:
             return None
@@ -922,7 +958,7 @@ def _plain_scalar_types() -> tuple[frozenset[type], frozenset[type]]:
 def _hold_cached_indexes(index: Any, hold: Callable, pd: Any) -> None:
     """Indexes pandas keeps in *index*'s cache (a MultiIndex's ``levels``)
     hold its arrays too."""
-    for cached in index._cache.values():
+    for cached in _pandas_compat.index_cache(index).values():
         for item in cached if isinstance(cached, (list, tuple)) else (cached,):
             if isinstance(item, pd.Index):
                 hold(item)
@@ -1003,9 +1039,11 @@ def watch_array_handles() -> None:
     ``arr.flags.writeable = True`` make one writable again (the block under
     it is), which is the usual answer to pandas' "assignment destination is
     read-only". pandas reads these itself all the time, so they are recorded
-    only when code outside pandas and cash asks, and only a read-only view --
-    or, for strings held as Python objects, the column's own array, which
-    ``.values`` hands out as it is.
+    only when code outside pandas and cash asks. A writable array one of
+    them returns is recorded as well: it is a copy, which no frame keeps,
+    or the array pandas keeps itself (``np.asarray`` of a numeric index
+    under pandas 3.1; strings held as Python objects, which ``.values``
+    hands out as they are).
 
     A categorical column is reached the same ways: ``.values`` and
     ``.array`` hand out the categorical pandas keeps, ``Categorical.codes``
@@ -1022,27 +1060,12 @@ def watch_array_handles() -> None:
     if _WATCHING:
         return
     import pandas as pd
-    from pandas.core.base import IndexOpsMixin
-    from pandas.core.generic import NDFrame
-    from pandas.core.indexes.datetimelike import DatetimeIndexOpsMixin, DatetimeTimedeltaMixin
 
+    whose = {"every": False, "outside": True, "view": _READ_ONLY_VIEW}
     codes_watched = 0
-    for cls, name, outside_only in (
-        (pd.Series, "array", False),
-        (pd.Index, "array", False),
-        (DatetimeIndexOpsMixin, "asi8", True),
-        (pd.Series, "values", _READ_ONLY_VIEW),
-        (pd.DataFrame, "values", _READ_ONLY_VIEW),
-        (pd.Index, "values", _READ_ONLY_VIEW),
-        (DatetimeTimedeltaMixin, "values", _READ_ONLY_VIEW),
-        (IndexOpsMixin, "to_numpy", _READ_ONLY_VIEW),
-        (pd.DataFrame, "to_numpy", _READ_ONLY_VIEW),
-        (pd.Series, "__array__", _READ_ONLY_VIEW),
-        (NDFrame, "__array__", _READ_ONLY_VIEW),
-        (pd.Index, "__array__", _READ_ONLY_VIEW),
-        (pd.Categorical, "codes", _READ_ONLY_VIEW),
-        (pd.CategoricalIndex, "codes", _READ_ONLY_VIEW),
-    ):
+    for owner, name, reads in _pandas_compat.HANDLE_ACCESSORS:
+        cls = _pandas_compat.owner_class(pd, owner)
+        outside_only = whose[reads]
         original = class_dict(cls).get(name)
         if type(original) is types.FunctionType:  # a method: wrapped as it is
             setattr(cls, name, _noting(original, outside_only))
@@ -1098,7 +1121,7 @@ def _watch_categorical_constructor(pd: Any) -> bool:
             return  # pandas' own, which it hands out only through what is recorded
         try:
             _note_exposed(self)
-        except Exception:  # noqa: BLE001 - recording must never break the user's call
+        except Exception:  # noqa: BLE001 - fails closed: recording must never break the user's call
             _EXPOSED[-1] = (None, sys.maxsize)
 
     categorical.__init__ = __init__
@@ -1341,7 +1364,7 @@ class CallPolarsDigests:
         if digest is not None and not self._signed and _big_polars(value):
             try:
                 held = value.clone()
-            except Exception:  # noqa: BLE001 - polars refused: read again after the body
+            except Exception:  # noqa: BLE001 - fails closed: polars refused: read again after the body
                 return digest
             self._entries[id(value)] = [value, held, digest, None]
         return digest
@@ -1367,7 +1390,7 @@ def call_polars(digests: CallPolarsDigests | None):
 def _big_polars(value: Any) -> bool:
     try:
         return value.estimated_size() >= _CALL_POLARS_MIN_BYTES
-    except Exception:  # noqa: BLE001 - a LazyFrame, or polars refused
+    except Exception:  # noqa: BLE001 - fails closed: a LazyFrame, or polars refused
         return False
 
 
@@ -1389,21 +1412,12 @@ def _watch_callback_handouts() -> None:
     call these.
     """
     import pandas as pd
-    from pandas.core.generic import NDFrame
-    from pandas.core.groupby.generic import DataFrameGroupBy, SeriesGroupBy
-    from pandas.core.groupby.groupby import GroupBy
 
-    targets: list[tuple[type, str, int | None]] = [(pd.DataFrame, "apply", 2), (NDFrame, "pipe", None)]
-    for cls in (GroupBy, SeriesGroupBy, DataFrameGroupBy):
-        targets += [(cls, name, None) for name in ("apply", "agg", "aggregate", "transform", "pipe")]
-    try:
-        from pandas.core.window.expanding import Expanding
-        from pandas.core.window.rolling import Rolling
-
-        targets += [(Rolling, "apply", 1), (Expanding, "apply", 1)]
-    except ImportError:  # pragma: no cover - a pandas without these
-        pass
-    for cls, name, raw_at in targets:
+    for owner, name, raw_at in _pandas_compat.CALLBACK_METHODS:
+        try:
+            cls = _pandas_compat.owner_class(pd, owner)
+        except ImportError:  # pragma: no cover - a pandas without rolling windows
+            continue
         original = class_dict(cls).get(name)
         if type(original) is types.FunctionType:
             setattr(cls, name, _handing_out(original, raw_at))
@@ -1423,7 +1437,7 @@ def _handing_out(method: Callable, raw_at: int | None) -> Callable:
             try:
                 for obj in (self, getattr(self, "obj", None), getattr(self, "_selected_obj", None)):
                     _note_frame_memory(obj)
-            except Exception:  # noqa: BLE001 - recording must never break the user's call
+            except Exception:  # noqa: BLE001 - fails closed: recording must never break the user's call
                 _EXPOSED[-1] = (None, sys.maxsize)
         if _HANDING_OUT.get():
             return method(self, *args, **kwargs)
@@ -1438,7 +1452,7 @@ def _handing_out(method: Callable, raw_at: int | None) -> Callable:
 
 def _note_frame_memory(obj: Any) -> None:
     """Record every block array of a pandas *obj* (`_note_exposed`)."""
-    mgr = getattr(obj, "_mgr", None)
+    mgr = _pandas_compat.manager_or_none(obj)
     if mgr is None or not is_cow_pandas(obj):
         return
     for block in mgr.blocks:
@@ -1465,11 +1479,15 @@ def _noting(accessor: Callable, outside_only: bool | str) -> Callable:
                 flags = getattr(handle, "flags", None)
                 if caller.startswith("cash."):
                     return handle  # cash's own read
-                if flags.writeable if flags is not None else not _handed_out_as_kept(handle):
-                    return handle  # a copy, or an extension array the memo never vouches for
+                if flags is None and not _handed_out_as_kept(handle):
+                    return handle  # an extension array the memo never vouches for
+                # A writable ndarray is a copy, which shares nothing with a
+                # frame and is recorded for nothing, or the very array pandas
+                # keeps: ``np.asarray(df.index)`` of a numeric index (pandas
+                # 3.1), which a write through it changes under the memo.
         try:
             _note_exposed(handle)
-        except Exception:  # noqa: BLE001 - recording must never break the user's read
+        except Exception:  # noqa: BLE001 - fails closed: recording must never break the user's read
             _EXPOSED[-1] = (None, sys.maxsize)  # unknown: treat every memoised frame as written
         return handle
 
@@ -1517,7 +1535,7 @@ def _memory_of(value: Any) -> list:
     """*value*, the array inside an extension array, and every array those
     are views of: whatever a write through *value* can land in."""
     found = [value]
-    inner = getattr(value, "_ndarray", None)
+    inner = _pandas_compat.inner_ndarray(value, None)
     if inner is not None:
         found.append(inner)
     views = []
@@ -1575,7 +1593,7 @@ def is_opaque(obj: Any) -> bool:
             return False
         target = obj if isinstance(obj, type) else type(obj)
         return target in OPAQUE_TYPES
-    except Exception as e:  # noqa: BLE001 - opacity check must never break a call
+    except Exception as e:  # noqa: BLE001 - fails closed: opacity check must never break a call
         logger.debug("[CORE] opacity check failed for %r: %s", obj, e)
         return False
 
@@ -1588,10 +1606,10 @@ def _rough_size(labelled: tuple[str, Any]) -> int:
     value = labelled[1]
     try:
         return len(value)
-    except Exception:  # noqa: BLE001 - no length: its size will do
+    except Exception:  # noqa: BLE001 - fails closed: no length: its size will do
         try:
             return sys.getsizeof(value)
-        except Exception:  # noqa: BLE001 - a size is only a guess; none will do
+        except Exception:  # noqa: BLE001 - fails closed: a size is only a guess; none will do
             return 0
 
 
@@ -1630,6 +1648,9 @@ class _CostliestArg:
                 class_name(type(value)) in ("DataFrame", "Series")
                 and from_family(type(value), "pandas")
                 and not is_cow_pandas(value)
+                # Not a pandas the start-up check switched the memo off for:
+                # that one is told once, and pandas 3 is no fix for it.
+                and not (_pandas_compat.frame_memo_state() or (False, ""))[1]
             )
             self.costliest = (label, seconds, class_name(type(value)), producer, old_pandas)
         return digest
@@ -1724,7 +1745,7 @@ class FrameDigests:
                 continue
             try:
                 moved = not object_blocks(entry[1]) <= object_blocks(obj)
-            except Exception:  # noqa: BLE001 - a pandas internals change: the memo is only a speedup
+            except Exception:  # noqa: BLE001 - fails closed: a pandas internals change: the memo is only a speedup
                 moved = True
             if moved:
                 self.forget(obj)
@@ -1808,7 +1829,7 @@ class FrameDigests:
                 # Changed through pandas: the columns it has not written
                 # may still be the memory the entry read (`hash_frame`).
                 self._changed = (id(obj), entry)
-        except Exception:  # noqa: BLE001 - a pandas internals change: just re-hash
+        except Exception:  # noqa: BLE001 - fails closed: a pandas internals change: just re-hash
             pass
         entries.pop(id(obj), None)
         return None
@@ -1860,7 +1881,7 @@ class FrameDigests:
             entries = self._entries
             key = id(obj)
             wref = _weak.ref(obj, lambda _ref, key=key, entries=entries: entries.pop(key, None))
-        except Exception:  # noqa: BLE001 - the memo is a speedup; hash every time
+        except Exception:  # noqa: BLE001 - fails closed: the memo is a speedup; hash every time
             return
         self._entries[key] = (wref, held, signature, content_hash, since, pieces or {}, kept)
         if pieces:
@@ -1877,7 +1898,7 @@ def object_blocks(frame: Any) -> set[int]:
     import numpy as np
 
     owners = set()
-    for block in frame._mgr.blocks:
+    for block in _pandas_compat.blocks(frame):
         values = block.values
         if type(values) is np.ndarray and values.dtype == object:
             while type(values.base) is np.ndarray:
@@ -1908,7 +1929,7 @@ def _memory_kept(frame: Any, entry: tuple) -> bool:
         if frame_borrows_its_data(frame, held, since, lists if kept else None, kept):
             return False
         return _lists_unchanged(lists, kept, gained=True)
-    except Exception:  # noqa: BLE001 - a pandas internals change: read the column
+    except Exception:  # noqa: BLE001 - fails closed: a pandas internals change: read the column
         return False
 
 
@@ -2101,7 +2122,7 @@ class ArgHasher:
                 for registry in (self.override_hashers, self.type_hashers)
                 for type_ in registry
             )
-        except Exception:  # noqa: BLE001 - a lookup must never break a call
+        except Exception:  # noqa: BLE001 - fails closed: a lookup must never break a call
             return False
 
     def keys_by_registration_only(self, value: Any) -> bool:
@@ -2113,7 +2134,7 @@ class ArgHasher:
                 for registry in (self.override_hashers, self.type_hashers)
                 for type_ in registry
             )
-        except Exception:  # noqa: BLE001 - a lookup must never break a call
+        except Exception:  # noqa: BLE001 - fails closed: a lookup must never break a call
             return False
 
     def warn_unhashable_args(
@@ -2251,7 +2272,7 @@ class ArgHasher:
         for candidate in candidates:
             try:
                 self.hash_payload((candidate,), {})
-            except Exception:  # noqa: BLE001 - exactly what we are looking for
+            except Exception:  # noqa: BLE001 - fails closed: exactly what we are looking for
                 return candidate
         return candidates[0] if candidates else NO_SUSPECT
 

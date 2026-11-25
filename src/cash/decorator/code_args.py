@@ -253,7 +253,7 @@ class CodeArgs:
         for fn in functions:
             try:
                 report = get_analyzer().analyze_reached(fn)
-            except Exception:  # noqa: BLE001 - never break a call
+            except Exception:  # noqa: BLE001 - fails open: a carrier's function that cannot be analysed adds no lookups
                 continue
             unloaded.update(report.unloaded_modules)
             for issue in report.issues:
@@ -1279,7 +1279,7 @@ class CodeArgs:
         for fn in _carrier_functions(carrier, class_surface_functions):
             try:
                 found |= get_analyzer().analyze_reached(fn).environment_reads
-            except Exception:  # noqa: BLE001 - the reads fold raises for what cannot be walked
+            except Exception:  # noqa: BLE001 - fails closed: the reads fold raises for what cannot be walked
                 continue
         return found
 
@@ -1301,7 +1301,7 @@ class CodeArgs:
             self._warned_untrackable_carrier.add(mark)
             try:
                 ambient = [i for i in get_analyzer().analyze_reached(fn).issues if i.kind == ISSUE_AMBIENT_READ]
-            except Exception:  # noqa: BLE001 - never break a call
+            except Exception:  # noqa: BLE001 - fails closed: never break a call
                 continue
             if not ambient:
                 continue

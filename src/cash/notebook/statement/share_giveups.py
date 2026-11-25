@@ -25,6 +25,7 @@ from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from cash import _pandas_compat
 from cash._user_attrs import attribute_or
 from cash.notebook.statement.derivation_edges import shared_object_partners
 
@@ -38,7 +39,7 @@ def column_owners(value: Any) -> frozenset[tuple[Any, int]]:
     out of it while the column beside it stays a view of the same array."""
     if (attribute_or(type(value), "__module__", None) or "").partition(".")[0] != "pandas":
         return frozenset()
-    mgr = attribute_or(value, "_mgr", None)
+    mgr = attribute_or(value, _pandas_compat.MANAGER_SLOT, None)
     if mgr is None:
         return frozenset()
     try:

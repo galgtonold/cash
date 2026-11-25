@@ -44,6 +44,7 @@ from cash._type_memo import class_name, module_of_class
 from cash._user_attrs import attribute_or
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
+from . import _pandas_compat
 from . import _weak as cash_weak
 from ._native import cwatch
 from ._type_memo import class_dict, class_dictoffset, class_flags, class_mro
@@ -289,8 +290,8 @@ class Columns(NamedTuple):
     @classmethod
     def of(cls, frame: Any) -> Columns:
         np = sys.modules["numpy"]
-        mgr = frame._mgr
-        blocks, blknos, blklocs = mgr.blocks, mgr.blknos, mgr.blklocs
+        mgr = _pandas_compat.manager(frame)
+        blocks, blknos, blklocs = _pandas_compat.column_layout(mgr)
         tokens, shared, held = [], [], []
         copies_on_write = _copies_on_write()
         for position in range(frame.shape[1]):
@@ -309,7 +310,7 @@ class Columns(NamedTuple):
                 shared.append(False)
                 continue
             refs = attribute_or(block, "refs", None)
-            shared.append(bool(refs.has_reference()) if refs is not None else None)
+            shared.append(bool(_pandas_compat.is_shared(refs)) if refs is not None else None)
         return cls(tuple(tokens), tuple(shared), tuple(held), _held_by_cash(frame))
 
 
@@ -459,10 +460,10 @@ def rewrite(live: Any, stored: Any) -> None:
             if position in replaced:
                 live.isetitem(position, values)
                 continue
-            mgr = live._mgr
-            held = mgr.blocks[mgr.blknos[position]].values
+            mgr = _pandas_compat.manager(live)
+            held = _pandas_compat.column_values(mgr, position)
             if isinstance(held, np.ndarray):
-                held[mgr.blklocs[position]] = np.asarray(values)
+                held[_pandas_compat.column_row(mgr, position)] = np.asarray(values)
             else:
                 held[:] = values
     else:
@@ -479,14 +480,14 @@ def snapshot(obj: Any, arrays: Columns | None = None) -> Any:
     if _pandas_kind(obj) == "frame":
         now = Columns.of(obj).tokens
         before = arrays.tokens if arrays is not None else ()
-        mgr = obj._mgr
+        mgr = _pandas_compat.manager(obj)
         verdicts = [
             True
             if position >= len(before)
             or (type(before[position][0]) is int) != (type(token[0]) is int)
             or len(before[position]) != len(token)
             else _column_replaced(
-                before[position], arrays.held[position], token, mgr.blocks[mgr.blknos[position]].values
+                before[position], arrays.held[position], token, _pandas_compat.column_values(mgr, position)
             )
             for position, token in enumerate(now)
         ]

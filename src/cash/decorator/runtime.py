@@ -189,7 +189,7 @@ def _iterator_position(value: Any) -> Any:
         return (inspect.getgeneratorstate(value), frame.f_lasti if frame is not None else None)
     try:
         hint = operator.length_hint(value, -1)
-    except Exception:  # noqa: BLE001 - a user's __length_hint__ can raise anything
+    except Exception:  # noqa: BLE001 - fails closed: a user's __length_hint__ can raise anything
         return None
     return ("left", hint) if hint >= 0 else None
 
@@ -445,7 +445,7 @@ class KeyBuilder:
             return False
         try:
             handed = hands_a_state_changing_callable(spec.func, args, kwargs, through_globals=False, objects=False)
-        except Exception:  # cannot tell: the safe answer is "yes"
+        except Exception:  # fails closed: cannot tell: the safe answer is "yes"
             logger.debug("handed-callable check failed for %s", spec.name, exc_info=True)
             handed = True
         if handed and mode == "strict":
@@ -542,7 +542,7 @@ class KeyBuilder:
             # see, not a key build to step around: as a warning and an
             # uncached call it passed every test whose result stayed right.
             raise
-        except Exception as e:  # noqa: BLE001 - any failure building the key means no key
+        except Exception as e:  # noqa: BLE001 - fails closed: any failure building the key means no key
             self._args.warn_key_build_failed(func_name, args, kwargs, e)
             return Unkeyable(_KEY_FAILED), watch, ledger
         finally:
@@ -913,7 +913,7 @@ class KeyBuilder:
         try:
             with shared_nodes():
                 self._build(spec, args, kwargs, frozenset())
-        except Exception:  # noqa: BLE001 - no full key: the strict trace judges against the call's own
+        except Exception:  # noqa: BLE001 - fails closed: no full key: the strict trace judges against the call's own
             return None
         finally:
             for var, token in reversed(tokens):
@@ -1084,7 +1084,7 @@ class KeyBuilder:
             with shared_nodes():
                 state_hash = self._code_state(spec, [], note=True)
                 self._method_deps.fold_method_class_deps(spec.func, args, state_hash)
-        except Exception:  # noqa: BLE001 - cannot be built now: it cannot be shown unchanged
+        except Exception:  # noqa: BLE001 - fails closed: cannot be built now: it cannot be shown unchanged
             return None
         finally:
             for var, token in reversed(tokens):
@@ -1187,7 +1187,7 @@ class KeyBuilder:
             return built.call_args_hash
         try:
             digest = self._args.serialize_args(spec.name, args, kwargs, normalized=built.normalized_args)
-        except Exception:  # a hash for the record only, never the key
+        except Exception:  # fails closed: a hash for the record only, never the key
             logger.debug("[CORE] could not hash every argument of %s", spec.name, exc_info=True)
             return None
         # ``key=`` leaves every argument out of the key, yet each is still
@@ -1203,7 +1203,7 @@ class KeyBuilder:
         hashed."""
         try:
             return self._args.serialize_args(spec.name, args, kwargs)
-        except Exception:  # a hash for the check only, never the key
+        except Exception:  # fails closed: a hash for the check only, never the key
             logger.debug("[CORE] could not hash every argument of %s", spec.name, exc_info=True)
             return None
 
@@ -1484,7 +1484,7 @@ class CallRunner:
             return None
         try:
             return self._keys.callee_state(spec)
-        except Exception:  # noqa: BLE001 - a state that cannot be built is not the one recorded
+        except Exception:  # noqa: BLE001 - fails closed: a state that cannot be built is not the one recorded
             return None
 
     def _full_closure_state(self, func_name: str) -> str | None:
@@ -1495,7 +1495,7 @@ class CallRunner:
             return None
         try:
             return self._keys.full_closure_state(spec)
-        except Exception:  # noqa: BLE001 - a state that cannot be built is not the one recorded
+        except Exception:  # noqa: BLE001 - fails closed: a state that cannot be built is not the one recorded
             return None
 
     def _closure_check(self, spec: CachedFunction) -> tuple[list | None, str]:
@@ -1545,8 +1545,9 @@ class CallRunner:
                         cache_key,
                     )
                     return False
-        except Exception:  # noqa: BLE001 - an integrity check must not break a call
-            return True
+        except Exception:  # noqa: BLE001 - fails closed: chunks that cannot be looked for are not served
+            logger.debug("[CORE] could not look for the chunks of %s; treating the entry as a miss", cache_key)
+            return False
         return True
 
     def _wrap_iterator_hit(self, call: Call, metadata: CacheMetadata | None, hit: Any) -> Any:
@@ -1807,7 +1808,7 @@ class CallRunner:
         try:
             with content_only():
                 found = self._keys.checked_arguments_hash(spec, *(call.checked or (call.args, call.kwargs)))
-        except Exception:  # not hashed by content: the tags stand
+        except Exception:  # fails closed: not hashed by content: the tags stand
             logger.debug("[PURITY] %s: arguments not hashed by content", spec.name, exc_info=True)
             return None
         call.by_content = found is not None
@@ -1824,7 +1825,7 @@ class CallRunner:
         func_name = spec.name
         try:
             self._backend_slot.backend  # the record lives beside the cache built for the lookup
-        except Exception:  # noqa: BLE001 - the lookup itself says why there is no backend
+        except Exception:  # noqa: BLE001 - fails closed: the lookup itself says why there is no backend
             return False
         call.refusal_probe = True
         call.args_fingerprinted = spec.changes_arguments
@@ -1972,7 +1973,7 @@ class CallRunner:
         or None when they cannot be bound."""
         try:
             return self._purity.named_checked_arguments(func_name, args, kwargs)
-        except Exception:  # noqa: BLE001 - unbindable: nothing is written back
+        except Exception:  # noqa: BLE001 - fails closed: unbindable: nothing is written back
             return None
 
     def arguments_before(self, spec: CachedFunction, call: Call, args: tuple, kwargs: dict) -> dict[str, tuple]:
@@ -2018,7 +2019,7 @@ class CallRunner:
                     # to replay (`attribute_changes`).
                     try:
                         recording = rewrite_in_place.AttrRecording(value)
-                    except Exception:  # noqa: BLE001 - not recorded: a change refuses the store
+                    except Exception:  # noqa: BLE001 - fails closed: not recorded: a change refuses the store
                         continue
                     before[name] = (value, recording, rewrite_in_place.KeyedBefore(call.args_hash))
                 continue
@@ -2034,7 +2035,7 @@ class CallRunner:
                         rewrite_in_place.before_call(value, release=release),
                         rewrite_in_place.KeyedBefore(call.args_hash),
                     )
-                except Exception:  # noqa: BLE001 - no shape: not stored with the result
+                except Exception:  # noqa: BLE001 - fails closed: no shape: not stored with the result
                     pass
                 continue
             if not spec.changes_arguments or rewrite_in_place.refusal(value) is not None:
@@ -2042,7 +2043,7 @@ class CallRunner:
             try:
                 fingerprint = mutation_fingerprint(value)
                 shape = rewrite_in_place.before_call(value)
-            except Exception:  # noqa: BLE001 - not fingerprinted: not stored with the result
+            except Exception:  # noqa: BLE001 - fails closed: not fingerprinted: not stored with the result
                 continue
             if fingerprint is not None:
                 before[name] = (value, shape, fingerprint)
@@ -2084,7 +2085,7 @@ class CallRunner:
                     func, func_name, result, call.args, call.kwargs, held=_held_at_return(run, result)
                 ),
             )
-        except Exception:  # not judged: the change refuses the store, as without it
+        except Exception:  # fails closed: not judged: the change refuses the store, as without it
             logger.debug("[ATTRS] %s: attribute changes not judged", func_name, exc_info=True)
             return None
         if verdict is not None and verdict.why is not None and verdict.why.startswith(attribute_replay.ALSO_CHANGED):
@@ -2143,7 +2144,7 @@ class CallRunner:
                 continue
             try:
                 recording = rewrite_in_place.AttrRecording(value)
-            except Exception:  # noqa: BLE001 - not recorded: a change refuses the store
+            except Exception:  # noqa: BLE001 - fails closed: not recorded: a change refuses the store
                 continue
             run.args_before[name] = (value, recording, rewrite_in_place.BoundBefore(name))
 
@@ -2237,7 +2238,7 @@ class CallRunner:
                     "with the result and a hit writes it back",
                 )
                 return None
-            except Exception:  # noqa: BLE001 - not copied: not stored
+            except Exception:  # noqa: BLE001 - fails closed: not copied: not stored
                 return None
         written = [name for name in left if name not in replayed and name not in roots]
         try:
@@ -2376,7 +2377,7 @@ class CallRunner:
             return left.opened(lambda relink: attribute_replay.find(relink, named)), None
         except LookupError:
             return left, "an argument an object it bound holds is not there"
-        except Exception:  # not unpickled: not served
+        except Exception:  # fails closed: not unpickled: not served
             logger.debug("[ATTRS] %s: sealed entry not opened", func_name, exc_info=True)
             return left, "the objects it bound could not be unpickled"
 
@@ -2472,7 +2473,7 @@ class CallRunner:
         signature as the key binds it, so two spellings of one call agree."""
         try:
             canon_args, canon_kwargs = self._args.normalize_call_args(func_name, args, kwargs)
-        except Exception:  # noqa: BLE001 - unbindable: positions are all there is
+        except Exception:  # noqa: BLE001 - fails closed: unbindable: positions are all there is
             canon_args, canon_kwargs = args, kwargs
         return [(f"*args[{i}]", v) for i, v in enumerate(canon_args)] + list(canon_kwargs.items())
 
@@ -2994,7 +2995,7 @@ class CallRunner:
         try:
             with call_polars(call.polars_args), content_only(call.by_content), quiet_digests():
                 after = self._purity.checked_arguments_hash(spec.name, *(call.checked or (call.args, call.kwargs)))
-        except Exception:  # noqa: BLE001 - not hashed: taken as changed
+        except Exception:  # noqa: BLE001 - fails closed: not hashed: taken as changed
             return False
         return after == call.call_args_hash
 
@@ -3150,7 +3151,7 @@ class CallRunner:
         try:
             functions = self._registry.code_functions(spec.func, spec.name)
             return class_writes.ClassState(class_writes.candidates(functions, args, kwargs))
-        except Exception:
+        except Exception:  # fails open: classes not read, so what the body binds on them is not compared
             logger.debug("[CORE] %s: classes not read before the body", spec.name, exc_info=True)
             return None
 
@@ -3289,7 +3290,7 @@ class CallRunner:
             # rest.
             try:
                 await asyncio.shield(asyncio.wrap_future(existing))
-            except Exception:  # noqa: BLE001 - the leader's failure is its own
+            except Exception:  # noqa: BLE001 - fails closed: the leader's failure is its own
                 pass
             hit = self._reread(spec, call)
             if hit is not CACHE_MISS:
@@ -3318,7 +3319,7 @@ class CallRunner:
         lock_cm = self._backend_slot.backend.lock(call.cache_key)
         try:
             lock_cm.__enter__()
-        except Exception as e:  # noqa: BLE001 - any acquisition failure -> unlocked
+        except Exception as e:  # noqa: BLE001 - fails closed: any acquisition failure -> unlocked
             self._notices.lock_failed(spec.name, e)
             return compute()
         try:
@@ -3329,7 +3330,7 @@ class CallRunner:
         finally:
             try:
                 lock_cm.__exit__(None, None, None)
-            except Exception:  # noqa: BLE001 - releasing failed; compute already done
+            except Exception:  # noqa: BLE001 - fails closed: releasing failed; compute already done
                 logger.debug("lock release failed for %s", spec.name)
 
 
@@ -3390,7 +3391,7 @@ def _record_held(before: dict[str, tuple], arguments: tuple) -> None:
         param, attribute, value, outer = places[0]
         try:
             recording = rewrite_in_place.AttrRecording(value)
-        except Exception:  # noqa: BLE001 - not recorded: a change refuses the store
+        except Exception:  # noqa: BLE001 - fails closed: not recorded: a change refuses the store
             continue
         before[f"{param}.{attribute}"] = (value, recording, rewrite_in_place.HeldBefore(param, attribute, outer))
 

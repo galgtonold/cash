@@ -10,7 +10,8 @@ name: Nightly integration
 # the shards, and so do the held-unit job (the unit tests too slow for every
 # push), the self-check job (the unit suite and the core set with every memo
 # checked), the wheels-only install on the oldest Python, the check of the
-# library code some rules were read in and the speed report.
+# library code some rules were read in, the speed report
+# and the pandas-prerelease job (the frame memo against the newest pandas).
 on:
   schedule:
     - cron: "0 2 * * *"
@@ -341,6 +342,41 @@ jobs:
             speed.json
             speed.txt
           if-no-files-found: ignore
+
+  # The newest pandas pre-release against the frame memo. cash does not read
+  # a frame again while it can prove nothing wrote to it, and the proof is a
+  # list of the routes by which pandas lets a frame's memory be written
+  # (cash/_pandas_compat.py). pandas is not a dependency, so a user's upgrade
+  # decides which pandas that list meets; a pandas newer than the newest one
+  # tested gets no memo. This job is where "tested" comes from: it writes a
+  # frame through every known route with the version gate lifted and fails
+  # when a cached function is served the frame as it was. When it passes on
+  # a new pandas, raise NEWEST_TESTED in cash/_pandas_compat.py.
+  pandas-prerelease:
+    name: Frame memo against the pandas pre-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies and the newest pandas, pre-releases included
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip install --upgrade --pre pandas
+          python -c "import pandas; print('pandas', pandas.__version__)"
+
+      - name: Write a frame through every known route
+        run: >-
+          python -m pytest
+          tests/test_core/arguments/test_a_frame_written_by_any_route_is_hashed_again.py
+          -n 0 --tb=short -q -rA
 
   # The wheel gate (scripts/wheel_gate.py): builds the wheel, installs it into
   # a fresh venv and drives a real Jupyter server through kernel restarts. The

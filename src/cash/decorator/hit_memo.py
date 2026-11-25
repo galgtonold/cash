@@ -73,7 +73,7 @@ import typing
 import weakref
 from typing import TYPE_CHECKING, Any
 
-from .. import _native, _verify, _weak
+from .. import _native, _pandas_compat, _verify, _weak
 from .._clock import perf_counter as _perf_counter
 from .._memo import CODE_OBJECTS, LruMemo
 from .._type_memo import class_flags, class_mro, class_name
@@ -81,6 +81,7 @@ from .._user_attrs import named_attr, plain_getattr
 from ..analysis import text_store
 from ..analysis.helper_code import own_code_is_user
 from ..jit_functions import is_jit_type, jit_python_function
+from ..loaded_modules import loaded_module
 from ..source_reading import own_source
 from ..tracking.tracker_context import active_tracker
 from . import library_reads
@@ -94,7 +95,6 @@ from .user_code import (
     own_package,
     unregistered_namespace_code,
 )
-from ..loaded_modules import loaded_module
 
 if TYPE_CHECKING:
     from .cached_function import CachedFunction
@@ -225,7 +225,7 @@ def numpy_scalars_keyed() -> int:
                 for p in (((0,), (1,)) if t is numpy.bool_ else (range(1, size + 1), range(0x81, 0x81 + size)))
             )
             rows.append((t, a, a.tobytes(), b, b.tobytes()))
-        except Exception:  # noqa: BLE001 - a type that will not say its bytes keeps the ordinary path
+        except Exception:  # noqa: BLE001 - fails closed: a type that will not say its bytes keeps the ordinary path
             continue
     _SCALARS_OF[0] = numpy
     return _cw.set_scalar_types(tuple(rows))
@@ -488,7 +488,7 @@ def _plain_getter(prop: Any) -> frozenset[str] | None:
     first = code.co_varnames[0]
     try:
         ins = [i for i in dis.get_instructions(code) if i.opname not in ("CACHE", "EXTENDED_ARG")]
-    except Exception:  # noqa: BLE001 - code dis cannot read: no plain getter
+    except Exception:  # noqa: BLE001 - fails closed: code dis cannot read: no plain getter
         return None
     for op in ins:
         if op.opname not in _GETTER_OPS:
@@ -853,7 +853,7 @@ class _Scan:
         if t is getattr(dataclasses, "_DataclassParams", None):
             return True
         module = t.__module__
-        if module == "pandas._libs.properties" and t.__name__ == "AxisProperty":
+        if (module, t.__name__) == _pandas_compat.AXIS_PROPERTY:
             return True
         pd = loaded_module("pandas")
         if pd is not None and v is getattr(pd, "NaT", None):
@@ -1099,7 +1099,7 @@ class _Scan:
         decorated: set[str] = set()
         try:
             source = own_source(f)
-        except Exception:  # noqa: BLE001 - no source: the bytecode names it reads
+        except Exception:  # noqa: BLE001 - fails closed: no source: the bytecode names it reads
             source = ""
         # The root's decorators ran once, at its definition: what they name
         # now changes nothing its key reads. ``@cache(level=10)`` over a
@@ -1364,7 +1364,7 @@ def _c_part(v: Any, name: str) -> Any:
     """*name* of a C-made typing object (``int | None``, ``list[int]``)."""
     try:
         return getattr(v, name, None)
-    except Exception:  # noqa: BLE001 - nothing to look into
+    except Exception:  # noqa: BLE001 - fails closed: nothing to look into
         return None
 
 
@@ -1589,7 +1589,7 @@ class ContentProbe:
                 return None
             try:
                 return cls(v, _plain_content)
-            except Exception:  # noqa: BLE001 - cannot be read whole: not probed
+            except Exception:  # noqa: BLE001 - fails closed: cannot be read whole: not probed
                 return None
         if t is collections.OrderedDict:
             from .key_values import plain_data_kind
@@ -1598,14 +1598,14 @@ class ContentProbe:
                 return None
             try:
                 return cls(v, _plain_content)
-            except Exception:  # noqa: BLE001 - cannot be read whole: not probed
+            except Exception:  # noqa: BLE001 - fails closed: cannot be read whole: not probed
                 return None
         if t.__name__ == "ndarray" and t.__module__ == "numpy":
             try:
                 if v.dtype.hasobject:
                     return None
                 return cls(v, _array_content)
-            except Exception:  # noqa: BLE001 - cannot be read whole: not probed
+            except Exception:  # noqa: BLE001 - fails closed: cannot be read whole: not probed
                 return None
         pd = loaded_module("pandas")
         if pd is not None and (t is pd.DataFrame or t is pd.Series):
@@ -1613,7 +1613,7 @@ class ContentProbe:
                 if not _plain_frame(v, pd):
                     return None
                 return cls(v, _frame_content)
-            except Exception:  # noqa: BLE001 - cannot be read whole: not probed
+            except Exception:  # noqa: BLE001 - fails closed: cannot be read whole: not probed
                 return None
         return None
 
@@ -2074,7 +2074,7 @@ class _Family:
                         return False
                 elif read() != value:
                     return False
-            except Exception:  # noqa: BLE001 - cannot tell: not so
+            except Exception:  # noqa: BLE001 - fails closed: cannot tell: not so
                 return False
         token = abc.get_cache_token()
         if token != self.guard[1]:
@@ -2348,7 +2348,7 @@ class HitMemo:
             state[S_ENTRIES] = {}
             try:
                 cells, tags, callees, family = scan(spec, runner._registry)
-            except Exception:  # noqa: BLE001 - Ineligible, or a scan that broke: the ordinary path
+            except Exception:  # noqa: BLE001 - fails closed: Ineligible, or a scan that broke: the ordinary path
                 self.failed_epoch = world_now
                 return
             self.family = family
@@ -2398,7 +2398,7 @@ class HitMemo:
             return None
         try:
             built = self._ordinary_key(copied, copied_kw)
-        except Exception:  # noqa: BLE001 - no key for the copy: not remembered
+        except Exception:  # noqa: BLE001 - fails closed: no key for the copy: not remembered
             return None
         if getattr(built, "cache_key", None) != call.cache_key:
             return None
@@ -2421,7 +2421,7 @@ class HitMemo:
         state = self.state
         try:
             cells, tags, callees, family = scan_trace(self.spec, self.runner._registry, trace)
-        except Exception:  # noqa: BLE001 - Ineligible, or a scan that broke: the ordinary path
+        except Exception:  # noqa: BLE001 - fails closed: Ineligible, or a scan that broke: the ordinary path
             self.traces[key] = -1
             return False
         if family is not None:

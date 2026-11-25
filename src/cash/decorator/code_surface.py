@@ -238,7 +238,7 @@ class CodeSurface:
             return f"code:{surface}"
         try:
             text = repr(v)
-        except Exception as e:  # noqa: BLE001 - a __repr__ may raise
+        except Exception as e:  # noqa: BLE001 - fails closed: a __repr__ may raise
             logger.debug("[CORE] repr() failed while identifying %s: %s", type(v), e)
             text = ""
         # A repr with an address (``<object object at 0x...>``) is different
@@ -523,7 +523,7 @@ class CodeSurface:
         # breaks a call.
         try:
             fields = plain_getattr(cls, "model_fields", None)
-        except Exception:  # noqa: BLE001 - a descriptor of someone else's
+        except Exception:  # noqa: BLE001 - fails closed: a descriptor of someone else's
             return []
         if not isinstance(fields, dict):
             return []

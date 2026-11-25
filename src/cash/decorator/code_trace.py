@@ -707,7 +707,7 @@ def _recorder_class() -> type:
         def _note_key_now(self, code: types.CodeType, frame: Any, units: list[Any]) -> None:
             try:
                 key = frame.f_locals.get(self.keyed_codes[code])
-            except Exception:  # noqa: BLE001 - unreadable: the whole dict is checked
+            except Exception:  # noqa: BLE001 - fails closed: unreadable: the whole dict is checked
                 key = None
             if not isinstance(key, str):
                 key = None
@@ -767,7 +767,7 @@ def _recorder_class() -> type:
             try:
                 with untracked():
                     found = library_first_reads(code, g, user, cells, keys, receiver)
-            except Exception:  # noqa: BLE001 - not taken: read after the body
+            except Exception:  # noqa: BLE001 - fails closed: not taken: read after the body
                 found = ()
             finally:
                 self._in_callback = False
@@ -1094,7 +1094,7 @@ def _recorder_class() -> type:
             if code.co_argcount and code.co_varnames[0] in ("self", "cls"):
                 try:
                     recv = frame.f_locals.get(code.co_varnames[0])
-                except Exception:  # noqa: BLE001 - a frame whose locals cannot be read has no receiver
+                except Exception:  # noqa: BLE001 - fails closed: a frame whose locals cannot be read has no receiver
                     recv = None
             cells = surface_cells = None
             if code.co_freevars:
@@ -1168,7 +1168,7 @@ def _recorder_class() -> type:
             try:
                 f_locals = frame.f_locals
                 held = {name: f_locals.get(name) for name in roots}
-            except Exception:  # noqa: BLE001 - unreadable locals: nothing followed from them
+            except Exception:  # noqa: BLE001 - fails open: unreadable locals: the modules a closure reaches are not followed
                 return
             # Not a class: ``isinstance`` would ask it for its ``__class__``,
             # which a metaclass's hook of the user's answers.
@@ -1220,7 +1220,7 @@ def _recorder_class() -> type:
 
             try:
                 return code_looks_up_by_string(code, g)
-            except Exception:  # noqa: BLE001 - a check that fails arms the events, which cost only time
+            except Exception:  # noqa: BLE001 - fails closed: a check that fails arms the events, which cost only time
                 return True
 
         def _on_call(self, code: types.CodeType, offset: int, fn: Any, arg0: Any) -> Any:
@@ -1253,7 +1253,7 @@ def _recorder_class() -> type:
                     return None
                 for unit in units:
                     unit.lookups.setdefault(slot, entry)
-            except Exception:  # noqa: BLE001 - a lookup that cannot be read leaves the trace unusable
+            except Exception:  # noqa: BLE001 - fails closed: a lookup that cannot be read leaves the trace unusable
                 for unit in units:
                     unit.markers.add("lookup_unread")
             return None
@@ -1406,7 +1406,7 @@ def _by_name(code: types.CodeType) -> bool:
         return True
     try:
         ins = [i for i in dis.get_instructions(code) if i.opname not in _SKIPPED]
-    except Exception:  # noqa: BLE001 - code dis cannot read is armed, as before
+    except Exception:  # noqa: BLE001 - fails closed: code dis cannot read is armed, as before
         return True
     for k, load in enumerate(ins):
         if load.opname not in ("LOAD_GLOBAL", "LOAD_NAME") or load.argval != "getattr":
@@ -1549,7 +1549,7 @@ def _wrapping_cached_digest(value: Any) -> str | None:
         if is_cash_wrapper(link):
             try:
                 state = link._cash_state()
-            except Exception:  # noqa: BLE001 - a state that cannot be built cannot be checked
+            except Exception:  # noqa: BLE001 - fails closed: a state that cannot be built cannot be checked
                 return None
             if not isinstance(state, str):
                 return None
@@ -1833,7 +1833,7 @@ def _import_digest(name: str) -> str | None:
         import importlib.util
 
         spec = importlib.util.find_spec(name)
-    except Exception:  # noqa: BLE001 - a module that cannot be found is not the one recorded
+    except Exception:  # noqa: BLE001 - fails closed: a module that cannot be found is not the one recorded
         return None
     if spec is None:
         return _ABSENT
@@ -1853,7 +1853,7 @@ def first_import_digest(name: str, was: str | None = None) -> str | None:
     if now == was and was != _ABSENT:
         try:
             importlib.import_module(name)
-        except Exception:  # noqa: BLE001 - not imported: its code items say it is gone
+        except Exception:  # noqa: BLE001 - fails closed: not imported: its code items say it is gone
             return None
     return now
 
@@ -2284,7 +2284,7 @@ def import_reads_now(code: types.CodeType, g: Mapping[str, Any]) -> list[tuple[s
         # reads an import: past 255 names one stands between an import and
         # the constants and stores around it.
         ins = [i for i in dis.get_instructions(code) if i.opname != "EXTENDED_ARG"]
-    except Exception:  # noqa: BLE001 - code dis cannot read takes nothing cash can name
+    except Exception:  # noqa: BLE001 - fails open: code dis cannot read: its imports are not recorded
         return []
     package = g.get("__package__") or ""
     bound: dict[str, tuple[str, str, tuple[str, ...]]] = {}
@@ -2818,7 +2818,7 @@ def build(
         return items, ""
     except _Untraceable as e:
         return None, str(e)
-    except Exception as e:  # noqa: BLE001 - a trace that cannot be built is not stored
+    except Exception as e:  # noqa: BLE001 - fails closed: a trace that cannot be built is not stored
         return None, f"its trace could not be built ({class_name(type(e))})"
 
 
@@ -2911,7 +2911,7 @@ def verify(
             if now is None or (_NARROW + now if narrow else now) != was:
                 return f"{what} changed"
         return None
-    except Exception as e:  # noqa: BLE001 - a trace that cannot be checked is not served
+    except Exception as e:  # noqa: BLE001 - fails closed: a trace that cannot be checked is not served
         return f"its trace could not be checked ({class_name(type(e))})"
 
 

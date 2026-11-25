@@ -40,6 +40,7 @@ from cash import _plain_data
 from cash._type_memo import TypeMemo, type_key
 from cash._user_attrs import attribute_or, has_attribute, instance_of
 
+from .. import _pandas_compat
 from ..loaded_modules import loaded_module
 from .shared_objects import (
     EXACT_CONTAINER_TYPES,
@@ -176,7 +177,7 @@ def _pandas_spans(value: Any) -> list[_Span]:
     if isinstance(value, pd.Index):
         arrays.append(_index_data(value, pd))
     else:
-        arrays.extend(block.values for block in value._mgr.blocks)
+        arrays.extend(block.values for block in _pandas_compat.blocks(value))
         arrays.extend(_index_data(axis, pd) for axis in value.axes)
     spans: list[_Span] = []
     for array in arrays:
@@ -206,7 +207,7 @@ def _pandas_block_spans(value: Any) -> list[_Span]:
         return []
     try:
         spans: list[_Span] = []
-        for block in value._mgr.blocks:
+        for block in _pandas_compat.blocks(value):
             spans.extend(_pandas_array_spans(block.values))
         return spans
     except Exception:  # noqa: BLE001 - internals changed: may share any memory
@@ -218,7 +219,7 @@ def _index_data(index: Any, pd: Any) -> Any:
     none) and a MultiIndex (whose ``_data`` would build every tuple)."""
     if isinstance(index, (pd.RangeIndex, pd.MultiIndex)):
         return None
-    return index._data
+    return _pandas_compat.index_data(index)
 
 
 def _pandas_array_spans(array: Any) -> list[_Span]:
@@ -230,11 +231,11 @@ def _pandas_array_spans(array: Any) -> list[_Span]:
     spans: list[_Span] = []
     # The numpy arrays an extension array is made of (dates, masked numbers,
     # categoricals, Python strings), or the Arrow array it wraps.
-    for name in ("_ndarray", "_data", "_mask", "_codes"):
+    for name in _pandas_compat.ARRAY_SLOTS:
         part = attribute_or(array, name, None)
         if isinstance(part, np.ndarray):
             spans.extend(_ndarray_spans(part))
-    pa_array = attribute_or(array, "_pa_array", None)
+    pa_array = attribute_or(array, _pandas_compat.ARROW_SLOT, None)
     if pa_array is not None:
         spans.extend(_arrow_spans(pa_array))
     return spans
@@ -576,7 +577,7 @@ def data_arrays(value: Any) -> list[Any]:
         return []
     np = sys.modules["numpy"]
     try:
-        blocks = value._mgr.blocks
+        blocks = _pandas_compat.blocks(value)
     except Exception:  # noqa: BLE001 - internals changed: no home here
         return []
     return [block.values for block in blocks if type(block.values) is np.ndarray]

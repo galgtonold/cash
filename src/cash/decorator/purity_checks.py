@@ -18,7 +18,7 @@ import types
 from collections.abc import Callable, Collection
 from typing import TYPE_CHECKING, Any
 
-from .. import _plain_data, identity_refs, value_watch
+from .. import _pandas_compat, _plain_data, identity_refs, value_watch
 from .._clock import perf_counter as _perf_counter
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
 from .._type_memo import class_dict, class_dictoffset, class_module, class_mro, class_name, module_of_class, mro_of
@@ -442,12 +442,12 @@ def _buffers(value) -> list:
         return []
     try:
         found = []
-        for block in value._mgr.blocks:
+        for block in _pandas_compat.blocks(value):
             data = block.values
             if class_name(type(data)) == "ndarray":
                 found.append(data)
                 continue
-            for part in ("_ndarray", "_data", "_mask"):
+            for part in _pandas_compat.ARRAY_SLOTS[:3]:
                 found.extend(_array_slot(data, part))
         return found
     except Exception:  # noqa: BLE001 - a frame that cannot be read: nothing said
@@ -464,7 +464,7 @@ def _extension_values(value) -> list:
     if is_cow_pandas(value):
         return []
     try:
-        return [block.values for block in value._mgr.blocks if class_name(type(block.values)) != "ndarray"]
+        return [block.values for block in _pandas_compat.blocks(value) if class_name(type(block.values)) != "ndarray"]
     except Exception:  # noqa: BLE001 - a frame that cannot be read: nothing said
         return []
 
@@ -479,12 +479,12 @@ def _block_arrays(value) -> list:
     if class_name(kind) not in ("Series", "DataFrame") or not from_family(kind, "pandas"):
         return []
     try:
-        return [block.values for block in value._mgr.blocks]
+        return [block.values for block in _pandas_compat.blocks(value)]
     except Exception:  # noqa: BLE001 - a frame that cannot be read: nothing said
         return []
 
 
-_EXTENSION_PARTS = ("_ndarray", "_data", "_mask", "_codes")
+_EXTENSION_PARTS = _pandas_compat.ARRAY_SLOTS
 
 
 def _exposed_in(held_arrays: list) -> tuple[set[int], list]:

@@ -97,7 +97,7 @@ def _sync_state(obj: Any) -> str | None:
             return f"simple queue|{obj.qsize()}"
         if isinstance(obj, threading.Event):
             return f"event|{obj.is_set()}"
-    except Exception:  # noqa: BLE001 - a subclass that cannot be read
+    except Exception:  # noqa: BLE001 - fails open: a queue or event subclass that cannot be read is fingerprinted without what it holds
         return None
     return None
 
@@ -111,7 +111,7 @@ def reads_beyond_content(obj: Any) -> bool:
     if builtin_hash_family(t) == "scipy.sparse":
         try:
             return not getattr(obj, "has_canonical_format", True)
-        except Exception:  # noqa: BLE001 - a property that raises: read as not canonical
+        except Exception:  # noqa: BLE001 - fails closed: a property that raises: read as not canonical
             return True
     return builtin_family_of(t) is None and _is_anndata_like(obj)
 
@@ -119,7 +119,7 @@ def reads_beyond_content(obj: Any) -> bool:
 def _is_anndata_like(obj: Any) -> bool:
     try:
         return all(hasattr(obj, a) for a in ("obs", "var", "uns", "X"))
-    except Exception:  # noqa: BLE001 - a property that raises: not AnnData-like
+    except Exception:  # noqa: BLE001 - fails closed: a property that raises: not AnnData-like
         return False
 
 

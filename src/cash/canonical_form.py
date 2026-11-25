@@ -166,7 +166,7 @@ def _held_state(value: Any, t: type) -> dict:
         return object_state(value)
     try:
         reduced = kept_state.reduce_counted(value, 4)
-    except Exception:  # noqa: BLE001 - a library reduce that refuses: its instance state, as before
+    except Exception:  # noqa: BLE001 - fails closed: a library reduce that refuses: its instance state, as before
         return object_state(value)
     state = reduced[2] if not isinstance(reduced, str) and len(reduced) > 2 else None
     if state is None:
@@ -407,7 +407,7 @@ def _walk(value: Any, walk: _Walk, fast: bool = True) -> Any:
                 return done.value
             sent, error = done.value, None
             continue
-        except BaseException as exc:
+        except BaseException as exc:  # fails closed
             steps.pop()
             if exc is error:
                 exc.__traceback__ = raised_at
@@ -420,7 +420,7 @@ def _walk(value: Any, walk: _Walk, fast: bool = True) -> Any:
         error = None
         try:
             entered = _enter(part, walk)
-        except BaseException as exc:  # noqa: BLE001 - raised in the step that asked for the part, as a call would
+        except BaseException as exc:  # noqa: BLE001 - fails closed: raised in the step that asked for the part, as a call would
             sent, error, raised_at = None, exc, exc.__traceback__
             continue
         if type(entered) is _Descend:
@@ -857,7 +857,7 @@ def _worth_opening(value: Any, content: ContentHashing) -> bool:
             # A lazy collection (dask, modin) is keyed by its own token,
             # which costs less than computing it to pickle it.
             return True
-    except Exception:  # noqa: BLE001 - a size we cannot read: pickle it whole, as before
+    except Exception:  # noqa: BLE001 - fails closed: a size we cannot read: pickle it whole, as before
         return False
     return isinstance(size, int) and size >= OPEN_UP_BYTES
 
@@ -1654,7 +1654,7 @@ def contains_set(value: Any, found: dict[int, Any] | None = None, clean: dict[in
         if kind is _NativeParts:
             try:
                 todo.append(_pickled_state(node.value))
-            except Exception:  # noqa: BLE001 - what cannot be reduced fails in the pickle, with its own error
+            except Exception:  # noqa: BLE001 - fails closed: what cannot be reduced fails in the pickle, with its own error
                 pass
             continue
         # An exact builtin primitive cannot contain anything, so it cannot

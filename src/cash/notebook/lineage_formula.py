@@ -929,7 +929,7 @@ def callee_environment_reads(
             continue  # its reads are in a caller's report already
         try:
             report = get_analyzer().analyze(fn)
-        except Exception:
+        except Exception:  # fails open: a callee that cannot be analysed adds no reads to the key
             logger.debug("Could not analyse %r for the environment it reads", fn, exc_info=True)
             continue
         found |= report.environment_reads
@@ -995,7 +995,7 @@ def helper_ambient_reads(
             continue
         try:
             report = get_analyzer().analyze(fn)
-        except Exception:
+        except Exception:  # fails open: a callee that cannot be analysed adds no reads to the key
             logger.debug("Could not analyse %r for the ambient state it reads", fn, exc_info=True)
             continue
         issues = report.issues
@@ -1057,7 +1057,7 @@ def module_data_digest(label: str, value: Any) -> str:
         if code:
             digest = hashlib.sha256(f"{digest}:code:{code}".encode("utf-8")).hexdigest()
         return digest
-    except Exception:
+    except Exception:  # fails closed
         logger.debug("Could not hash module data %s", label, exc_info=True)
         return UNHASHABLE + secrets.token_hex(16)
 
@@ -1079,7 +1079,7 @@ def held_code_at_digest(value: Any) -> str:
     entry (`compute_cache_key`)."""
     try:
         parts = _routine_parts(value)
-    except Exception:
+    except Exception:  # fails closed
         logger.debug("Could not digest the routine at a module attribute", exc_info=True)
         return UNHASHABLE + secrets.token_hex(16)
     if any(part.startswith(UNHASHABLE) for part in parts):

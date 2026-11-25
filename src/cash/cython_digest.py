@@ -290,7 +290,7 @@ def canonical_build_config(path: str, data: bytes) -> bytes:
             return _canonical_setup_cfg(data)
         if name == "setup.py":
             return _canonical_setup_py(data)
-    except Exception:  # noqa: BLE001 - what does not parse is keyed by its bytes
+    except Exception:  # noqa: BLE001 - fails closed: what does not parse is keyed by its bytes
         pass
     return data
 
@@ -499,7 +499,7 @@ def cython_function_digest(fn: object) -> str | None:
             try:
                 with untracked():
                     analysis.digests[key] = _function_digest(analysis, fn, code, qualname)
-            except Exception:  # noqa: BLE001 - any failure keys the whole binary
+            except Exception:  # noqa: BLE001 - fails closed: any failure keys the whole binary
                 analysis.digests[key] = None
         return analysis.digests[key]
 
@@ -550,7 +550,7 @@ def cimported_binaries_digest(fn: object) -> str | None:
         try:
             with untracked():
                 parts = sorted(_whole_cimports(module, binary, co_filename, {_norm(binary)}))
-        except Exception:  # noqa: BLE001 - every loaded sibling build stands in
+        except Exception:  # noqa: BLE001 - fails closed: every loaded sibling build stands in
             with untracked():
                 parts = sorted(_sibling_binaries(module, binary))
     return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
@@ -572,7 +572,7 @@ def _analysis_of(module: types.ModuleType, binary: str, co_filename: str, pyx: s
                 _check_built_from(analysis, module)
     except _Fallback:
         analysis = None
-    except Exception:  # noqa: BLE001 - any failure keys the whole binary
+    except Exception:  # noqa: BLE001 - fails closed: any failure keys the whole binary
         analysis = None
     _MODULES[binary] = (module, analysis)
     return analysis
@@ -649,7 +649,7 @@ def _analyse_recorded(
         # A file that could not be read is not among the recorded inputs,
         # so a stored answer could outlive its coming back.
         raise
-    except Exception as e:  # noqa: BLE001 - a parse failure, stored as a fallback
+    except Exception as e:  # noqa: BLE001 - fails closed: a parse failure, stored as a fallback
         # The same inputs fail the same way: stored, so that every process
         # does not pay for it again. A file the parser read on its own (an
         # include) is recorded where the error names it.
@@ -753,7 +753,7 @@ def _lookups_hold(stored: dict) -> bool:
                 now = None
             if now != answer:
                 return False
-    except Exception:  # noqa: BLE001 - a record that cannot be checked is not used
+    except Exception:  # noqa: BLE001 - fails closed: a record that cannot be checked is not used
         return False
     return True
 
@@ -1319,7 +1319,7 @@ def _find_library_header(name: str) -> str | None:
             import numpy
 
             folders.insert(0, numpy.get_include())
-        except Exception:  # noqa: BLE001 - no numpy, so not its header
+        except Exception:  # noqa: BLE001 - fails closed: no numpy, so not its header
             return None
     for folder in folders:
         if folder:
@@ -1677,7 +1677,7 @@ def _refuse_newer_than(paths: Iterable[str], binary: str, module: types.ModuleTy
         if module is not None:
             try:
                 _note_built_from(module, binary, paths, built)
-            except Exception:  # noqa: BLE001 - not noting it only costs a later fallback
+            except Exception:  # noqa: BLE001 - fails closed: not noting it only costs a later fallback
                 pass
         return
     if module is None or not _seen_built_from(module, binary, newer):
@@ -1725,7 +1725,7 @@ def _seen_built_from(module: types.ModuleType, binary: str, newer: list[str]) ->
         if not isinstance(files, dict):
             return False
         return all(files.get(path) == _keyed_digest(path) for path in newer)
-    except Exception:  # noqa: BLE001 - what cannot be shown falls back
+    except Exception:  # noqa: BLE001 - fails closed: what cannot be shown falls back
         return False
 
 

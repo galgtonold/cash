@@ -16,7 +16,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator
 from typing import Any
 
-from .. import _cash_views, _weak, kept_state
+from .. import _cash_views, _pandas_compat, _weak, kept_state
 from .._type_memo import class_module, class_name
 from .._user_attrs import plain_getattr
 from ..loaded_modules import loaded_module
@@ -624,7 +624,7 @@ def _reduce_string_array(value: Any) -> Any:
             len(reduced) != 3
             or type(state) is not tuple
             or len(state) < 2  # (dtype, strings), and pandas 2 adds the attributes
-            or state[1] is not value._ndarray
+            or state[1] is not _pandas_compat.inner_ndarray(value)
             or len(state[1]) < STRINGS_APART_MIN_ITEMS
         ):
             return reduced
@@ -661,12 +661,12 @@ def _reduce_text_for_write(value: Any) -> Any:
             len(reduced) != 3
             or type(state) is not tuple
             or len(state) < 2
-            or state[1] is not value._ndarray
+            or state[1] is not _pandas_compat.inner_ndarray(value)
             or len(state[1]) < STRINGS_APART_MIN_ITEMS
             or getattr(state[0], "storage", None) != "python"
         ):
             return _reduce_string_array(value)
-        objects = value._ndarray
+        objects = _pandas_compat.inner_ndarray(value)
         encoded = text_columns.encode_column(value, objects, _content_key(objects))
     except Exception:  # not the layout this expects
         logger.debug("pickling a %s as strings", class_name(type(value)), exc_info=True)
@@ -734,17 +734,17 @@ def _blocks_known(value: Any) -> dict[tuple[int, int], tuple[Any, tuple]]:
 
     for frame in frames:
         try:
-            if not any(block.values.nbytes >= block_digests.MIN_BYTES for block in frame._mgr.blocks):
+            if not any(block.values.nbytes >= block_digests.MIN_BYTES for block in _pandas_compat.blocks(frame)):
                 continue
             keys = content_keys(frame)
             if not keys:
                 continue
-            for block in frame._mgr.blocks:
+            for block in _pandas_compat.blocks(frame):
                 key = keys.get(tuple(int(pos) for pos in block.mgr_locs.as_array))
                 if key is not None:
                     # A content key is only for a contiguous block
                     # (`shared_blocks.block_layout`): its memory is its bytes.
-                    array = getattr(block.values, "_ndarray", block.values)
+                    array = _pandas_compat.inner_ndarray(block.values, block.values)
                     known[(_address(array), array.nbytes)] = (array, key)
         except Exception:  # only a speedup: nothing known
             logger.debug("cash: a table's blocks unknown", exc_info=True)
@@ -833,7 +833,7 @@ def _items_buffer(value: Any) -> bytes:
             if found is not None and found[0]() is value:
                 memo.entries.move_to_end(id(value))
                 return found[1]
-    items = pickle.dumps(value._ndarray, protocol=5)
+    items = pickle.dumps(_pandas_compat.inner_ndarray(value), protocol=5)
     memo.pickled += 1
     if kept and len(items) <= _KEPT_ITEMS_MAX_BYTES // 4:
         key = id(value)
@@ -862,7 +862,7 @@ def _arrow_array_classes() -> tuple[type, ...]:
     for; empty before pandas loaded them."""
     if _ARROW_CLASSES:
         return _ARROW_CLASSES[0]
-    module = loaded_module("pandas.core.arrays.arrow.array")
+    module = _pandas_compat.loaded_arrow_array_module()
     base = getattr(module, "ArrowExtensionArray", None)
     if not isinstance(base, type) or loaded_module("pyarrow") is None:
         return ()
@@ -897,7 +897,7 @@ def _reduce_arrow_array(value: Any) -> Any:
     is kept as it is, and restored by pandas' own ``__setstate__``.
     """
     try:
-        chunked = value._pa_array
+        chunked = _pandas_compat.arrow_data(value)
         whole = chunked.chunks
         chunks = [_compact(chunk) for chunk in whole]
         arrow_type = chunked.type
@@ -908,7 +908,7 @@ def _reduce_arrow_array(value: Any) -> Any:
     # again holding the same column is not hashed again (`block_digests`).
     block_digests.note_arrow(chunked, [chunk for chunk, kept in zip(whole, chunks) if kept is chunk])
     state = dict(value.__dict__)
-    del state["_pa_array"]
+    del state[_pandas_compat.ARROW_SLOT]
     return _arrow_array_from_chunks, (type(value), chunks, arrow_type, state)
 
 
@@ -930,7 +930,7 @@ def _arrow_array_from_chunks(cls: type, chunks: list, arrow_type: Any, state: di
     import pyarrow as pa
 
     array = cls.__new__(cls)
-    array.__setstate__({**state, "_pa_array": pa.chunked_array(chunks, type=arrow_type)})
+    array.__setstate__({**state, _pandas_compat.ARROW_SLOT: pa.chunked_array(chunks, type=arrow_type)})
     return array
 
 

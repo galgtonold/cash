@@ -23,7 +23,7 @@ from cash.content_hashers import builtin_hash_family
 from cash.notebook.lineage_store import restore_frozen_tag
 from cash.value_hash import budgeted_hash, is_costly, note_size
 
-from .. import _weak
+from .. import _pandas_compat, _weak
 from ..loaded_modules import loaded_module
 
 if TYPE_CHECKING:
@@ -120,7 +120,7 @@ def _wraps_a_frame(t: type) -> bool:
     or a resampler: an object over a frame, whose content hash pickles the
     frame whole. ``t = df.groupby('user_id')`` took 2.5 s after 0.006 s over
     a million rows."""
-    return (attribute_or(t, "__module__", "") or "").startswith(("pandas.core.", "pandas.api.typing"))
+    return (attribute_or(t, "__module__", "") or "").startswith(_pandas_compat.RESULT_OBJECT_MODULES)
 
 
 def identity_digest(value: Any) -> str | None:

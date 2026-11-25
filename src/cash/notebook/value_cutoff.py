@@ -33,6 +33,7 @@ from typing import Any
 from cash._type_memo import class_name, module_of_class
 from cash._user_attrs import attribute_or
 
+from .. import _pandas_compat
 from .._plain_data import is_plain
 from ..analysis.namespace_effects import is_estimator
 from ..loaded_modules import loaded_module
@@ -126,7 +127,7 @@ def _read_only(value: Any) -> str:
         arrays = [value]
     else:
         try:
-            arrays = list(value._mgr.arrays)  # a series' or frame's blocks
+            arrays = list(_pandas_compat.arrays(value))  # a series' or frame's blocks
         except Exception:  # noqa: BLE001 - not listed: told by what is seen
             return "?"
     return "".join(("0" if a.flags.writeable else "1") if isinstance(a, numpy.ndarray) else "?" for a in arrays)

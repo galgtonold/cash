@@ -782,7 +782,7 @@ def _held_codes(
         held = held_notebook_code_at(then, user_ns) if then and then != lineage else None
         if held is None:
             held = held_notebook_code(value, user_ns, lineage)
-    except Exception:  # an object that cannot be walked is not followed
+    except Exception:  # fails closed: an object that cannot be walked is not followed
         logger.debug("[CACHE_KEY] Could not walk %r for the functions it holds", name, exc_info=True)
         if unfollowed is not None:
             unfollowed.add(name)
@@ -1166,7 +1166,7 @@ def _members_of(cls: type) -> list[Any]:
     members: list[Any] = []
     try:
         held = list(class_dict(cls).values())
-    except Exception:  # noqa: BLE001 - a metaclass that answers no lookup
+    except Exception:  # noqa: BLE001 - fails open: a metaclass that answers no lookup: its methods are not followed
         return members
     for member in held:
         if type(member) in (staticmethod, classmethod):
@@ -1462,7 +1462,7 @@ def import_body_modules(modules: Iterable[str] | None) -> None:
             continue
         try:
             importlib.import_module(name)
-        except Exception:
+        except Exception:  # fails closed
             logger.debug("[CACHE_KEY] Could not import %s for a hit", name, exc_info=True)
 
 

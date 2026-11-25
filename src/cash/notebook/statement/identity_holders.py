@@ -71,6 +71,7 @@ from cash.install_paths import is_user_code_module
 from cash.notebook.shared_objects import library_exact_values, walk_budget, walk_time_left
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
+from ... import _pandas_compat
 from ..._type_memo import class_dict, class_flags, class_mro, class_name
 from ...loaded_modules import loaded_module
 
@@ -1093,7 +1094,7 @@ def _arrow_text_spelling_numbers(column: Any) -> list[Any] | None:
 def _arrow_text_numbers(values: Any) -> list[Any] | None:
     """`_arrow_text_spelling_numbers` of a column's own array (*values*):
     None unless it is Arrow-backed text."""
-    chunked = attribute_or(values, "_pa_array", None)
+    chunked = attribute_or(values, _pandas_compat.ARROW_SLOT, None)
     pyarrow = loaded_module("pyarrow")
     compute = loaded_module("pyarrow.compute")
     if chunked is None or pyarrow is None or compute is None:

@@ -30,7 +30,7 @@ import weakref
 from collections.abc import Callable
 from typing import Any
 
-from . import _plain_data, _weak
+from . import _pandas_compat, _plain_data, _weak
 from ._memo import ARROW_VALUES, LruMemo
 from ._type_memo import class_module, class_name, class_qualname, per_type
 from ._user_attrs import from_family
@@ -317,8 +317,8 @@ def index_memory_key(index: Any, pd: Any) -> tuple | None:
         route = pandas_value_route(index.dtype, pd)
         if route not in ("raw", "datetimetz"):
             return None
-        array = index._data
-        array = getattr(array, "_ndarray", array)
+        array = _pandas_compat.index_data(index)
+        array = _pandas_compat.inner_ndarray(array, array)
         if type(array) is not np.ndarray or array.ndim != 1:
             return None
         return (
@@ -331,7 +331,7 @@ def index_memory_key(index: Any, pd: Any) -> tuple | None:
             str(index.dtype),
             route,
         )
-    except Exception:  # noqa: BLE001 - pandas internals changed: read the labels
+    except Exception:  # noqa: BLE001 - fails closed: pandas internals changed: read the labels
         return None
 
 
@@ -473,7 +473,7 @@ def _fold_pandas_array(h: Any, values: Any, pd: Any) -> None:
         route = None
     elif route == "masked":
         array = held_values(values)
-        data, mask = getattr(array, "_data", None), getattr(array, "_mask", None)
+        data, mask = _pandas_compat.index_data(array, None), getattr(array, "_mask", None)
         if data is not None and mask is not None:
             # The values under a missing one are whatever was there: two equal
             # columns can differ in them, and only hash apart -- never alike.
@@ -557,7 +557,7 @@ def read_into_memo(frame: Any) -> bool:
         return False
     try:
         return _FRAME_READER[0](frame) is not None
-    except Exception:  # noqa: BLE001 - only a speedup: nothing is known
+    except Exception:  # noqa: BLE001 - fails closed: only a speedup: nothing is known
         return False
 
 
@@ -570,7 +570,7 @@ def known_column_pieces(frame: Any) -> Any:
         return None
     try:
         return _PIECE_SOURCE[0](frame)
-    except Exception:  # noqa: BLE001 - only a speedup: nothing is known
+    except Exception:  # noqa: BLE001 - fails closed: only a speedup: nothing is known
         return None
 
 
@@ -622,22 +622,22 @@ def column_memory_key(frame: Any, pos: int, route: str | None, dtype: Any = None
     import numpy as np
 
     try:
-        mgr = frame._mgr
-        values = mgr.blocks[mgr.blknos[pos]].values
+        mgr = _pandas_compat.manager(frame)
+        values = _pandas_compat.column_values(mgr, pos)
         dtype = str(frame.dtypes.iloc[pos] if dtype is None else dtype)
         if type(values) is np.ndarray:
             if values.ndim != 2:
                 return None
-            array = values[mgr.blklocs[pos]]
+            array = values[_pandas_compat.column_row(mgr, pos)]
         else:
-            arrow = getattr(values, "_pa_array", None)
+            arrow = _pandas_compat.arrow_data(values)
             if arrow is not None:
                 return _arrow_memory_key(arrow, dtype, route)
-            array = getattr(values, "_ndarray", None)
+            array = _pandas_compat.inner_ndarray(values, None)
             if type(array) is not np.ndarray:
                 return None
             if array.ndim == 2:  # dates kept as a 2-d block
-                array = array[mgr.blklocs[pos]]
+                array = array[_pandas_compat.column_row(mgr, pos)]
             elif array.ndim != 1:
                 return None
         interface = array.__array_interface__
@@ -651,7 +651,7 @@ def column_memory_key(frame: Any, pos: int, route: str | None, dtype: Any = None
             dtype,
             route,
         )
-    except Exception:  # noqa: BLE001 - pandas internals changed: read the column
+    except Exception:  # noqa: BLE001 - fails closed: pandas internals changed: read the column
         return None
 
 
@@ -702,9 +702,9 @@ def _column_buffers(frame: Any) -> Callable[[int, Any], Any]:
     import numpy as np
 
     try:
-        mgr = frame._mgr
-        blocks, blknos, blklocs = mgr.blocks, mgr.blknos, mgr.blklocs
-    except Exception:  # noqa: BLE001 - pandas internals changed: through iloc
+        mgr = _pandas_compat.manager(frame)
+        blocks, blknos, blklocs = _pandas_compat.column_layout(mgr)
+    except Exception:  # noqa: BLE001 - fails closed: pandas internals changed: through iloc
         return lambda pos, dtype: None
     slab: list[Any] = [None, 0, 0, None]  # block values, first row, stop, the copy
 
@@ -731,7 +731,7 @@ def _column_buffers(frame: Any) -> Callable[[int, Any], Any]:
             if values.flags.f_contiguous and not values.flags.c_contiguous and values.shape[1] > 1:
                 return strided(values, row)
             return values[row]
-        except Exception:  # noqa: BLE001 - through iloc
+        except Exception:  # noqa: BLE001 - fails closed: through iloc
             return None
 
     return buffer
@@ -878,7 +878,7 @@ def _joined(pa: Any, run: list) -> list:
         return run
     try:
         return [pa.concat_arrays(run)]
-    except Exception:  # noqa: BLE001 - read one by one, as before
+    except Exception:  # noqa: BLE001 - fails closed: read one by one, as before
         return run
 
 
@@ -978,7 +978,7 @@ def _fold_geometries(h: Any, array: Any) -> bool:
     geometries. False, folding nothing, for an array of another kind."""
     import shapely
 
-    data = getattr(array, "_data", None)
+    data = _pandas_compat.index_data(array, None)
     if type(data) is not _numpy().ndarray or data.dtype != object or data.ndim != 1:
         return False
     crs = getattr(array, "crs", None)
@@ -1599,10 +1599,10 @@ def lazy_frame_sources(value: Any) -> list[str] | None:
             warnings.simplefilter("ignore")  # the JSON format is deprecated, not gone
             plan = json.loads(value.serialize(format="json"))
         _plan_paths(plan, found)
-    except Exception:  # noqa: BLE001 - polars raises its own types
+    except Exception:  # noqa: BLE001 - fails closed: polars raises its own types
         try:
             text = value.explain(optimized=False)
-        except Exception:  # noqa: BLE001 - polars raises its own types
+        except Exception:  # noqa: BLE001 - fails closed: polars raises its own types
             return None
         for listed in _EXPLAIN_SCAN.findall(text):
             found.extend(p.strip() for p in listed.split(",") if p.strip() and not p.strip().startswith("..."))
@@ -1665,12 +1665,12 @@ def hash_polars(value: Any) -> str | None:
         if isinstance(value, pl.LazyFrame):
             try:
                 return hashlib.sha256(value.serialize()).hexdigest()
-            except Exception:  # noqa: BLE001 - polars raises its own types
+            except Exception:  # noqa: BLE001 - fails closed: polars raises its own types
                 logger.debug("polars LazyFrame serialize() failed; no built-in hash for it")
                 return None
     except (ImportError, TypeError, ValueError, AttributeError):
         logger.debug("Failed to hash polars %s", class_name(type(value)))
-    except BaseException as exc:
+    except BaseException as exc:  # fails closed
         if not is_native_panic(exc):
             raise
         logger.debug("polars panicked hashing a %s: %s", class_name(type(value)), exc)
@@ -1712,9 +1712,9 @@ def polars_signature(value: Any) -> tuple | None:
             for column in _newest_arrow_columns(frame, pl)
         )
         return (schema, frame.height, columns)
-    except Exception:  # noqa: BLE001 - polars or pyarrow refused: no signature, hash it
+    except Exception:  # noqa: BLE001 - fails closed: polars or pyarrow refused: no signature, hash it
         return None
-    except BaseException as exc:
+    except BaseException as exc:  # fails closed
         if not is_native_panic(exc):
             raise
         return None
@@ -1773,7 +1773,7 @@ def _rows_read_at_once(frame: Any) -> int:
         if kernels is not None and hasattr(kernels, "copy_pieces"):
             return frame.height
         return frame.height // max(1, *frame.n_chunks("all"))
-    except Exception:  # noqa: BLE001 - polars raises its own types; fold on one thread
+    except Exception:  # noqa: BLE001 - fails closed: polars raises its own types; fold on one thread
         return 0
 
 
@@ -1830,7 +1830,7 @@ def _fold_polars_columns(h: Any, columns: list[tuple[str, Any]], rows_at_once: i
                 return
             try:
                 columns[i][1].fold(records[i])  # type: ignore[arg-type]
-            except BaseException as exc:  # noqa: BLE001 - re-raised on the caller's thread
+            except BaseException as exc:  # noqa: BLE001 - fails closed: re-raised on the caller's thread
                 with lock:
                     errors.append(exc)
                 return
@@ -2032,7 +2032,7 @@ def held_objects(value: Any) -> list | None:
                 columns.extend(value.get_column(n).to_list() for n, dt in value.schema.items() if dt == pl.Object)
             elif isinstance(value, pl.Series) and value.dtype == pl.Object:
                 columns.append(value.to_list())
-    except Exception:  # a library's internals changed: nothing found
+    except Exception:  # fails open: a library's internals changed: the objects an array or column holds are not walked
         logger.debug("Could not list the objects a %s holds", class_name(type(value)), exc_info=True)
         return None
     found: list = []
@@ -2156,7 +2156,7 @@ class ArrowDigests:
                 return digest
             entries = self._entries
             wref = _weak.ref(value, lambda _ref, key=key, entries=entries: entries.pop(key, None))
-        except Exception:  # noqa: BLE001 - the memo is a speedup: read it next time
+        except Exception:  # noqa: BLE001 - fails closed: the memo is a speedup: read it next time
             return digest
         self._entries[key] = (wref, digest)
         return digest

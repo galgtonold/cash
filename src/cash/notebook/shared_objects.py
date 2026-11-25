@@ -74,6 +74,7 @@ from cash.live_state import is_live_stream, stream_kind
 from cash.tracking.function_tracker import is_local_module
 from cash.value_types import LEAF_TYPES
 
+from .. import _pandas_compat
 from .._type_memo import class_dict, class_flags, class_module, class_mro, class_name
 from .._user_attrs import dataclass_fields, static_attr
 
@@ -900,7 +901,7 @@ def _pandas_objects(value: Any) -> list[Any]:
     ``f['o'][4]`` is."""
     np = sys.modules.get("numpy")
     try:
-        mgr = vars(value)["_mgr"]
+        mgr = vars(value)[_pandas_compat.MANAGER_SLOT]
         blocks = mgr.blocks
         axes = list(mgr.axes)
     except (KeyError, AttributeError, TypeError):
@@ -910,13 +911,13 @@ def _pandas_objects(value: Any) -> list[Any]:
     arrays = []
     for block in blocks:
         values = attribute_or(block, "values")
-        categories = attribute_or(attribute_or(values, "categories", None), "_data", None)
+        categories = attribute_or(attribute_or(values, "categories", None), _pandas_compat.DATA_SLOT, None)
         arrays.append(values if categories is None else categories)
     for axis in axes:
         levels = attribute_or(axis, "levels", None) if class_name(type(axis)) == "MultiIndex" else None
-        arrays.extend((own_dict(level) or {}).get("_data") for level in levels or ())
+        arrays.extend((own_dict(level) or {}).get(_pandas_compat.DATA_SLOT) for level in levels or ())
         if levels is None:
-            arrays.append((own_dict(axis) or {}).get("_data"))
+            arrays.append((own_dict(axis) or {}).get(_pandas_compat.DATA_SLOT))
     for values in arrays:
         if np is None or type(values) is not np.ndarray or values.dtype.kind != "O" or not values.size:
             # Numbers, an extension array (Arrow text) of no Python objects, or
@@ -1548,7 +1549,7 @@ def _object_items(obj: Any, np: Any) -> list[Any] | None:
         return list(obj.flat) if obj.dtype.hasobject else None
     if not from_family(type(obj), "pandas"):
         return None
-    mgr = attribute_or(obj, "_mgr", None)
+    mgr = attribute_or(obj, _pandas_compat.MANAGER_SLOT, None)
     arrays = attribute_or(mgr, "arrays", None) if mgr is not None else None
     if not isinstance(arrays, list):
         return None
@@ -2920,7 +2921,7 @@ def _opaque_parts(obj: Any) -> tuple[list[Any], bool] | None:
     if kind is not _PANDAS:
         return None
     np = sys.modules.get("numpy")
-    mgr = attribute_or(obj, "_mgr", None)
+    mgr = attribute_or(obj, _pandas_compat.MANAGER_SLOT, None)
     arrays = attribute_or(mgr, "arrays", None) if mgr is not None else None
     if np is None or not isinstance(arrays, list):
         return [], False  # pandas' own internals are not read down
@@ -3835,13 +3836,13 @@ def _count_index_data(nodes: dict[int, Any], inbound: dict[int, int], user_ns: M
             if not instance_of(value, frame_types) or id(value) in nodes or id(value) in seen:
                 continue
             seen.add(id(value))
-            for axis in vars(value)["_mgr"].axes:
+            for axis in vars(value)[_pandas_compat.MANAGER_SLOT].axes:
                 if id(axis) in nodes or id(axis) in seen:
                     continue
                 seen.add(id(axis))
                 slots = vars(axis)
                 engine = slots.get("_cache", {}).get("_engine")
-                for item in (slots.get("_data"), attribute_or(engine, "values", None)):
+                for item in (slots.get(_pandas_compat.DATA_SLOT), attribute_or(engine, "values", None)):
                     if item is not None and id(item) in inbound:
                         inbound[id(item)] += 1
     except Exception:  # noqa: BLE001 - another layout: counted as held elsewhere
@@ -3880,7 +3881,7 @@ def _held_in_pandas_slots(
                 continue
             seen.add(id(value))
             own = vars(value)
-            cache = own.get("_item_cache")
+            cache = own.get(_pandas_compat.ITEM_CACHE_SLOT)
             held = False
             if type(cache) is dict:
                 for item in cache.values():

@@ -38,12 +38,13 @@ another object's entry. See [Custom hashers](tutorials/feature-guides/custom-has
 
 ## A table changed past pandas
 
-<!-- claim: cash/decorator/arg_hashing.py:watch_array_handles @1742c211, cash/decorator/arg_hashing.py:_watch_callback_handouts @52060a2e -->
+<!-- claim: cash/decorator/arg_hashing.py:watch_array_handles @afda31f6, cash/decorator/arg_hashing.py:_watch_callback_handouts @90a4d06c -->
 Under pandas copy-on-write, a table passed to a cached function again is not
 hashed again while pandas has given it no new data: pandas copies a column
 before it writes it. A write that goes past pandas is seen as long as it goes
-through memory pandas handed out: `df["x"].array`, a view from `.values`,
-`.to_numpy()` or `np.asarray` that you made writable again, a categorical
+through memory pandas handed out: `df["x"].array`, what `.values`,
+`.to_numpy()` or `np.asarray` returned (a view you made writable again, or
+the labels of a numeric index, which `np.asarray` hands out writable), a categorical
 column's `.values`, its `.codes` made writable, `pd.Categorical(df["x"],
 copy=False)`, and the arrays
 pandas passes to your function from `df.apply(f, raw=True)`,

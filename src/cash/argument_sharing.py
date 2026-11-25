@@ -34,6 +34,7 @@ import weakref
 from collections.abc import Callable, Iterator
 from typing import Any
 
+from . import _pandas_compat
 from ._type_memo import class_dict, class_name
 from ._user_attrs import from_family, module_file, plain_getattr
 from .loaded_modules import loaded_module
@@ -126,7 +127,7 @@ class Targets:
         if _ndarray(changed):
             self._add_array(changed)
         elif from_family(type(changed), "pandas"):
-            mgr = getattr(changed, "_mgr", None)
+            mgr = _pandas_compat.manager_or_none(changed)
             blocks = getattr(mgr, "blocks", None)
             if mgr is None or blocks is None:
                 raise Unknown(f"cash cannot find the memory of a {class_name(type(changed))}")

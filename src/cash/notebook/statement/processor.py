@@ -16,7 +16,7 @@ import os
 import secrets
 import sys
 import types
-from collections.abc import Callable, Collection, Generator, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Generator, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from typing import Any
 
@@ -87,7 +87,7 @@ from cash.notebook.statement.derivation_edges import (
     shared_object_partners,
     unlink,
 )
-from cash.notebook.statement.directives import statement_directives, ttl_floor_from_called_functions
+from cash.notebook.statement.directives import statement_directives
 from cash.notebook.statement.evictions import EvictedRecomputes
 from cash.notebook.statement.expression_memo import ExpressionMemo
 from cash.notebook.statement.file_deps import StatementFileDeps
@@ -117,6 +117,7 @@ from cash.notebook.statement.input_change import (
 )
 from cash.notebook.statement.last_runs import KeyParts, LastRuns
 from cash.notebook.statement.lineage import StatementLineageBuilder, clear_rebound_edges
+from cash.notebook.statement.lookup import StatementLookup
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON, MissGuard
 from cash.notebook.statement.mutation_routing import MutationRouting, rebound_only
 from cash.notebook.statement.mutations import MutationClassifier
@@ -392,7 +393,7 @@ def _fingerprint(value: Any) -> str | None:
     """*value*'s ``mutation_fingerprint``, or None when it cannot be taken."""
     try:
         return mutation_fingerprint(value)
-    except Exception:  # noqa: BLE001 - user code in a value's hash or pickle: count it as changed
+    except Exception:  # noqa: BLE001 - fails closed: user code in a value's hash or pickle: count it as changed
         return None
 
 
@@ -413,7 +414,7 @@ def _bounded_fingerprint(
         if reads_beyond_content(value):
             # Read part by part, past the budget's reach: moves on.
             return None
-    except Exception:  # noqa: BLE001 - a value whose attribute lookups raise: moves on
+    except Exception:  # noqa: BLE001 - fails closed: a value whose attribute lookups raise: moves on
         return None
 
     def content(obj: Any) -> str:
@@ -426,7 +427,7 @@ def _bounded_fingerprint(
 
     try:
         return mutation_fingerprint(value, content)
-    except Exception:  # noqa: BLE001 - user code in a value's hash or pickle, or too costly: count it as changed
+    except Exception:  # noqa: BLE001 - fails closed: user code in a value's hash or pickle, or too costly: count it as changed
         return None
 
 
@@ -457,7 +458,7 @@ def _holds_one_of(value: Any, ids: set[int]) -> bool:
                     attrs = attribute_or(obj, "__dict__", None)
                     if type(attrs) is dict:
                         nxt.extend(attrs.values())
-            except Exception:  # noqa: BLE001 - a value whose iteration raises: looked no further
+            except Exception:  # noqa: BLE001 - fails closed: a value whose iteration raises: looked no further
                 continue
         frontier = nxt[:_HOLDS_ITEMS]
     return False
@@ -1088,6 +1089,7 @@ class StatementProcessor:
         self._stmt_restorer = StatementRestorer(shell=shell, compute_hash=compute_hash_fn)
         self._records = StatementRecords(shell, self.tracking_state, cash_instance, self.function_tracker)
         self._in_loop = InLoopChanges(shell, self.tracking_state, self._records)
+        self._lookups = StatementLookup(shell, self.tracking_state, self._freshness, self._miss_guard, self._records)
         self._mutation_routing = MutationRouting(
             shell, self.tracking_state, self._mutations, self._records, self._in_loop, self._cheap_to_rerun
         )
@@ -1263,7 +1265,7 @@ class StatementProcessor:
         moved = {name for name in moved_carrier_names(positions, user_ns) if lineage.get(name) == before.get(name)}
         try:
             key = self.key_as_one_statement(code, before)
-        except Exception:  # noqa: BLE001 - unkeyable: a lineage no statement shares
+        except Exception:  # noqa: BLE001 - fails closed: unkeyable: a lineage no statement shares
             key = "unkeyable:" + secrets.token_hex(16)
         self._advance_carriers(statement_source_hash(code), moved, key, code)
 
@@ -1282,7 +1284,7 @@ class StatementProcessor:
             return
         try:
             key = self.key_as_one_statement(code, before)
-        except Exception:  # noqa: BLE001 - unkeyable: a lineage no statement shares
+        except Exception:  # noqa: BLE001 - fails closed: unkeyable: a lineage no statement shares
             key = "unkeyable:" + secrets.token_hex(16)
         for var in sorted(drawn):
             self.tracking_state.lineage.record(var, advanced_rng_lineage(key, var))
@@ -1342,7 +1344,7 @@ class StatementProcessor:
         user_ns = self.shell.user_ns
         try:
             names = carrier_candidates(run.inputs or (), user_ns, self.tracking_state.variable_lineage)
-        except Exception:  # noqa: BLE001 - not told: assume it does
+        except Exception:  # noqa: BLE001 - fails closed: not told: assume it does
             return True
         for name in names:
             value = user_ns.get(name) if isinstance(name, str) else None
@@ -1355,7 +1357,7 @@ class StatementProcessor:
         expression memo kept must still have to be handed out."""
         try:
             return self.key_as_one_statement(code, self.tracking_state.variable_lineage)
-        except Exception:  # no key, no reuse
+        except Exception:  # fails closed: no key, no reuse
             logger.debug("%s no key for the kept expression %r", _LOG_PROCESSOR, code[:80], exc_info=True)
             return None
 
@@ -1403,7 +1405,7 @@ class StatementProcessor:
         try:
             for code, occurrence, rng_state, reseeded in statements:
                 self.settle_served_plot_statement(code, occurrence, rng_state, reseeded)
-        except Exception:
+        except Exception:  # fails closed
             logger.warning("cash could not account for a plot shown from the cache; it is drawn again", exc_info=True)
             restore_rng_state(streams)
             for var in [var for var in lineage if var.startswith(prefix) and var not in lineages]:
@@ -1830,7 +1832,7 @@ class StatementProcessor:
         unseeded_fits = self._randomness.warn_unseeded_estimator_fit(run.code, fits_cached, run.allow_random)
         self._randomness.stamp_random_effect(run.metrics, run.code, run.unseeded_calls, unseeded_fits)
 
-        metadata, cached_data = self._lookup(run, analysis_time, hash_time)
+        metadata, cached_data = self._lookups.lookup(run, analysis_time, hash_time)
         if run.must_run:
             # It learns what it changes as it runs: a restore would not.
             metadata, cached_data = None, None
@@ -1934,7 +1936,7 @@ class StatementProcessor:
         unknown or when asking fails."""
         try:
             return self.expected_run_time(code.strip())
-        except Exception:  # noqa: BLE001 - no measurement: the floor applies
+        except Exception:  # noqa: BLE001 - fails closed: no measurement: the floor applies
             return None
 
     def _within_budget(self, run: StatementRun, step: Callable[[], Any]) -> Any:
@@ -2039,7 +2041,7 @@ class StatementProcessor:
             return
         try:
             memos, changes = self._memos_used(run, memos_before, memos_cleared)
-        except Exception:  # noqa: BLE001 - not read: the plot run is not kept
+        except Exception:  # noqa: BLE001 - fails closed: not read: the plot run is not kept
             run.plot_memos = "cash could not read the helper memos it called"
             return
         run.plot_memos = memos[1] if isinstance(memos, tuple) else (memos, changes or None)
@@ -2156,7 +2158,7 @@ class StatementProcessor:
                 ran = bool(found)
                 if not found:
                     found = writers_without_a_trace(run.code, ns, run.outputs, too_big)
-            except Exception:
+            except Exception:  # fails closed
                 logger.debug("unseen writer walk failed", exc_info=True)
                 found = [("?", (UNREADABLE,))]
         else:
@@ -2765,25 +2767,6 @@ class StatementProcessor:
             run.skip_cache = True
             run.drew_from_stream = True
 
-    def _lookup(
-        self, run: StatementRun, analysis_time: float, hash_time: float
-    ) -> tuple[StatementCacheMetadata | None, Any | None]:
-        """Look *run* up in the cache: ``(metadata, cached_data)``, both None
-        on a miss or a skipped lookup."""
-        run.effective_ttl = ttl_floor_from_called_functions(run.inputs, run.effective_ttl, self.shell.user_ns)
-        metadata, cached_data, cache_check_time = self._do_cache_lookup(
-            run.skip_cache, run.cache_key, run.effective_ttl, run.inputs, run.metrics["uncacheable_reasons"]
-        )
-        if cached_data is None and not run.skip_cache:
-            run.stale_file = self._freshness.last_stale_file
-        self._observe_miss_guard(run.skip_cache, run.code, run.source_hash, run.cache_key, cached_data, run.inputs)
-
-        if logger.isEnabledFor(logging.DEBUG):
-            self._log_cache_lookup(
-                run.code, run.cache_key, run.inputs, cached_data, analysis_time, hash_time, cache_check_time
-            )
-        return metadata, cached_data
-
     def _serve_hit(
         self,
         run: StatementRun,
@@ -3114,7 +3097,7 @@ class StatementProcessor:
         names = set(run.inputs)
         try:
             names |= called_function_globals(run.inputs, user_ns, variable_lineage=self.tracking_state.variable_lineage)
-        except Exception as exc:  # noqa: BLE001 - not read: nothing guards its entry, so none is made
+        except Exception as exc:  # noqa: BLE001 - fails closed: not read: nothing guards its entry, so none is made
             _refuse_unanalysed(run, "read the globals the functions it calls read", exc)
         held = reference_states.states(names, self.tracking_state.current_session_hashes, known) or {}
         found = dict(held)
@@ -3218,7 +3201,7 @@ class StatementProcessor:
         # it sets state on that its text does not say (`note_module_state`).
         try:
             held = module_globals(run.code, self.shell.user_ns)
-        except Exception as exc:  # noqa: BLE001 - not watched: what it sets on a module is not seen
+        except Exception as exc:  # noqa: BLE001 - fails closed: not watched: what it sets on a module is not seen
             _refuse_unanalysed(run, "watch the modules it reaches", exc)
             held = {}
         # pyplot's figures, to see a statement change them through a name
@@ -3320,7 +3303,7 @@ class StatementProcessor:
                 execution.rng_reseeded = self._randomness.reseeded_streams
                 execution.rng_seeded_first = self._randomness.seeded_first
                 execution.result = ExecutionResult(success=True)
-        except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code
+        except Exception as e:  # noqa: BLE001 - fails closed: broad fallback wrapping arbitrary user code
             execution.result = error_result(e)
         except BaseException as e:
             # An interrupt leaves the statement here, past the step that
@@ -3468,7 +3451,7 @@ class StatementProcessor:
             # it ran and the module is loaded.
             try:
                 run.rebound_modules = run.rebound_modules | import_state_writes(run.code, self.shell.user_ns)
-            except Exception as exc:  # noqa: BLE001 - not read: an entry would not bring that state back
+            except Exception as exc:  # noqa: BLE001 - fails closed: not read: an entry would not bring that state back
                 _refuse_unanalysed(run, "read what its imports set on other modules", exc)
         with self._after_it_ran(run):
             self._forget_file_answers_if_it_wrote(code, execution)
@@ -3525,7 +3508,7 @@ class StatementProcessor:
         if not run.skip_cache:
             try:
                 names = carrier_candidates(run.inputs or (), user_ns, self.tracking_state.variable_lineage)
-            except Exception:  # noqa: BLE001 - the inputs alone, then
+            except Exception:  # noqa: BLE001 - fails open: the inputs alone, then: a carrier beyond them is not checked
                 names = set(run.inputs or ())
             reached = self._thread_reach.reached(names)
             if reached:
@@ -3569,7 +3552,7 @@ class StatementProcessor:
         every time (``# @cash:assume-safe`` caches it anyway)."""
         try:
             started = statement_starting_workers(run.code, self.shell.user_ns, run.tree)
-        except Exception as exc:  # noqa: BLE001 - not told: taken to start them
+        except Exception as exc:  # noqa: BLE001 - fails closed: not told: taken to start them
             return analysis_failed("tell whether it starts worker processes or threads", exc)
         if not started:
             return None
@@ -3619,7 +3602,7 @@ class StatementProcessor:
         reads = self.tracking_state.reads
         try:
             before = snapshot(reads.watched, code, self.shell.user_ns)
-        except Exception:
+        except Exception:  # fails closed
             # Fails safe: a value no write is noted for is taken as changed
             # from outside the notebook, and the keys that read it move
             # (`recorded_reads.choose`).
@@ -3631,7 +3614,7 @@ class StatementProcessor:
             if before:
                 try:
                     note_writes(before, code, reads)
-                except Exception:  # fails safe, as above
+                except Exception:  # fails closed: fails safe, as above
                     _log_once("could not note what %r changed", code)
 
     def _finish(self, run: StatementRun, execution: StatementExecution) -> ProcessResult:
@@ -3791,7 +3774,7 @@ class StatementProcessor:
         def has_entry(key: str) -> bool | None:
             try:
                 return backend.peek_metadata(key) is not None
-            except Exception:  # a miss reason is a diagnostic
+            except Exception:  # fails closed: a miss reason is a diagnostic
                 logger.debug("Could not look for the entry of %s", key, exc_info=True)
                 return None
 
@@ -4028,67 +4011,6 @@ class StatementProcessor:
         self._rebuild_cost.begin_cell()
         self._calls.begin_cell()
 
-    def _do_cache_lookup(
-        self,
-        skip_cache: bool,
-        cache_key: str,
-        ttl: int | None,
-        inputs: set[str],
-        reasons: Sequence[str] = (),
-    ) -> tuple[StatementCacheMetadata | None, Any | None, float]:
-        """Run cache lookup unless *skip_cache* is set; a skipped lookup is
-        logged with the *reasons* the statement runs every time."""
-        if not skip_cache:
-            return self._freshness.check_cache(
-                self.tracking_state, cache_key, ttl, inputs, epoch=file_state_epoch(), bound=self.shell.user_ns
-            )
-        logger.debug(
-            "%s Skipping cache lookup: %s",
-            _LOG_ANNOTATION,
-            "; ".join(reasons) or "the statement runs every time (@cash:no-cache, or a statement cash never stores)",
-        )
-        return None, None, 0.0
-
-    def _observe_miss_guard(
-        self,
-        skip_cache: bool,
-        code: str,
-        source_hash: str,
-        cache_key: str,
-        cached_data: Any,
-        inputs: set[str] | None = None,
-    ) -> None:
-        """Feed one lookup outcome to the perpetual-miss guard.
-
-        Called on every run that actually performed a lookup — a skipped lookup
-        never serialises either, so it carries no evidence about whether
-        serialising pays back.
-
-        A *hit* is "the key matched an entry", i.e. ``cached_data`` is not None.
-        A key that matched but whose entry was invalidated (TTL / changed file
-        dep) reads as a miss here, and correctly so: the key was STABLE, so it
-        registers no churn and cannot move the counter. That workflow —
-        recompute because a file changed, cache for the next unchanged run — is
-        exactly the one that must never be guarded.
-
-        Control-structure BODY statements are excluded, following the same
-        precedent as mutation classification: they arrive with a per-iteration
-        marker comment, so every iteration is a different ``source_hash``. The
-        "identical source, run repeatedly" signature is meaningless for them, and
-        recording one per iteration would grow the store by the loop's trip
-        count.
-        """
-        if skip_cache:
-            return
-        if has_marker(code):
-            return
-        self._miss_guard.observe(
-            source_hash,
-            cache_key,
-            hit=cached_data is not None,
-            components=self._records.lineages_read(inputs) if inputs else {},
-        )
-
     def _other_thread_alive(self) -> bool:
         """`trace_recorder.other_thread_alive` in the notebook's namespace."""
         return other_thread_alive(self.shell.user_ns)
@@ -4143,7 +4065,7 @@ class StatementProcessor:
             names -= binds | _bare_call_receivers(run.tree)
             entry = {name: lineage for name, lineage in run.entry_lineages.items() if name in reads}
             self._records.note_changed_names(run.source_hash, entry, names)
-        except Exception:  # noqa: BLE001 - best-effort: the simulation reads the text alone
+        except Exception:  # noqa: BLE001 - fails closed: best-effort: the simulation reads the text alone
             logger.debug("%s could not record what %r changed", _LOG_PROCESSOR, run.code[:80], exc_info=True)
 
     def _post_execute(self, run: StatementRun, execution: StatementExecution) -> None:
@@ -5541,7 +5463,7 @@ class StatementProcessor:
                         *(mapping for mapping, _name in named_history),
                     ],
                 )
-            except Exception:  # an object of the user's raised: as if cut short
+            except Exception:  # fails closed: an object of the user's raised: as if cut short
                 logger.debug("[CLASS] holder search failed", exc_info=True)
                 names, complete = set(), False
         if not complete:
@@ -5550,7 +5472,7 @@ class StatementProcessor:
                 if instances is None:
                     instances = _instances_of(replaced)
                 down = names_reaching(set(map(id, instances)), user_ns, skip_name=skip_name)
-            except Exception:  # an object of the user's raised: as if cut short
+            except Exception:  # fails closed: an object of the user's raised: as if cut short
                 logger.debug("[CLASS] holder walk failed", exc_info=True)
                 down = None
             if down is not None:
@@ -5769,7 +5691,7 @@ class StatementProcessor:
             value = user_ns[name]
             try:
                 content = no_cache_value_digest(value)
-            except Exception:  # noqa: BLE001 - a value that cannot be read moves to one of its own
+            except Exception:  # noqa: BLE001 - fails closed: a value that cannot be read moves to one of its own
                 content = "fresh:" + secrets.token_hex(16)
             lineage = hashlib.sha256(f"reduce-wrote:{lineages[name]}:{content}".encode()).hexdigest()
             self.tracking_state.lineage.record(name, lineage, value=value)
@@ -6012,7 +5934,7 @@ class StatementProcessor:
             try:
                 if not _may_hold_memory(value) or _changed_by_rebinding_only(value) or _holds_one_of(value, changed):
                     continue
-            except Exception:  # noqa: BLE001 - a value whose attribute lookups raise: not digested, it moves
+            except Exception:  # noqa: BLE001 - fails closed: a value whose attribute lookups raise: not digested, it moves
                 continue
             # Known to run out of time for this object at this lineage: it
             # moves on, as after a digest that ran out (`CostlyDigests`);
@@ -6071,7 +5993,7 @@ class StatementProcessor:
                 continue
             try:
                 after = value_hash.budgeted_hash(value, self.compute_hash)
-            except Exception:  # noqa: BLE001 - a value that cannot be read moves on
+            except Exception:  # noqa: BLE001 - fails closed: a value that cannot be read moves on
                 continue
             if after is None or value_hash.is_identity_fallback_hash(value, after):
                 continue
@@ -6206,7 +6128,7 @@ class StatementProcessor:
             return False
         try:
             return statement_calls_user_writer(run.code, self.shell.user_ns, run.tree, appends=False) is not None
-        except Exception:  # noqa: BLE001 - unjudged: not recorded, so the replay runs it again
+        except Exception:  # noqa: BLE001 - fails closed: unjudged: not recorded, so the replay runs it again
             _log_once("could not tell whether %r writes a file through a function of yours", run.code)
             return False
 
@@ -6259,7 +6181,7 @@ class StatementProcessor:
                 outputs=run.outputs,
                 cost=execution.cost,
             )
-        except Exception:  # a hint never breaks a statement
+        except Exception:  # fails closed: a hint never breaks a statement
             logger.log(
                 HINT_ERROR_LEVEL,
                 "%s could not check %r for a file round trip",
@@ -6294,7 +6216,7 @@ class StatementProcessor:
                 load=records.recorded_row_blocks,
                 save=records.persist_row_blocks,
             )
-        except Exception:  # a hint never breaks a statement
+        except Exception:  # fails closed: a hint never breaks a statement
             logger.log(
                 HINT_ERROR_LEVEL,
                 "%s could not check %r for a per-item rerun",
@@ -6354,7 +6276,7 @@ class StatementProcessor:
             if before != run.cache_key:
                 return
             next_key = self._key(code, inputs, outputs, run.occurrence_index, record=not run.skip_cache).cache_key
-        except Exception:
+        except Exception:  # fails closed
             logger.debug("%s Could not key %s with its hidden draw", _LOG_PROCESSOR, code[:80], exc_info=True)
             return
         # The streams it drew from move on from the next run's key, as the
@@ -6550,7 +6472,7 @@ class StatementProcessor:
                     or statement_calls_user_writer(code, self.shell.user_ns) is not None
                     or statement_calls_through_ctypes(code, self.shell.user_ns) is not None
                 )
-            except Exception:  # noqa: BLE001 - when unsure, check files again
+            except Exception:  # noqa: BLE001 - fails closed: when unsure, check files again
                 wrote = True
         if wrote:
             self._freshness.forget_file_answers(file_state_epoch())
@@ -6669,7 +6591,7 @@ class StatementProcessor:
         reload has no entry of it to serve in place of the state."""
         try:
             modules = module_state_writes(code, self.shell.user_ns)
-        except Exception as exc:  # noqa: BLE001 - handed to the caller, which refuses the store
+        except Exception as exc:  # noqa: BLE001 - fails closed: handed to the caller, which refuses the store
             return exc
         for module in modules:
             writers = self.tracking_state.module_state_writers.setdefault(module, [])
@@ -6677,27 +6599,6 @@ class StatementProcessor:
                 writers.remove(code)
             writers.append(code)
         return None
-
-    def _log_cache_lookup(
-        self,
-        code: str,
-        cache_key: str,
-        inputs: set[str],
-        cached_data: Any,
-        analysis_time: float,
-        hash_time: float,
-        cache_check_time: float,
-    ) -> None:
-        logger.debug("[CACHE DEBUG] Statement: %s...", code[:50])
-        logger.debug("[CACHE DEBUG] Key: %s...", cache_key[:40])
-        logger.debug("[CACHE DEBUG] Inputs: %s", inputs)
-        logger.debug("[CACHE DEBUG] Cache hit: %s", cached_data is not None)
-        logger.debug(
-            "[TIMING] Analysis: %.1fms | Hash: %.1fms | Lookup: %.1fms",
-            analysis_time * 1000,
-            hash_time * 1000,
-            cache_check_time * 1000,
-        )
 
     def _handle_execution_error(self, result: Any, silent: bool) -> bool | None:
         if not silent:
@@ -6718,7 +6619,7 @@ def _open_stream(value: Any) -> bool:
         return False
     try:
         return not value.closed
-    except Exception:  # noqa: BLE001 - a handle that cannot say is taken as open
+    except Exception:  # noqa: BLE001 - fails closed: a handle that cannot say is taken as open
         return True
 
 
@@ -6788,6 +6689,6 @@ def _process_label(process: Any) -> str:
     """A child process a statement left running, for a message."""
     try:
         command = " ".join(process.cmdline())[:80]
-    except Exception:  # noqa: BLE001 - gone, or not readable
+    except Exception:  # noqa: BLE001 - fails closed: gone, or not readable
         command = ""
     return f"the process '{command}'" if command else "a process"

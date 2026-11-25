@@ -69,7 +69,7 @@ import threading
 import weakref
 from typing import Any
 
-from .. import _weak
+from .. import _pandas_compat, _weak
 from .._type_memo import class_name
 from .._user_attrs import from_family
 from ..loaded_modules import loaded_module
@@ -152,7 +152,7 @@ def is_pin(obj: Any) -> bool:
 def _pin_of(refs: Any) -> _PinRef | None:
     """The `_PinRef` in the copy-on-write group *refs*; None in a group
     cash has not frozen."""
-    for ref in refs.referenced_blocks:
+    for ref in _pandas_compat.sharers(refs):
         if type(ref) is _PinRef:
             return ref
     return None
@@ -160,7 +160,7 @@ def _pin_of(refs: Any) -> _PinRef | None:
 
 def has_pin(block: Any) -> bool:
     """Is *block* in a group cash froze (its data the RAM tier's)?"""
-    return _pin_of(block.refs) is not None
+    return _pin_of(_pandas_compat.block_refs(block)) is not None
 
 
 # ------------------------------------------------- writes a view does not see
@@ -265,7 +265,7 @@ def _for_storing(value: Any, done: dict[int, Any], depth: int) -> Any:
             parts = [_for_storing(item, done, depth + 1) for item in value]
             changed = any(new is not old for new, old in zip(parts, value, strict=True))
             result = kind(parts) if changed else value
-    elif from_family(kind, "pandas") and getattr(value, "_mgr", None) is not None:
+    elif from_family(kind, "pandas") and _pandas_compat.manager_or_none(value) is not None:
         result = _detached(value)
     else:
         return value
@@ -276,20 +276,20 @@ def _for_storing(value: Any, done: dict[int, Any], depth: int) -> Any:
 def _detached(table: Any) -> Any:
     """*table* rebuilt on fresh views of its frozen columns (`for_storing`);
     *table* itself when none of its blocks is frozen."""
-    mgr = table._mgr
-    if not any(_pin_of(block.refs) is not None for block in mgr.blocks):
+    mgr = _pandas_compat.manager(table)
+    if not any(_pin_of(_pandas_compat.block_refs(block)) is not None for block in mgr.blocks):
         return table
     blocks = []
     for block in mgr.blocks:
         values = block.values
-        if _pin_of(block.refs) is not None:
+        if _pin_of(_pandas_compat.block_refs(block)) is not None:
             values = _fresh_view(values)
         blocks.append(block.make_block_same_class(values))
     if table.ndim == 2:
         fresh = type(mgr)(tuple(blocks), list(mgr.axes), verify_integrity=False)
     else:
         fresh = type(mgr)(blocks[0], mgr.axes[0], verify_integrity=False)
-    return table._constructor_from_mgr(fresh, axes=fresh.axes).__finalize__(table)
+    return _pandas_compat.frame_from_manager(table, fresh).__finalize__(table)
 
 
 def _fresh_view(values: Any) -> Any:
@@ -303,8 +303,8 @@ def _fresh_view(values: Any) -> Any:
         parts = _ndarray_parts(values)
         if not parts:
             return values  # Arrow: no numpy memory to count
-        view = values._ndarray.view()
-        fresh = values._from_backing_data(view)
+        view = _pandas_compat.inner_ndarray(values).view()
+        fresh = _pandas_compat.from_backing_data(values, view)
         if getattr(values, "_freq", None) is not None:
             fresh._freq = values._freq
     key = id(_root(view))
@@ -508,7 +508,7 @@ def _self_test(pd: Any) -> bool:
         return False
     hit = hand_out(stored)
     other = hand_out(stored)
-    if not all(blk.refs.has_reference() for blk in stored._mgr.blocks):
+    if not all(_pandas_compat.is_shared(_pandas_compat.block_refs(blk)) for blk in _pandas_compat.blocks(stored)):
         return False
     # A dated index keeps its freq through the freeze, a hit and a pickle.
     import pickle
@@ -563,8 +563,10 @@ def _watch_checks(pd: Any, np: Any, hit: Any, stored_series: Any) -> bool:
     def written(table: Any, write: Any) -> tuple[bool, bool]:
         """Did writing *table* count as a write (`_note_shared`), and did
         it leave a reader behind?"""
-        mgr = table._mgr
-        pin = _pin_of(mgr.blocks[mgr.blknos[0] if table.ndim == 2 else 0].refs)
+        mgr = _pandas_compat.manager(table)
+        pin = _pin_of(
+            _pandas_compat.block_refs(_pandas_compat.column_block(mgr, 0) if table.ndim == 2 else mgr.blocks[0])
+        )
         if pin is None:
             return False, False
         before = pin.writes
@@ -599,7 +601,7 @@ def _watch_checks(pd: Any, np: Any, hit: Any, stored_series: Any) -> bool:
 def block_arrays(frame: Any) -> list[Any]:
     """The numpy arrays *frame*'s blocks keep their data in (`_ndarray_parts`)."""
     try:
-        blocks = frame._mgr.blocks
+        blocks = _pandas_compat.blocks(frame)
     except AttributeError:
         return []
     return [array for block in blocks for _name, array in (_ndarray_parts(block.values) or ())]
@@ -623,8 +625,8 @@ def _ndarray_parts(values: Any) -> list[tuple[str, Any]] | None:
     import pandas as pd
 
     if type(values) in (pd.arrays.DatetimeArray, pd.arrays.TimedeltaArray):
-        return [("_ndarray", values._ndarray)]
-    from pandas.core.arrays.arrow import ArrowExtensionArray
+        return [(_pandas_compat.NDARRAY_SLOT, _pandas_compat.inner_ndarray(values))]
+    ArrowExtensionArray = _pandas_compat.internal("ArrowExtensionArray")
 
     if isinstance(values, ArrowExtensionArray):
         return []  # Arrow memory is immutable; a write swaps the Arrow array
@@ -656,7 +658,7 @@ def _label_parts(data: Any) -> list[tuple[str, Any]] | None:
     every table with named columns was copied, and so was each hit."""
     parts = _ndarray_parts(data)
     if parts is None and _python_text(data):
-        return [("_ndarray", data._ndarray)]
+        return [(_pandas_compat.NDARRAY_SLOT, _pandas_compat.inner_ndarray(data))]
     return parts
 
 
@@ -673,7 +675,7 @@ def _freezable_index(index: Any) -> bool:
         return True
     if isinstance(index, pd.MultiIndex):
         return False
-    return _python_text(index._data) or _freezable_values(index._data)
+    return _python_text(_pandas_compat.index_data(index)) or _freezable_values(_pandas_compat.index_data(index))
 
 
 def freezable(frame: Any, *, cells_known: bool = False) -> bool:
@@ -686,7 +688,7 @@ def freezable(frame: Any, *, cells_known: bool = False) -> bool:
 
     if type(frame) not in (pd.DataFrame, pd.Series):
         return False  # a subclass may keep state of its own
-    if not all(_freezable_values(blk.values, cells_known) for blk in frame._mgr.blocks):
+    if not all(_freezable_values(blk.values, cells_known) for blk in _pandas_compat.blocks(frame)):
         return False
     axes = (frame.index,) if frame.ndim == 1 else (frame.index, frame.columns)
     return all(_freezable_index(axis) for axis in axes)
@@ -763,8 +765,8 @@ def _freeze_values(values: Any) -> Any:
         return values
     if parts[0][0] == "":
         return _read_only(values)
-    frozen = _read_only(values._ndarray)
-    return values if frozen is values._ndarray else _same_dates(values, frozen)
+    frozen = _read_only(_pandas_compat.inner_ndarray(values))
+    return values if frozen is _pandas_compat.inner_ndarray(values) else _same_dates(values, frozen)
 
 
 def array_freq(values: Any) -> Any:
@@ -825,10 +827,12 @@ def _frozen_index(index: Any) -> Any:
 
     if isinstance(index, pd.RangeIndex):
         return index
-    data = index._data
+    data = _pandas_compat.index_data(index)
     if _python_text(data):
         copied = data.copy()
-        return _same_index(index, copied._from_backing_data(_read_only(copied._ndarray)))
+        return _same_index(
+            index, _pandas_compat.from_backing_data(copied, _read_only(_pandas_compat.inner_ndarray(copied)))
+        )
     parts = _ndarray_parts(data)
     if not parts:
         return index  # Arrow labels: immutable memory (`_private_axes`)
@@ -912,15 +916,15 @@ def frozen_already(frame: Any) -> bool:
     copy (`hand_out`): no holder can write that data, and storing it changes
     nothing any holder may do."""
     try:
-        for blk in frame._mgr.blocks:
-            if _pin_of(blk.refs) is None:
+        for blk in _pandas_compat.blocks(frame):
+            if _pin_of(_pandas_compat.block_refs(blk)) is None:
                 return False
             parts = _ndarray_parts(blk.values)
             if parts is None or not all(not array.flags.writeable and is_frozen(array) for _name, array in parts):
                 return False
         axes = (frame.index,) if frame.ndim == 1 else (frame.index, frame.columns)
         for axis in axes:
-            parts = _label_parts(getattr(axis, "_data", None)) if not _is_range(axis) else []
+            parts = _label_parts(_pandas_compat.index_data(axis, None)) if not _is_range(axis) else []
             if parts is None or not all(not array.flags.writeable and is_frozen(array) for _name, array in parts):
                 return False
         return from_family(type(frame), "pandas") and freezable(frame, cells_known=True)
@@ -971,9 +975,9 @@ def _freeze_in_place(frame: Any) -> None:
     # One block for every float column made ``data[cols].to_numpy()`` a
     # read-only view of it, where the caller's own table (one block per
     # column, from ``read_csv``) gives a writable copy.
-    for blk in frame._mgr.blocks:
-        refs = blk.refs
-        sharing = [ref() for ref in refs.referenced_blocks]
+    for blk in _pandas_compat.blocks(frame):
+        refs = _pandas_compat.block_refs(blk)
+        sharing = [ref() for ref in _pandas_compat.sharers(refs)]
         group = [other for other in [blk, *sharing] if other is not None and not is_pin(other)]
         for other in group:
             values = other.values
@@ -984,8 +988,8 @@ def _freeze_in_place(frame: Any) -> None:
         pin = _pin_of(refs)
         if pin is None:
             pin = _PinRef([_root(array) for _name, array in _ndarray_parts(blk.values) or ()])
-            journal.pins.append((refs.referenced_blocks, pin))
-            refs.referenced_blocks.append(pin)
+            journal.pins.append((_pandas_compat.sharers(refs), pin))
+            _pandas_compat.sharers(refs).append(pin)
             for root in pin.roots:
                 # By id: pins are weak references to one target, so all compare equal.
                 _PINS_BY_ROOT.setdefault(id(root()), {})[id(pin)] = _weak.ref(pin)
@@ -1071,7 +1075,7 @@ def keeps_uncopied(frame: Any) -> bool:
         if not _checked_works() or not freezable(frame, cells_known=True):
             return False
         nbytes = 0
-        for block in frame._mgr.blocks:
+        for block in _pandas_compat.blocks(frame):
             parts = _ndarray_parts(block.values)
             if parts is None:
                 return False
@@ -1089,7 +1093,7 @@ def _total_bytes(frame: Any) -> int:
     `_share_checked` counts. A frame of unknown shape counts as big, so it
     goes through the checks as before."""
     try:
-        return sum(array_nbytes(block.values) for block in frame._mgr.blocks)
+        return sum(array_nbytes(block.values) for block in _pandas_compat.blocks(frame))
     except Exception:  # noqa: BLE001 - not a pandas frame as known here
         return CHECKED_MIN_BYTES
 
@@ -1100,7 +1104,7 @@ def _share_checked(frame: Any) -> tuple[Any, bytes] | None:
     if type(frame) is not pd.DataFrame or not freezable(frame, cells_known=True):
         return None
     keys = _known_contents(frame)
-    mgr = frame._mgr
+    mgr = _pandas_compat.manager(frame)
     blocks = []
     checked = []
     arrow_checked = []
@@ -1131,14 +1135,14 @@ def _share_checked(frame: Any) -> tuple[Any, bytes] | None:
             nbytes += array.nbytes
         shallow = block.copy(deep=False)
         blocks.append(shallow)
-        if _pin_of(block.refs) is None:
+        if _pin_of(_pandas_compat.block_refs(block)) is None:
             checked.append(shallow)  # frozen data (a hit's) is no one's to write
     if nbytes < CHECKED_MIN_BYTES:
         return None
     axes = [_owned_axis(axis, True) for axis in mgr.axes]
     shared_mgr = type(mgr).from_blocks(blocks, axes)
-    shared = frame._constructor_from_mgr(shared_mgr, axes=shared_mgr.axes).__finalize__(frame, method="copy")
-    if any(kept is not block for kept, block in zip(shared._mgr.blocks, blocks)):
+    shared = _pandas_compat.frame_from_manager(frame, shared_mgr).__finalize__(frame, method="copy")
+    if any(kept is not block for kept, block in zip(_pandas_compat.blocks(shared), blocks)):
         return None  # pandas rebuilt the blocks: not the ones made here
     for block in checked + arrow_checked:
         _CHECKED_BLOCKS.add(block)
@@ -1165,7 +1169,7 @@ def _known_contents(frame: Any) -> dict[tuple, tuple]:
     keys = content_keys(frame)
     if not keys:
         return keys
-    numpy_blocks = sum(1 for block in frame._mgr.blocks if _ndarray_parts(block.values))
+    numpy_blocks = sum(1 for block in _pandas_compat.blocks(frame) if _ndarray_parts(block.values))
     if len(keys) < numpy_blocks and read_into_memo(frame):
         keys = content_keys(frame)
     return keys
@@ -1174,7 +1178,7 @@ def _known_contents(frame: Any) -> dict[tuple, tuple]:
 def _group(block: Any) -> list[Any]:
     """The live blocks in *block*'s copy-on-write group, the pin left out."""
     found = []
-    for ref in block.refs.referenced_blocks:
+    for ref in _pandas_compat.sharers(_pandas_compat.block_refs(block)):
         other = ref()
         if other is not None and not is_pin(other):
             found.append(other)
@@ -1214,7 +1218,7 @@ def checked_digest(frame: Any, keys: dict[tuple, tuple] | None = None) -> bytes 
     from .shared_blocks import block_layout
 
     digest = hashlib.sha256(_CHECKED_TAG)
-    for block in frame._mgr.blocks:
+    for block in _pandas_compat.blocks(frame):
         if block not in _CHECKED_BLOCKS:
             continue
         if _ndarray_parts(block.values) == []:
@@ -1244,7 +1248,7 @@ def _unowned_arrow_chunks(values: Any) -> list[int] | None:
     memory someone else writes (`_unowned_chunks`); None for a type whose
     buffers `_fold_unowned_arrow` does not read all of (a dictionary,
     anywhere in it)."""
-    chunked = values._pa_array
+    chunked = _pandas_compat.arrow_data(values)
     if _holds_dictionary(chunked.type):
         return None
     return _unowned_chunks(chunked.type, chunked.chunks)
@@ -1263,7 +1267,7 @@ def _fold_unowned_arrow(digest: Any, values: Any) -> bool:
     todo = _unowned_arrow_chunks(values)
     if todo is None:
         return False
-    chunks = values._pa_array.chunks
+    chunks = _pandas_compat.arrow_data(values).chunks
     for at in todo:
         buffers = chunks[at].buffers()
         digest.update(b"chunk %d %d\0" % (at, len(buffers)))
@@ -1281,10 +1285,10 @@ def _own_checked_arrow(frame: Any) -> None:
     Arrow blocks that may be another's memory (`_owned_arrow`), as a stored
     copy would hold them: once adopted, nothing checks them any more. Each
     block's wrapper is the tier's own (`_share_checked`)."""
-    for block in frame._mgr.blocks:
+    for block in _pandas_compat.blocks(frame):
         if block in _CHECKED_BLOCKS and _ndarray_parts(block.values) == []:
             values = block.values
-            values._pa_array = _owned_arrow(values._pa_array)
+            _pandas_compat.set_arrow_data(values, _owned_arrow(_pandas_compat.arrow_data(values)))
 
 
 def adopt(frame: Any) -> bool:
@@ -1365,7 +1369,9 @@ def _adoptable(frame: Any) -> bool:
     # Checked Arrow blocks aside: their wrappers are the tier's own, and the
     # memory that may be another's is copied as they are adopted
     # (`_own_checked_arrow`).
-    blocks = [block for block in frame._mgr.blocks if block in _CHECKED_BLOCKS and _ndarray_parts(block.values)]
+    blocks = [
+        block for block in _pandas_compat.blocks(frame) if block in _CHECKED_BLOCKS and _ndarray_parts(block.values)
+    ]
     return not blocks or _only_tier_reaches(blocks)  # none: frozen data and its own copies only
 
 
@@ -1449,7 +1455,7 @@ def copy_keeping_blocks(frame: Any, *, arrow: bool = True, reuse: Any = None, st
     that holds them already (`_owned_axis`).
     """
     try:
-        mgr = frame._mgr
+        mgr = _pandas_compat.manager(frame)
         if frame.ndim != 2:
             copied = frame.copy(deep=True)
             own_parts(copied, arrow=arrow, storing=storing)
@@ -1462,7 +1468,7 @@ def copy_keeping_blocks(frame: Any, *, arrow: bool = True, reuse: Any = None, st
             blocks.append(type(block)(values, placement=block._mgr_locs, ndim=block.ndim, refs=None))
         axes = [_owned_axis(axis, arrow, storing) for axis in mgr.axes]
         copied_mgr = type(mgr).from_blocks(blocks, axes)
-        return frame._constructor_from_mgr(copied_mgr, axes=copied_mgr.axes).__finalize__(frame, method="copy")
+        return _pandas_compat.frame_from_manager(frame, copied_mgr).__finalize__(frame, method="copy")
     except Exception:
         logger.debug("cash: copying a %s the pandas way", class_name(type(frame)), exc_info=True)
         copied = frame.copy(deep=True)
@@ -1488,14 +1494,16 @@ def own_parts(copied: Any, *, arrow: bool = True, storing: bool = False) -> None
     shared. *arrow* False: the RAM tier's own data (a hit), all shared.
     *storing*: as `copy_keeping_blocks` takes it.
     """
-    from pandas.core.arrays.arrow import ArrowExtensionArray
+    ArrowExtensionArray = _pandas_compat.internal("ArrowExtensionArray")
 
     if arrow:
-        for block in copied._mgr.blocks:
+        for block in _pandas_compat.blocks(copied):
             values = block.values
             if isinstance(values, ArrowExtensionArray):
-                values._pa_array = _owned_arrow(values._pa_array)  # a new wrapper: pandas' copy made it
-    for block in copied._mgr.blocks:
+                _pandas_compat.set_arrow_data(
+                    values, _owned_arrow(_pandas_compat.arrow_data(values))
+                )  # a new wrapper: pandas' copy made it
+    for block in _pandas_compat.blocks(copied):
         if isinstance(block.values, _categorical()):
             block.values = _owned_categories(block.values, arrow)
     for name in ("index",) if copied.ndim == 1 else ("index", "columns"):
@@ -1519,9 +1527,9 @@ def _owned_axis(axis: Any, arrow: bool = True, storing: bool = False) -> Any:
         if any(new is not old for new, old in zip(levels, copied.levels)):
             copied = copied.set_levels(levels, verify_integrity=False)
         return copied
-    from pandas.core.arrays.arrow import ArrowExtensionArray
+    ArrowExtensionArray = _pandas_compat.internal("ArrowExtensionArray")
 
-    data = getattr(axis, "_data", None)
+    data = _pandas_compat.index_data(axis, None)
     if isinstance(data, (ArrowExtensionArray, _categorical())):
         return type(axis)._simple_new(_copy_values(data, arrow), name=axis.name)
     if storing and enabled():
@@ -1546,7 +1554,7 @@ def _copy_values(values: Any, arrow: bool = True) -> Any:
 
     if isinstance(values, _categorical()):  # over a numpy array too: its codes
         return _owned_categories(values, arrow)
-    if isinstance(values, np.ndarray) or isinstance(getattr(values, "_ndarray", None), np.ndarray):
+    if isinstance(values, np.ndarray) or isinstance(_pandas_compat.inner_ndarray(values, None), np.ndarray):
         fresh = heap_blocks.fresh_copy(values)  # a store's big block: out of glibc's heap
         if fresh is not None:
             return fresh
@@ -1556,10 +1564,12 @@ def _copy_values(values: Any, arrow: bool = True) -> Any:
             pass
     copied = values.copy()
     if arrow:
-        from pandas.core.arrays.arrow import ArrowExtensionArray
+        ArrowExtensionArray = _pandas_compat.internal("ArrowExtensionArray")
 
         if isinstance(copied, ArrowExtensionArray):
-            copied._pa_array = _owned_arrow(copied._pa_array)  # a new wrapper: ``copy`` made it
+            _pandas_compat.set_arrow_data(
+                copied, _owned_arrow(_pandas_compat.arrow_data(copied))
+            )  # a new wrapper: ``copy`` made it
     return copied
 
 
@@ -2016,8 +2026,8 @@ def hand_out(stored: Any) -> Any:
     which pandas copies before any write."""
     copied = stored.copy(deep=False)
     _private_axes(copied)
-    for block in copied._mgr.blocks:
-        pin = _pin_of(block.refs)
+    for block in _pandas_compat.blocks(copied):
+        pin = _pin_of(_pandas_compat.block_refs(block))
         if pin is not None:
             pin.know(block)
     return copied
@@ -2027,7 +2037,7 @@ def _private_axes(frame: Any) -> None:
     """Give *frame* axes of its own where a shallow copy would share a
     writable label array: Arrow-backed labels (pandas 3 text) are written by
     swapping the Arrow array inside the object both copies hold."""
-    from pandas.core.arrays.arrow import ArrowExtensionArray
+    ArrowExtensionArray = _pandas_compat.internal("ArrowExtensionArray")
 
     for name in ("index",) if frame.ndim == 1 else ("index", "columns"):
         axis = getattr(frame, name)
@@ -2035,7 +2045,7 @@ def _private_axes(frame: Any) -> None:
             # No labels to share, and reading its ``_data`` builds them: an
             # arange of every row, 0.8 s for 21M rows, on each store and hit.
             continue
-        data = getattr(axis, "_data", None)
+        data = _pandas_compat.index_data(axis, None)
         if isinstance(data, ArrowExtensionArray):
             fresh = type(axis)._simple_new(data.copy(), name=axis.name)  # a new wrapper; Arrow data is not copied
             setattr(frame, name, fresh)
@@ -2049,7 +2059,7 @@ def reads_memory_of(value: Any, roots: list[Any]) -> bool:
     over the memory one of *roots* owns (`views_left_behind`)?"""
     import numpy as np
 
-    array = value if isinstance(value, np.ndarray) else getattr(value, "_ndarray", None)
+    array = value if isinstance(value, np.ndarray) else _pandas_compat.inner_ndarray(value, None)
     if not isinstance(array, np.ndarray):
         return False
     root = _root(array)
@@ -2071,7 +2081,7 @@ def read_only_note(exc: BaseException) -> str | None:
     tb = exc.__traceback__
     while tb is not None:
         for value in list(tb.tb_frame.f_locals.values()):
-            array = value if isinstance(value, np.ndarray) else getattr(value, "_ndarray", None)
+            array = value if isinstance(value, np.ndarray) else _pandas_compat.inner_ndarray(value, None)
             if isinstance(array, np.ndarray) and is_frozen(array):
                 return (
                     "cash: this column belongs to a table served from the cache. Its memory is shared "
@@ -2303,8 +2313,8 @@ def _pickle_form(values: Any) -> Any:
             return values
         if parts[0][0] == "":
             return _writable_alias(values)
-        alias = _writable_alias(values._ndarray)
-        return values if alias is values._ndarray else _same_dates(values, alias)
+        alias = _writable_alias(_pandas_compat.inner_ndarray(values))
+        return values if alias is _pandas_compat.inner_ndarray(values) else _same_dates(values, alias)
     except Exception:
         logger.debug("cash: pickling a frozen block as it is", exc_info=True)
         return values
@@ -2322,8 +2332,8 @@ def _install_pickling() -> None:
     with _INSTALL_LOCK:
         if _PICKLING_INSTALLED:
             return
-        from pandas.core.internals.blocks import Block
-        from pandas.core.internals.managers import SingleBlockManager
+        Block = _pandas_compat.internal("Block")
+        SingleBlockManager = _pandas_compat.internal("SingleBlockManager")
 
         block_reduce = Block.__reduce__
 
@@ -2370,34 +2380,32 @@ def _install_write_watch() -> None:
     with _INSTALL_LOCK:
         if _WATCH_DONE:
             return
-        from pandas.core.internals.blocks import Block
-        from pandas.core.internals.managers import BaseBlockManager, SingleBlockManager
-
-        no_reference_block = BaseBlockManager._has_no_reference_block
-        single_no_reference = SingleBlockManager._has_no_reference
-        maybe_copy = Block._maybe_copy
-        refs_and_copy = Block._get_refs_and_copy
+        hooks = _pandas_compat.cow_write_hooks()
+        BaseBlockManager, no_reference_block = hooks["_has_no_reference_block"]
+        SingleBlockManager, single_no_reference = hooks["_has_no_reference"]
+        Block, maybe_copy = hooks["_maybe_copy"]
+        _, refs_and_copy = hooks["_get_refs_and_copy"]
 
         def _has_no_reference_block(self: Any, blkno: int) -> bool:
             alone = no_reference_block(self, blkno)
             if not alone:
-                _note_shared(self.blocks[blkno].refs)
+                _note_shared(_pandas_compat.block_refs(self.blocks[blkno]))
             return alone
 
         def _has_no_reference(self: Any, i: int = 0) -> bool:
             alone = single_no_reference(self, i)
             if not alone:
-                _note_shared(self.blocks[0].refs)
+                _note_shared(_pandas_compat.block_refs(self.blocks[0]))
             return alone
 
         def _maybe_copy(self: Any, inplace: bool, deep: bool = True) -> Any:
             if inplace and deep:  # a shallow copy keeps the frozen memory: no write follows
-                _note_shared(self.refs)
+                _note_shared(_pandas_compat.block_refs(self))
             return maybe_copy(self, inplace, deep)
 
         def _get_refs_and_copy(self: Any, inplace: bool) -> Any:
             if inplace:
-                _note_shared(self.refs)
+                _note_shared(_pandas_compat.block_refs(self))
             return refs_and_copy(self, inplace)
 
         for owner, name, original, wrapper in (

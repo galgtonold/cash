@@ -357,7 +357,7 @@ def code_is_where_it_says(code: types.CodeType) -> bool:
     try:
         with untracked():
             lines, _first, _key = _inspect_source_lines(code)
-    except Exception:  # noqa: BLE001 - no block to compare: nothing to say
+    except Exception:  # noqa: BLE001 - fails open: no block to compare: the caller's own checks decide
         return True
     return block_defines(lines, code)
 

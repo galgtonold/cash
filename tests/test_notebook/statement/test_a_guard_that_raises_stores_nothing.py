@@ -78,3 +78,25 @@ def test_a_failed_watch_of_the_reads_is_logged_once_as_a_warning(statement_proce
     said = [r for r in caplog.records if "could not watch the reads" in r.getMessage()]
     assert [r.levelno for r in said][:1] == [logging.WARNING]
     assert all(r.levelno == logging.DEBUG for r in said[1:])
+
+
+def test_the_walk_inside_the_module_watch_raising_counts_as_the_watch_raising(
+    statement_processor, mock_shell, monkeypatch
+):
+    """The watch of the modules a statement reaches caught its own walk's
+    failure and answered "no modules": the processor then had nothing to
+    refuse over, and a write to one of those modules would go unseen."""
+    from cash.notebook import callee_reach
+
+    real = callee_reach.reached_user_code
+
+    def walk(*args, **kwargs):
+        if kwargs.get("close") is False:  # the module watch's own walk
+            raise RuntimeError("the walk itself failed")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(callee_reach, "reached_user_code", walk)
+    first, second, codes = _run_twice(statement_processor, mock_shell)
+    assert first["status"] == second["status"] == CacheStatus.COMPUTED
+    assert any("cash could not watch the modules it reaches" in reason for reason in second["uncacheable_reasons"])
+    assert mock_shell.user_ns["x"] == [1, 2, 3]
