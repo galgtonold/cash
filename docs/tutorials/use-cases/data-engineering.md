@@ -178,7 +178,7 @@ or each keeps its own cache. See [Deploying](../feature-guides/deploying.md) and
 
 ## Caveats
 
-<!-- claim: cash/analysis/file_effects.py:SideEffectVisitor @07c1a65b broad="the write-detection claim is about the visitor as a whole" -->
+<!-- claim: cash/analysis/file_effects.py:SideEffectVisitor @d20ff9f2 broad="the write-detection claim is about the visitor as a whole" -->
 - **Keep writes out of cached steps.** `to_parquet` and `to_csv` are effects: a
   hit would skip them. cash warns if a cached step writes. Cache the step that
   builds the frame and write it outside, as `run` does above.

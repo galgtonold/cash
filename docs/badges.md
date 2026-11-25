@@ -200,7 +200,10 @@ every time`).
 A cache hit would skip the effect, so cash runs the statement every time. The
 reason names the call and its kind: `Side effect: session.post() (network)`,
 `Side effect: subprocess.run() (system)`, `Side effect: plt.plot() (display)`,
-`Calls save(), which writes files`. Network reads, database reads and prints
+`Calls save(), which writes files`. An effect the statement's text does not
+name is reported as it happens: `Side effect: started another program
+(subprocess.Popen) as it ran (system)`, `Side effect: sent a POST request to
+api.example.com as it ran (network)`. Network reads, database reads and prints
 are cached. The full list is in
 [What gets cached](notebook_caching_api.md#what-gets-cached).
 
