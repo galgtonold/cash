@@ -136,6 +136,7 @@ class FileEvictor:
         #: What the cap removed, so a later miss can say so.
         self.evictions = EvictionLog(cache_dir, untracked)
         self._touched = touched
+        touched.on_let_go = self._let_go
         self._writes = writes
         self._lock = touched.lock
         self._untracked = untracked
@@ -162,6 +163,13 @@ class FileEvictor:
         self.clock = 0.0
         self.clock_loaded = False
         self.base: dict[str, float | None] = {}
+
+    def _let_go(self, key: str) -> None:
+        """*key* left the touched entries for being old: what is kept by
+        key here goes with it. Its entry is ranked by the rank index from
+        now on, as one another process wrote."""
+        self.write_seq_by_key.pop(key, None)
+        self.base.pop(key, None)
 
     @property
     def capped(self) -> bool:

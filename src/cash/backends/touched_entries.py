@@ -26,15 +26,29 @@ class TouchedEntries:
     `FileBackend` and `FileEvictor` both go through this object. `lock`
     guards it and the evictor's accounting too, so forgetting an entry here
     and its bytes there is one step.
+
+    Only the `MAX_ENTRIES` keys written or read last are held, and every
+    key whose read is not flushed yet (its metadata is the one place the
+    read is counted). An older key is as one another process wrote: its
+    metadata is read from its file when asked again, and eviction ranks
+    it by the rank index. Held for every key, the table grew by 800 bytes
+    with each distinct call for as long as the process ran.
     """
+
+    #: Keys held at most, besides those with a read not flushed yet.
+    MAX_ENTRIES = 20_000
 
     def __init__(self) -> None:
         self.lock = threading.RLock()
+        #: In the order last written or read: the oldest first.
         self._metadata: dict[str, dict] = {}
         self._keys: dict[str, str] = {}
         self._unflushed: set[str] = set()
-        #: key -> (entry identity, stat signature or None).
-        self._origin: dict[str, tuple[tuple | None, tuple | None]] = {}
+        #: key -> (entry identity, stat signature or None, path).
+        self._origin: dict[str, tuple[tuple | None, tuple | None, str]] = {}
+        #: Called with each key let go for being old (`_let_old_go`), with
+        #: the lock held: the evictor drops what it keeps by key.
+        self.on_let_go: Callable[[str], None] | None = None
 
     def __len__(self) -> int:
         return len(self._metadata)
@@ -45,9 +59,32 @@ class TouchedEntries:
         """Hold *metadata* as *key*'s, stored at *path* by the write *identity*
         names, in a file whose `stat_signature` was *stat*."""
         with self.lock:
+            self._metadata.pop(key, None)  # last in the order
             self._metadata[key] = metadata
             self._keys[path] = key
-            self._origin[key] = (identity, stat)
+            self._origin[key] = (identity, stat, path)
+            # Past the bound by an eighth before the oldest go, so a table
+            # at its bound is not looked through on every write.
+            if len(self._metadata) > self.MAX_ENTRIES + max(self.MAX_ENTRIES >> 3, 1):
+                self._let_old_go()
+
+    def _let_old_go(self) -> None:
+        """Down to `MAX_ENTRIES` keys, the oldest first, keeping each whose
+        read is not flushed yet. With the lock held."""
+        excess = len(self._metadata) - self.MAX_ENTRIES
+        gone = []
+        for key in self._metadata:
+            if len(gone) >= excess:
+                break
+            if key not in self._unflushed:
+                gone.append(key)
+        for key in gone:
+            del self._metadata[key]
+            origin = self._origin.pop(key, None)
+            if origin is not None and self._keys.get(origin[2]) == key:
+                del self._keys[origin[2]]
+            if self.on_let_go is not None:
+                self.on_let_go(key)
 
     def identity(self, key: str) -> tuple | None:
         """The `entry_identity` of the write *key*'s metadata was read from."""
@@ -64,7 +101,7 @@ class TouchedEntries:
         with self.lock:
             origin = self._origin.get(key)
             if origin is not None:
-                self._origin[key] = (origin[0], stat)
+                self._origin[key] = (origin[0], stat, origin[2])
 
     def metadata(self, key: str | None) -> dict | None:
         """The metadata this process holds for *key*, or None."""
@@ -85,6 +122,9 @@ class TouchedEntries:
         """*key* was read: its access stamp is due to be written back."""
         with self.lock:
             self._unflushed.add(key)
+            metadata = self._metadata.pop(key, None)
+            if metadata is not None:
+                self._metadata[key] = metadata  # last in the order
 
     def has_unflushed_read(self, key: str | None) -> bool:
         return key in self._unflushed
