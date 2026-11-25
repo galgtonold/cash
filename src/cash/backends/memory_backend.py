@@ -1800,7 +1800,7 @@ class InMemoryBackend(CacheBackend):
                 kept.handed = handed
                 self._handed[key] = kept
                 self._trim_handed()
-            except Exception:  # noqa: BLE001 - not kept; the caller still gets its copy
+            except Exception:  # not kept; the caller still gets its copy
                 logger.debug("could not keep the copy handed out for %r", key, exc_info=True)
                 if self._handed.get(key) is kept:
                     del self._handed[key]
