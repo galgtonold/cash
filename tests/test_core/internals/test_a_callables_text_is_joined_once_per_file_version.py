@@ -188,7 +188,8 @@ def test_the_memo_holds_one_entry_per_object_and_version(module, reads):
     it: an edit leaves the old entry unread rather than serving it."""
     mod, path = module
     source_reading.getsource(mod.helper)
-    keys_before = {k for k in source_reading._SOURCE_TEXT.keys() if str(path) in str(k)}
+    # By the key's path itself: a tuple's repr doubles a Windows path's backslashes.
+    keys_before = {k for k in source_reading._SOURCE_TEXT.keys() if k[0] == str(path)}
     assert keys_before, "nothing was kept for the module's file"
     path.write_text(textwrap.dedent(_MODULE).replace("TABLE[k]", "TABLE[k] + 7"), encoding="utf-8", newline="\n")
     linecache.checkcache(str(path))

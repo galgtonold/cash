@@ -425,7 +425,7 @@ class _Builder:
 
     # -- nodes -------------------------------------------------------------
 
-    def visit(self, node: ast.AST, scope: Scope) -> None:  # noqa: C901, PLR0912, PLR0915 - one branch per kind of node
+    def visit(self, node: ast.AST, scope: Scope) -> None:  # one branch per kind of node
         kind = type(node)
         if kind is ast.Name:
             if isinstance(node.ctx, ast.Load):

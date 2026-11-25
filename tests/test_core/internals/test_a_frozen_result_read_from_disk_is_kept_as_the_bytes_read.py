@@ -20,7 +20,7 @@ import warnings
 
 import pytest
 
-from cash import Cash
+from cash import Cash, value_watch
 from cash.backends import memory_backend
 
 # A frozenset cannot be marked as a frozen result passed on: said, and beside the point.
@@ -75,7 +75,12 @@ def test_the_first_hit_from_disk_keeps_the_bytes_read(tmp_path, walks, make):
     ((key, (metadata, kept)),) = ram._store.items()
     assert type(kept) is memory_backend._Pickled, "not kept as the bytes read"
     assert metadata["size"] == kept.nbytes
-    assert produce() is first, "the next hit did not hand back the kept object"
+    if value_watch.WATCHING:
+        # Proving a plain object unchanged takes the C watchers; without
+        # them (below Python 3.12) the next hit unpickles a copy of its own.
+        assert produce() is first, "the next hit did not hand back the kept object"
+    else:
+        assert produce() == first
 
 
 def test_a_changed_kept_result_is_read_again_out_of_the_bytes(tmp_path):

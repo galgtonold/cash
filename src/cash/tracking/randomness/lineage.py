@@ -15,8 +15,8 @@ import sys
 import textwrap
 from collections.abc import Iterable, Mapping
 
-from ...loaded_modules import loaded_module
 from ..._stand_in import stand_in
+from ...loaded_modules import loaded_module
 from ...source_norm import exact_source_digest
 from .detect import get_drawing_rng_modules, get_seeding_rng_modules
 

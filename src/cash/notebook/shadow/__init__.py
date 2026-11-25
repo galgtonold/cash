@@ -366,8 +366,8 @@ class Shadow:
     def _build(self, unit, inputs: Iterable[str]) -> tuple[tuple, set[str], set[str]]:
         from ...install_paths import is_user_code_module
         from ...jit_functions import jit_python_function
-        from ...tracking.trace_items import class_digest, name_table
         from ...string_lookups import code_looks_up_by_string
+        from ...tracking.trace_items import class_digest, name_table
 
         inputs = [n for n in inputs if isinstance(n, str) and not n.startswith("__cash")]
         markers = set(unit.markers)

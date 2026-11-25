@@ -38,8 +38,8 @@ from cash.notebook.cache_key import (
     statement_source_hash,
     write_provenance_key,
 )
-from cash.notebook.effects_record import EffectsRecord, inputs_digest
 from cash.notebook.carrier_history import FIGURE_KINDS, carrier_history_fingerprint
+from cash.notebook.effects_record import EffectsRecord, inputs_digest
 from cash.notebook.stateful_carriers import stateful_carrier_kind
 from cash.notebook.statement.derivation_edges import read_share_edges
 from cash.tracking.file_dep_snapshot import snapshot_file_deps

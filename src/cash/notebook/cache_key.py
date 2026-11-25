@@ -33,6 +33,12 @@ from cash.tracking.function_tracker import is_local_module
 from cash.tracking.randomness import rng_carrier_kind
 
 from .._type_memo import class_dict
+from ..string_lookups import (
+    code_looks_up_by_string,
+    code_lookups_traceable,
+    statement_looks_up_by_string,
+    statement_lookups_traceable,
+)
 from .held_functions import held_notebook_code, held_notebook_code_at
 from .held_modules import held_data_part, held_module_parts
 from .installed_code import installed_code_parts
@@ -48,12 +54,6 @@ from .lineage_formula import (
     unread_routine_in,
 )
 from .recorded_reads import ReadRecord, choose, read_parts, watch
-from ..string_lookups import (
-    code_looks_up_by_string,
-    code_lookups_traceable,
-    statement_looks_up_by_string,
-    statement_lookups_traceable,
-)
 
 logger = logging.getLogger(__name__)
 

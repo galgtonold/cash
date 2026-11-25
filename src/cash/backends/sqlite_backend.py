@@ -12,8 +12,8 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from . import cache_dir as _cache_dir
 from ..exceptions import CacheBackendError
+from . import cache_dir as _cache_dir
 from ._base import CacheBackend, MetadataDict, entry_expired
 from ._writes import PendingWrites
 from .cache_dir import NewerCacheFormat, warn_newer_format, warn_unusable

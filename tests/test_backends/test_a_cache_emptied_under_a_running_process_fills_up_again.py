@@ -219,7 +219,8 @@ def test_a_running_script_keeps_what_it_stores_after_cash_clear(tmp_path):
         encoding="utf-8",
     )
     out = dict(
-        line.split() for line in run_python("job.py", cwd=tmp_path, env={"CASH_MAX_CACHE_SIZE": "10MB"}).stdout.splitlines()
+        line.split()
+        for line in run_python("job.py", cwd=tmp_path, env={"CASH_MAX_CACHE_SIZE": "10MB"}).stdout.splitlines()
     )
     assert int(out["filled"]) >= 8_000_000 and int(out["cleared"]) == 0, out
     assert int(out["kept"]) >= 5_000_000, f"fresh results were evicted from a nearly empty cache: {out}"

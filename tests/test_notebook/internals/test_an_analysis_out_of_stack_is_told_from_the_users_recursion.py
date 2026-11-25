@@ -23,7 +23,7 @@ def _deep_tree(terms: int = 3000) -> ast.Module:
 def _caught(run) -> BaseException:
     try:
         run()
-    except BaseException as error:  # noqa: BLE001 - the error is what is looked at
+    except BaseException as error:  # the error is what is looked at
         return error
     raise AssertionError("nothing raised")
 

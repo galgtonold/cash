@@ -126,7 +126,6 @@ __all__ = [
 CACHE_FORMAT_VERSION = 12
 
 
-
 def format_tag() -> str:
     """``f<N>``: the format's name inside a shared store's key or object names.
 

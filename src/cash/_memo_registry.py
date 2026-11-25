@@ -74,7 +74,7 @@ def reset(scope: str = "session") -> list[str]:
             continue
         try:
             clear()
-        except Exception:  # noqa: BLE001 - one memo's clear must not keep the others
+        except Exception:  # one memo's clear must not keep the others
             logger.warning("could not clear the memo %s", name, exc_info=True)
             continue
         cleared.append(name)

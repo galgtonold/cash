@@ -3602,7 +3602,7 @@ class StatementProcessor:
         reads = self.tracking_state.reads
         try:
             before = snapshot(reads.watched, code, self.shell.user_ns)
-        except Exception:  # fails closed
+        except Exception:  # noqa: BLE001 - fails closed
             # Fails safe: a value no write is noted for is taken as changed
             # from outside the notebook, and the keys that read it move
             # (`recorded_reads.choose`).
@@ -3614,7 +3614,7 @@ class StatementProcessor:
             if before:
                 try:
                     note_writes(before, code, reads)
-                except Exception:  # fails closed: fails safe, as above
+                except Exception:  # noqa: BLE001 - fails closed: fails safe, as above
                     _log_once("could not note what %r changed", code)
 
     def _finish(self, run: StatementRun, execution: StatementExecution) -> ProcessResult:
@@ -4065,7 +4065,7 @@ class StatementProcessor:
             names -= binds | _bare_call_receivers(run.tree)
             entry = {name: lineage for name, lineage in run.entry_lineages.items() if name in reads}
             self._records.note_changed_names(run.source_hash, entry, names)
-        except Exception:  # noqa: BLE001 - fails closed: best-effort: the simulation reads the text alone
+        except Exception:  # fails closed: best-effort: the simulation reads the text alone
             logger.debug("%s could not record what %r changed", _LOG_PROCESSOR, run.code[:80], exc_info=True)
 
     def _post_execute(self, run: StatementRun, execution: StatementExecution) -> None:

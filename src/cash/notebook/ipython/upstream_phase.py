@@ -416,7 +416,7 @@ def _tree_walk_files() -> tuple[str, ...]:
     ``ast``, with the module the unparser lives in since Python 3.14."""
     files = [os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) + os.sep, ast.__file__]
     try:
-        import _ast_unparse
+        import _ast_unparse  # noqa: PLC2701 - Python 3.14 moved the unparser into it
     except ImportError:  # before Python 3.14 the unparser is in ``ast``
         pass
     else:

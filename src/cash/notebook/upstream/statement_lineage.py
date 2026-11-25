@@ -55,7 +55,6 @@ from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
 from ..cache_key import CacheKeyContext, compute_cache_key, draw_key, statement_source_hash
 from ..callee_reach import helper_seeded_modules, module_state_names
-from ..effects_record import EffectsRecord, inputs_digest
 from ..consumables import (
     drawn_stream_inputs,
     is_stream,
@@ -63,6 +62,7 @@ from ..consumables import (
     with_other_names,
     without_read_handles,
 )
+from ..effects_record import EffectsRecord, inputs_digest
 from ..lineage_formula import (
     binding_source_hash,
     call_time_reads,

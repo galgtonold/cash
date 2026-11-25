@@ -19,6 +19,7 @@ from collections.abc import Mapping
 from cash._user_attrs import attribute_or, plain_getattr
 
 from ...source_norm import source_identity_digest
+from ...string_lookups import code_looks_up_by_string, statement_looks_up_by_string
 from .._protocols import ShellProtocol
 from ..cache_key import (
     VirtualCallable,
@@ -28,7 +29,6 @@ from ..cache_key import (
     virtual_namespace,
 )
 from ..lineage_formula import forward_helper
-from ...string_lookups import code_looks_up_by_string, statement_looks_up_by_string
 from ..tracking_state import TrackingState
 from .cache_probe import CacheProbe
 

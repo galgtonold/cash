@@ -1330,7 +1330,7 @@ class FileAccessTracker:
             try:
                 with untracked():
                     token = file_dep_snapshot.remote_token_now(url, warn=False)
-            except Exception:  # noqa: BLE001 - recording a read never fails the read
+            except Exception:  # recording a read never fails the read
                 # The store cannot be asked at all (no filesystem package
                 # for the scheme): the snapshot says so when the entry is
                 # stored, as it did before a token was taken here.

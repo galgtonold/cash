@@ -50,6 +50,7 @@ from ._type_memo import (
     type_key,
 )
 from ._user_attrs import class_attr, from_family, named_attr, plain_getattr
+from .loaded_modules import loaded_module
 from .pint_values import is_registry_class, pint_kind, quantity_parts, registry_digest
 from .sizing import SPARSE_PARTS, pandas_nbytes
 from .value_types import (
@@ -60,7 +61,6 @@ from .value_types import (
     WEAK_PROXY_TYPES,
     is_dead_proxy,
 )
-from .loaded_modules import loaded_module
 
 
 class CyclicValueError(TypeError):

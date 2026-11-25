@@ -31,8 +31,8 @@ _compiled_methods.__enter__()
 
 from . import (
     _active,
-    _memo_registry,
     _gc_context,  # noqa: F401 - collections run in a context of their own
+    _memo_registry,
     _streams_at_import,
 )
 from .backends import FileBackend, InMemoryBackend, TieredBackend
