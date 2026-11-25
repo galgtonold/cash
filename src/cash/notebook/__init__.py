@@ -9,6 +9,7 @@ not load the whole notebook path.
 
 from __future__ import annotations
 
+from . import memo_lifetimes  # noqa: F401 - lists this package's memos with `cash._memo_registry`
 from .cache_status import CacheStatus, ExecutionResult
 
 __all__ = [
