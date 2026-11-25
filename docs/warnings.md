@@ -1939,6 +1939,11 @@ is a closure that reads a captured variable whose value could not be hashed
 function is a callable object whose state could not be hashed. The call was
 not cached. The message names the variable or the object's type.
 
+The same goes for what any callable the call reaches was built with: the
+instance a captured or passed bound method belongs to, the arguments of a
+`functools.partial`, the values a function passed as an argument captured
+(also under a partial), and data stored on a function.
+
 <!-- claim: cash/decorator/class_data.py:_unhashable_annotation @acfaaaec -->
 It is also shown when the function reads a class's annotations
 (`typing.get_type_hints(Cfg)`, `Cfg.__annotations__`) and a value in them,
@@ -1958,7 +1963,7 @@ a hasher for the type.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/closure_fold.py:ClosureFold._defaults_unhashable @4a8f48ad, cash/decorator/closure_fold.py:HelperIdentity.identity @fc58ca39, cash/decorator/code_surface.py:CodeSurface._unpicklable_identity @8212071f, cash/decorator/code_surface.py:CodeSurface._unpicklable_member @d99f0517 -->
+<!-- claim: cash/decorator/closure_fold.py:ClosureFold._defaults_unhashable @4a8f48ad, cash/decorator/closure_fold.py:HelperIdentity.identity @17b720a0, cash/decorator/code_surface.py:CodeSurface._unpicklable_identity @8212071f, cash/decorator/code_surface.py:CodeSurface._unpicklable_member @d99f0517 -->
 **What happened.** A parameter default of the function, of a helper it
 calls, or of a function or class passed to it, could not be hashed, so the
 call was not cached. The same goes for a callable class attribute with no

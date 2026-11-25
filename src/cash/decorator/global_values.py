@@ -4,7 +4,6 @@ identified by what calling it runs."""
 
 from __future__ import annotations
 
-import contextvars
 import functools
 import hashlib
 import pickle
@@ -25,7 +24,7 @@ from ..exceptions import CashImpurityWarning
 from ..jit_functions import jit_identity, jit_options, jit_python_function
 from ..tracking.randomness import rng_carrier_kind
 from . import walk_scope
-from .call_state import KeyBuildFailed, held_by_name
+from .call_state import KEY_BUILD_DIGESTS, KeyBuildFailed, held_by_name
 from .code_tables import CodeTable
 from .function_identity import hash_callable_source
 from .key_values import (
@@ -70,17 +69,6 @@ LOG_METHOD_NAMES = frozenset(
         "log",
     }
 )
-
-
-#: ``(kind, id(value)) -> (value, digest)`` for the values hashed during one
-#: key build; None outside one. Set by `KeyBuilder.build` for the length of
-#: the build: nothing runs between two reads of a value there that could
-#: change it, so a module constant every helper of another module reads
-#: (``hm3.C1`` reached through fifty call sites) is hashed once, not once per
-#: call site, on every hit. Dropped when the build ends, so the next build --
-#: and the check after the call -- hashes the value as it is then. The value
-#: is held, so its id is not reused while the entry stands.
-KEY_BUILD_DIGESTS: contextvars.ContextVar[dict | None] = contextvars.ContextVar("_cash_key_build_digests", default=None)
 
 
 def keyed_by_chains(value: Any) -> bool:
@@ -132,10 +120,10 @@ class GlobalValues:
         closure captured (`HelperIdentity.identity`)."""
         return self._helpers.identity(fn)
 
-    def captures_digest(self, fn: Any) -> str:
-        """What *fn*'s closure captured, as a helper's captures are keyed
-        (`HelperIdentity.captures_digest`)."""
-        return self._helpers.captures_digest(fn)
+    def callable_state(self, value: Any) -> str:
+        """The code of the callable *value* and everything it was built
+        with (`HelperIdentity.callable_state`)."""
+        return self._helpers.callable_state(value)
 
     def data_callable_identity(self, fn: Any) -> str:
         """A callable found INSIDE a data global, identified by what calling it runs.
@@ -165,6 +153,11 @@ class GlobalValues:
             # numba's `@njit`: the function it compiles, and its options.
             return jit_identity(self.data_callable_identity(compiled), fn)
         if type(fn) is not types.FunctionType:
+            wrapped = plain_getattr(fn, "__wrapped__", None)
+            if wrapped is not None and callable(wrapped) and not issubclass(type(fn), types.MethodType):
+                # ``functools.lru_cache`` over a function a factory made:
+                # the wrapper is its name, what it wraps holds the rest.
+                return f"{hash_callable_source(fn)}:wraps:{self._helpers.callable_state(wrapped)}"
             return hash_callable_source(fn)
         own = self._helpers.identity(fn)
 

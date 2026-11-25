@@ -34,7 +34,7 @@ from ..loaded_code import class_functions
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, is_runtime_machinery
 from . import class_memo, code_trace, walk_scope
 from .arg_hashing import is_opaque, is_plain_data
-from .call_state import CARRIER_LOOKUPS, held_by_name
+from .call_state import CARRIER_LOOKUPS, KeyBuildFailed, held_by_name
 from .class_data import class_surface_functions, implicit_access_functions
 from .closure_fold import CLASS_BODY_CELLS
 from .module_identity import namespace_module
@@ -1170,15 +1170,37 @@ class CodeArgs:
         ]
 
     def _function_capture_parts(self, carrier: Any) -> list[str]:
-        """Key parts for what a function *carrier*'s closure captured:
-        ``make(3)`` and ``make(4)`` return one code reading ``k`` from a
-        cell, and key apart by it, as a helper's captures do
-        (`HelperIdentity.captures_digest`). Its defaults are keyed with its
-        code (`CodeSurface.code_surface_hash`)."""
-        if type(carrier) is not types.FunctionType or not carrier.__closure__:
+        """Key parts for what a callable *carrier* was built with besides
+        what the value channel hashes: ``make(3)`` and ``make(4)`` return
+        one code reading ``k`` from a cell, and key apart by it; so do two
+        pipelines whose inner function was built with another value, a
+        function with another attribute stored on it (``fn.k``), and two
+        ``lru_cache`` wrappers over such functions
+        (`HelperIdentity.callable_state`, one answer wherever a callable is
+        held). The instance a bound method is bound to and what a partial
+        binds are the value channel's (`ArgHasher`), so the function under
+        them is what is asked about here."""
+        if isinstance(carrier, type):
             return []
-        captured = self._values.captures_digest(carrier)
-        return [f"captures:{carrier.__qualname__}:{captured}"] if captured else []
+        target = unwrap_partials(carrier)
+        target = plain_getattr(target, "__func__", target)
+        only_defaults = False
+        if type(target) is types.FunctionType:
+            only_defaults = not target.__closure__ and not target.__dict__
+            if only_defaults and not _callable_defaults(target):
+                return []
+        elif plain_getattr(target, "__wrapped__", None) is None:
+            return []
+        try:
+            return [f"captures:{carrier_name(carrier)}:{self._values.callable_state(target)}"]
+        except KeyBuildFailed as e:
+            if only_defaults and e.code == "KEY-UNHASHABLE-DEFAULT":
+                # Asked only for what a default was built with, and a
+                # default has no hash: the code surface keys it by its
+                # value-based repr, or refuses the key itself
+                # (`CodeSurface._unpicklable_identity`).
+                return []
+            raise
 
     def _capturing_functions(self, cls: type) -> tuple:
         """The functions of *cls* (`class_surface_functions`) with a closure
@@ -1356,6 +1378,17 @@ def installed_user_code(attr: Any) -> list[Any]:
         held = plain_getattr(attr, "__dict__", None)
         candidates = list(held.values()) if isinstance(held, dict) else []
     return [c for c in candidates if issubclass(type(c), (types.FunctionType, type)) and defined_in_user_code(c)]
+
+
+def _callable_defaults(fn: types.FunctionType) -> bool:
+    """Does *fn* have a parameter default that is a callable or may hold
+    one (anything but a number, a string and the like)? Its code is keyed
+    with its name; what such a default was built with is not."""
+    defaults = fn.__defaults__
+    if defaults and any(type(d) not in CODELESS_PRIMS for d in defaults):
+        return True
+    kwdefaults = fn.__kwdefaults__
+    return bool(kwdefaults) and any(type(d) not in CODELESS_PRIMS for d in kwdefaults.values())
 
 
 def _carrier_functions(carrier: Any, of_class: Any) -> list[types.FunctionType]:

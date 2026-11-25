@@ -62,10 +62,14 @@ def test_a_code_argument_is_not_told_to_register_a_type_wide_hasher(full_warning
         warnings.simplefilter("always")
         apply_to(arg, 3)
 
-    found = _messages(rec, "KEY-UNHASHABLE-ARG")
+    # The function under the partial is keyed by what it captured, as one
+    # passed bare is: the warning names the capture, not the partial.
+    found = _messages(rec, "KEY-UNHASHABLE-CAPTURE")
     assert found, "the call cached, so this test no longer exercises the warning"
-    assert "register_hasher(" not in found[0]
-    assert "plain arguments" in found[0]
+    assert "register_hasher(function" not in found[0]
+    assert "register_hasher(partial" not in found[0]
+    assert "a Session that could not be hashed" in found[0]
+    assert "as an argument" in found[0]
 
 
 def test_an_ordinary_unhashable_type_still_gets_the_hasher_advice(full_warning_text, disk_cash):
@@ -117,7 +121,7 @@ def test_registering_a_hasher_for_an_ordinary_type_is_silent(disk_cash):
 # ---------------------------------------------------------------------------
 
 
-def test_a_frame_next_to_a_partial_of_a_lambda_blames_the_partial(disk_cash):
+def test_a_frame_next_to_a_partial_of_a_lambda_blames_what_the_lambda_captured(disk_cash):
     pd = pytest.importorskip("pandas")
 
     @disk_cash.cache
@@ -127,9 +131,9 @@ def test_a_frame_next_to_a_partial_of_a_lambda_blames_the_partial(disk_cash):
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
         score(pd.DataFrame({"a": [1, 2]}), functools.partial(_lambda_holding(Session(), lambda d, k: d * k), k=2))
-    found = _messages(rec, "KEY-UNHASHABLE-ARG")
+    found = _messages(rec, "KEY-UNHASHABLE-CAPTURE")
     assert found
-    assert "of type partial" in found[0]
+    assert "a Session that could not be hashed" in found[0]
     assert "DataFrame" not in found[0]
 
 
