@@ -46,7 +46,7 @@ def test_every_function_replaced_while_a_call_is_tracked_pickles_as_the_original
     tracker is open pickles, loads back as what stands under that name, and
     is the original again once the tracker has closed."""
     import numpy  # noqa: F401 - loaded so their readers are among the replaced
-    import pandas  # noqa: F401
+    import pandas  # noqa: F401 - loaded so their readers are among the replaced
 
     before = _module_callables()
     replaced = {}
@@ -96,14 +96,14 @@ def _sizes(files):
 def test_a_cached_function_maps_a_probe_over_a_process_pool(disk_cash, tmp_path, recwarn):
     files = []
     for name in ("a.txt", "b.txt"):
-        (tmp_path / name).write_text(name * 3)
+        (tmp_path / name).write_text(name * 3, encoding="utf-8")
         files.append(str(tmp_path / name))
     files = tuple(files)
     expected = _sizes(files)
     cached = disk_cash.cache(_sizes)
     assert cached(files) == expected == [15, 15]
     # The workers' probes are still the call's inputs.
-    (tmp_path / "a.txt").write_text("longer than before")
+    (tmp_path / "a.txt").write_text("longer than before", encoding="utf-8")
     assert cached(files) == [18, 15]
 
 
@@ -119,7 +119,7 @@ def _probes_in_a_pool(files):
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs the fork start method")
 def test_every_probe_a_cached_call_replaces_goes_through_a_pool(disk_cash, tmp_path, recwarn):
-    (tmp_path / "a.txt").write_text("abc")
+    (tmp_path / "a.txt").write_text("abc", encoding="utf-8")
     files = (str(tmp_path / "a.txt"), str(tmp_path / "missing.txt"))
     with pytest.raises(FileNotFoundError):
         _probes_in_a_pool(files)  # os.stat of the missing file, plain
@@ -135,9 +135,9 @@ def _sizes_on_threads(files):
 
 
 def test_a_probe_run_as_a_thread_pool_task_is_an_input_too(disk_cash, tmp_path, recwarn):
-    (tmp_path / "a.txt").write_text("abc")
+    (tmp_path / "a.txt").write_text("abc", encoding="utf-8")
     files = (str(tmp_path / "a.txt"),)
     cached = disk_cash.cache(_sizes_on_threads)
     assert cached(files) == [3]
-    (tmp_path / "a.txt").write_text("longer than before")
+    (tmp_path / "a.txt").write_text("longer than before", encoding="utf-8")
     assert cached(files) == [18]

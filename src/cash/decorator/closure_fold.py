@@ -317,7 +317,8 @@ def capture_digest(args: ArgHasher, value: Any) -> str:
     its code and what it was built with (`HelperIdentity.value_digest`). Any
     other object is hashed as it is, by its ``__cash_key__`` or registered
     hasher if it has one. Raises what hashing raises."""
-    helpers = _HELPERS_BY_HASHER.get(args)
+    found = _HELPERS_BY_HASHER.get(args)
+    helpers = found() if found is not None else None
     if helpers is not None:
         return helpers.value_digest(value)
     if type(value) in (dict, list, tuple) and plain_data_kind(value) is None:
@@ -688,7 +689,9 @@ class HelperIdentity:
         self._args = args
         self._captures = captures
         self._mutations = mutations
-        _HELPERS_BY_HASHER[args] = self
+        # Weakly both ways: the helpers hold the hasher, and a discarded
+        # Cash must be collected with both.
+        _HELPERS_BY_HASHER[args] = weakref.ref(self)
         # id(helper) -> (helper, __defaults__, __kwdefaults__, what its read
         # cells held, identity snapshots of the mutable values it keyed,
         # identity, the drift guard's entries, the code's digest, the

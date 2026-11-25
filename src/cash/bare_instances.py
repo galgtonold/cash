@@ -25,8 +25,9 @@ import threading
 import types
 from typing import Any
 
-from ._type_memo import TypeMemo, type_key
+from ._type_memo import TypeMemo, class_dict, class_qualname, type_key
 from ._user_attrs import plain_getattr
+from .install_paths import is_user_code_module
 
 #: What a class body may hold and still be a marker's: what every class gets,
 #: and how an instance prints or tests. Anything else (a method, a constant,
@@ -129,8 +130,9 @@ _NAMELESS_MAX = 1024
 #: ``len(sys.modules)`` when `_NAMELESS` was last emptied, and the searches
 #: that found nothing since.
 _NAMELESS_AT = [0, 0]
-#: Searches that may find nothing before one inside an object's state is
-#: skipped (`name_of` with *patient* false) until a module is loaded.
+#: Searches that may find nothing before one inside an object's state
+#: reads the user's modules only (`name_of` with *patient* false), until a
+#: module is loaded.
 _FRUITLESS_MAX = 8
 
 
@@ -147,22 +149,25 @@ def name_of(value: Any, patient: bool = True) -> str | None:
     A search reads every loaded module's namespace (20 ms with pandas and
     scikit-learn loaded). *patient* false is for a value met inside an
     object's state, where an unnamed one is no error and there may be one
-    per object: after a few searches that found nothing, the next ones are
-    skipped until a module is loaded.
+    per object: after a few searches that found nothing, the next ones
+    read the user's own modules only, until a module is loaded. A flag
+    made since (a notebook cell run again, a module reloaded) is the
+    user's; a library's are all found before, or after the import that
+    brings them.
     """
     held = _NAMES.get(id(value))
     if held is not None and held[0] is value and _resolves(held[1], value):
         return held[1]
     loaded = len(sys.modules)
+    only_users = False
     with _NAMES_LOCK:
         if _NAMELESS_AT[0] != loaded:
             _NAMELESS.clear()
             _NAMELESS_AT[:] = [loaded, 0]
         elif _NAMELESS.get(id(value)) is value and held is None:
             return None
-        elif not patient and _NAMELESS_AT[1] >= _FRUITLESS_MAX:
-            return None
-    name = _search(value)
+        only_users = not patient and _NAMELESS_AT[1] >= _FRUITLESS_MAX
+    name = _search(value, _user_modules() if only_users else None)
     with _NAMES_LOCK:
         if name is not None:
             _NAMES[id(value)] = (value, name)
@@ -202,9 +207,11 @@ def _names_in(module_name: str, namespace: dict, value: Any) -> list[tuple[int, 
     for name, held in _items(namespace):
         if held is value:
             found.append((0, f"{module_name}:{name}"))
-        elif isinstance(held, type) and vars(held).get("__module__") == module_name:
-            qualname = vars(held).get("__qualname__", name)
-            for attr, attr_value in _items(vars(held)):
+        elif issubclass(type(held), type) and class_dict(held).get("__module__") == module_name:
+            # Read past the class's own lookup: a metaclass's hook of the
+            # user's is not run to key a call.
+            qualname = class_qualname(held)
+            for attr, attr_value in _items(class_dict(held)):
                 if attr_value is value and isinstance(qualname, str) and "<" not in qualname:
                     found.append((1, f"{module_name}:{qualname}.{attr}"))
     return found
@@ -220,9 +227,30 @@ def _items(namespace: Any) -> list[tuple[str, Any]]:
     return []
 
 
-def _search(value: Any) -> str | None:
+#: ``len(sys.modules)`` and the names of the user's own modules then.
+_USER_MODULES: list[Any] = [0, ()]
+
+
+def _user_modules() -> tuple[str, ...]:
+    """The loaded modules that are the user's code (a notebook's
+    ``__main__`` included), listed again when a module is loaded."""
+    loaded = len(sys.modules)
+    if _USER_MODULES[0] != loaded:
+        names = tuple(
+            name
+            for name, module in list(sys.modules.items())
+            if isinstance(module, types.ModuleType) and is_user_code_module(module)
+        )
+        _USER_MODULES[:] = [loaded, names]
+    return _USER_MODULES[1]
+
+
+def _search(value: Any, among: tuple[str, ...] | None = None) -> str | None:
+    """The first name, in sorted order, that holds *value* in a loaded
+    module; in the modules named *among* only, when given."""
     found: list[tuple[int, str]] = []
-    for module_name, module in list(sys.modules.items()):
+    modules = list(sys.modules.items()) if among is None else [(name, sys.modules.get(name)) for name in among]
+    for module_name, module in modules:
         if type(module) is not types.ModuleType and not isinstance(module, types.ModuleType):
             continue
         namespace = plain_getattr(module, "__dict__", None)
