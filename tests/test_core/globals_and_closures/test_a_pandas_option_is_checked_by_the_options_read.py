@@ -111,6 +111,15 @@ def plugin(tmp_path, monkeypatch):
     return load
 
 
+#: How long the watched world must stand still, with the memo still not
+#: serving, before the wait gives up: a rescan is due at most
+#: `HitMemo.RESCAN_AFTER_S` after the last, and a few calls arm it.
+STILL_FOR = 5 * hit_memo.HitMemo.RESCAN_AFTER_S + 1.0
+#: How long the wait goes on while the world keeps moving. Under the
+#: per-test timeout.
+MOVING_FOR = 20.0
+
+
 def _settle(cached, plain, path, *args):
     """Call until served without running the body; on the fast path, until
     served from the memo, for one it serves (`FAST`).
@@ -119,7 +128,14 @@ def _settle(cached, plain, path, *args):
     ``warnings.filters`` back around its work (``catch_warnings``), and once
     any code cash scanned in the process names ``filters``, each such write
     moves the world and no memo is served until it is scanned again. Run
-    between the cached calls, it kept the memo from ever arming."""
+    between the cached calls, it kept the memo from ever arming.
+
+    The memo arms only in a world that holds still across a few calls, and
+    under xdist what other tests left in the process (a thread still
+    importing, a module global rebound) can keep moving it for a while: the
+    wait counts the time since the world last moved, not since it began. A
+    memo that does not arm in a world standing still fails at once; a world
+    that never stands still fails too, saying so."""
     for _ in range(3):
         assert cached(*args) == plain(*args)
     if path != "fast" or plain not in FAST:
@@ -127,13 +143,28 @@ def _settle(cached, plain, path, *args):
     # As after a test whose cached code named it: the worst case, always.
     hit_memo._cw.world_add_names(("filters",))
     want = plain(*args)
-    deadline = time.monotonic() + 5 * hit_memo.HitMemo.RESCAN_AFTER_S + 1.0
+    start = still_since = time.monotonic()
+    epochs = hit_memo.world_epochs()
+    calls = moved = 0
     while True:
         before = hit_memo.status()["fast_hits"]
         assert cached(*args) == want
         if hit_memo.status()["fast_hits"] > before:
             return
-        assert time.monotonic() < deadline, "not served from the fast path: the test proves nothing"
+        calls += 1
+        now = time.monotonic()
+        if hit_memo.world_epochs() != epochs:
+            epochs = hit_memo.world_epochs()
+            moved += 1
+            still_since = now
+        assert now - still_since < STILL_FOR, (
+            f"not served from the fast path in a world that stood still {now - still_since:.2f} s "
+            f"({calls} calls, {moved} with a move): {hit_memo.status()}"
+        )
+        assert now - start < MOVING_FOR, (
+            f"the world moved around {moved} of {calls} calls for {now - start:.1f} s: "
+            f"no still world to arm the memo in: {hit_memo.status()}"
+        )
         time.sleep(0.01)
 
 
