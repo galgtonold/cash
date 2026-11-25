@@ -61,6 +61,7 @@ __all__ = [
     "create_temp_file",
     "entry_totals",
     "format_tag",
+    "is_store_entry_name",
     "is_cash_file",
     "owned_temp_prefix",
     "recreate_cache_dir",
@@ -130,6 +131,25 @@ def format_tag() -> str:
     the store neither serve nor delete each other's.
     """
     return f"f{CACHE_FORMAT_VERSION}"
+
+
+def is_store_entry_name(rest: str, separator: str, suffixes: tuple[str, ...], *, untagged: bool) -> bool:
+    """Is *rest*, a name in a shared store with the configured prefix taken
+    off, one cash wrote?
+
+    ``f<N><separator><key><suffix>`` for any format N: clearing takes every
+    format's entries. With *untagged*, also ``<key><suffix>`` with no ``/``
+    in it, the name of an entry from before names carried the format. Only
+    for a store with a prefix: without one, that would be any name with the
+    suffix. Anything else is not cash's and is never removed (a prefix such
+    as ``team`` also starts ``team-reports/...``).
+    """
+    if not rest.endswith(suffixes):
+        return False
+    tag, found, key = rest.partition(separator)
+    if found and key and tag[:1] == "f" and tag[1:].isdigit():
+        return True
+    return untagged and "/" not in rest
 
 
 #: The per-directory format stamp. No entry suffix, so entry globs skip it.

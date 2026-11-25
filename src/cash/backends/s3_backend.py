@@ -240,27 +240,40 @@ class S3Backend(CacheBackend):
             raise CacheBackendError(f"S3 delete failed for key '{key}': {e}") from e
 
     def clear(self) -> None:
+        """Delete this cache's entries, of every cache format, and nothing else.
+
+        The prefix is a string, not a folder: ``team`` also starts
+        ``team-reports/q3.pdf``. So only objects named as cash names an entry
+        go (`cache_dir.is_store_entry_name`), whatever else the listing
+        returns.
+        """
         self._writes.wait_all()
-        # List and delete all objects with prefix
         try:
             paginator = self.s3.get_paginator("list_objects_v2")
             pages = paginator.paginate(Bucket=self.bucket, Prefix=self.prefix)
 
             delete_keys = []
             for page in pages:
-                if "Contents" in page:
-                    for obj in page["Contents"]:
-                        delete_keys.append({"Key": obj["Key"]})
+                for obj in page.get("Contents", ()):
+                    if not self._wrote(obj["Key"]):
+                        continue
+                    delete_keys.append({"Key": obj["Key"]})
 
-                        # Batch delete (max 1000)
-                        if len(delete_keys) >= 1000:
-                            self.s3.delete_objects(Bucket=self.bucket, Delete={"Objects": delete_keys})
-                            delete_keys = []
+                    # Batch delete (max 1000)
+                    if len(delete_keys) >= 1000:
+                        self.s3.delete_objects(Bucket=self.bucket, Delete={"Objects": delete_keys})
+                        delete_keys = []
 
             if delete_keys:
                 self.s3.delete_objects(Bucket=self.bucket, Delete={"Objects": delete_keys})
         except self.botocore_exceptions.ClientError as e:
             raise CacheBackendError(f"S3 clear failed for prefix '{self.prefix}': {e}") from e
+
+    def _wrote(self, obj_key: str) -> bool:
+        """Is *obj_key* an entry of this cache, in any cache format?"""
+        return obj_key.startswith(self.prefix) and _cache_dir.is_store_entry_name(
+            obj_key[len(self.prefix) :], "/", (ENTRY_SUFFIX,), untagged=bool(self.prefix)
+        )
 
     def list_entries(self) -> list[dict]:
         self._writes.wait_all()

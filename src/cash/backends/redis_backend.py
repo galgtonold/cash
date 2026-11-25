@@ -240,17 +240,31 @@ class RedisBackend(CacheBackend):
             raise CacheBackendError(f"Redis delete failed for key {key!r}: {exc}") from exc
 
     def clear(self) -> None:
+        """Delete this cache's entries, of every cache format, and nothing else.
+
+        The prefix is a string: ``team`` also starts ``team-reports:...``,
+        and an empty one starts every key of the database. So only keys named
+        as cash names an entry's two keys go (`cache_dir.is_store_entry_name`).
+        """
         self._writes.wait_all()
         try:
             cursor = 0
             while True:
-                cursor, keys = self.client.scan(cursor=cursor, match=f"{self.prefix}*", count=100)
+                cursor, keys = self.client.scan(cursor=cursor, match=f"{_glob_escape(self.prefix)}*", count=100)
+                keys = [k for k in keys if self._wrote(k)]
                 if keys:
                     self.client.delete(*keys)
                 if cursor == 0:
                     break
         except (RedisError, OSError) as exc:
             raise CacheBackendError(f"Redis clear failed: {exc}") from exc
+
+    def _wrote(self, redis_key: Any) -> bool:
+        """Is *redis_key* one of an entry's keys, in any cache format?"""
+        name = redis_key.decode("utf-8", "replace") if isinstance(redis_key, bytes) else str(redis_key)
+        return name.startswith(self.prefix) and _cache_dir.is_store_entry_name(
+            name[len(self.prefix) :], ":", (_META_SUFFIX, _DATA_SUFFIX), untagged=bool(self.prefix)
+        )
 
     def list_entries(self) -> list[dict]:
         self._writes.wait_all()
