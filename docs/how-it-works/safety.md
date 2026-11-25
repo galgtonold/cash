@@ -106,7 +106,7 @@ cache under the rules below. See
 
 #### Method calls
 
-<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @5d508fb1, cash/analysis/mutations.py:KNOWN_PURE_METHODS @abbc2ea0, cash/analysis/mutations.py:chain_is_pure @404cc05d, cash/analysis/mutations.py:_TopLevelCallCollector._bare_call @6775632d, cash/analysis/mutation_effects.py:captured_call_receivers @976a2a6a, cash/analysis/namespace_effects.py:call_arguments @fbcae3a2 -->
+<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @3854a76b, cash/analysis/mutations.py:KNOWN_PURE_METHODS @abbc2ea0, cash/analysis/mutations.py:chain_is_pure @404cc05d, cash/analysis/mutations.py:_TopLevelCallCollector._bare_call @6775632d, cash/analysis/mutation_effects.py:captured_call_receivers @976a2a6a, cash/analysis/namespace_effects.py:call_arguments @fbcae3a2 -->
 A method call has no assignment target, so cash classifies its object:
 
 - **Not a change.** A call on a module (`np.mean(x)`, `time.sleep(1)`), a call
@@ -160,6 +160,15 @@ A method call has no assignment target, so cash classifies its object:
   and the cached call's own check of its arguments share one full read of
   each argument before the call and one after it, and a DataFrame that
   provably has not changed since it was last read is not read again.
+
+A decorator is classified as the call it is. `@reg.add("x")`,
+`@show.register(Kind)` or `@app.route("/x")` above a `def` or `class` calls a
+method on `reg`, `show` or `app`, and that object is decided like the object
+of the call written out; a function used as a decorator (`@register`) is a
+function the statement calls. A method called on a plain function, such as
+`register` on a `functools.singledispatch` function, always counts as changing
+it: what it registers is kept inside the function, where a fingerprint does
+not show it. `@cache.cache` on a `Cash()` of your own is not a change.
 
 A changed object gets a new lineage from the statement, so everything
 downstream of it misses. Restoring it by binding the name to a copy would

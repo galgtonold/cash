@@ -1211,6 +1211,13 @@ default argument or base class does. **Fix:** move the binding above this cell.
 
 - **An empty cached value** (an empty list or frame) may be computed again
   instead of restored.
+- **A function is defined again when a class its type hints name changes.**
+  `def f(x: Kind) -> Kind` keeps `Kind` on the function, so the names in its
+  hints (quoted ones and a type parameter's bound included) are inputs of the
+  `def`, like the names in its defaults. A `def` is quick to run again; what
+  was computed with the function runs again too. A name inside a string that
+  is not a hint (`Literal["train"]`) counts as one as well, when the notebook
+  has a variable of that name.
 - **A pandas table served from memory is read-only past pandas.** Under
   copy-on-write the memory tier shares a table's data between hits, so
   `df["x"].array[0] = v`, or writing to a NumPy view made writable again,
