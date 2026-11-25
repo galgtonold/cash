@@ -824,7 +824,7 @@ def _shared_argument_item(result, supplied, held: bool | None) -> tuple[str, str
     `SHARED_ARGUMENT_ITEMS` in all; past that nothing is proved either
     way, and the answer says the result may hold an item of the argument
     that was not searched to its end."""
-    boxes = [(name, value) for name, value in supplied if isinstance(value, _ITEM_BOXES) and value]
+    boxes = [(name, value) for name, value in supplied if instance_of(value, _ITEM_BOXES) and value]
     if not boxes:
         return None
     wanted = _held_elsewhere(result, held)
