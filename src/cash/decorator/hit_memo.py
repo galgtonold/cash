@@ -2314,7 +2314,16 @@ class HitMemo:
         # The memo is at the core epoch, and at the epochs of the scoped
         # names its scans met (`_SCOPED_NAMES`), kept among its cells.
         core_now = _core_epoch()
-        if state[S_WORLD] != core_now or (self.scoped and not _cw.world_holds(self.scoped, ())):
+        # A write to a closure cell moves no epoch: the cells are compared.
+        # This call's key was built from what they hold NOW; remembered
+        # beside cells that held something else, it would be served again
+        # the day they hold that again -- a variable of the enclosing
+        # function going 1, 9, 1 got the answer for 9.
+        if (
+            state[S_WORLD] != core_now
+            or (self.scoped and not _cw.world_holds(self.scoped, ()))
+            or not _cw.world_holds(state[S_CELLS], state[S_TYPES])
+        ):
             if self.failed_epoch == world_now:
                 return
             self.slow_since_scan += 1
