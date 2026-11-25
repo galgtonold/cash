@@ -14,9 +14,12 @@ instead of running the body. This page covers where results go, how to see what
 cash did, what makes an entry go stale, the parameters, and the limits.
 
 Good candidates are file loads, ETL steps, model fits, simulations and paid
-API calls. A function that takes microseconds gains little: building the key
-of a call costs about a tenth of a millisecond. With the C extension, a hit
-met again is served in about half a microsecond while nothing it reads has
+API calls. A function that takes microseconds gains little: the first hit
+of a key costs about <!-- docnum:cc_cash_small_first_hit -->278 µs<!-- /docnum --> and a miss about
+<!-- docnum:cc_cash_small_miss -->2.2 ms<!-- /docnum -->
+([Per call of a decorated function](benchmarks.md#per-call-of-a-decorated-function)).
+With the C extension, a hit met again is served in about
+<!-- docnum:cc_cash_small_hit -->0.43 µs<!-- /docnum --> while nothing it reads has
 changed; see [a hit met again](how-it-works/decorator-path.md#a-hit-met-again).
 
 ## The minimum
@@ -51,6 +54,37 @@ That is all the setup there is. A few rules hold for every cached function:
   defined again since it was stored (`importlib.reload` of its module) comes
   back as an instance of the class its module names now, as it does when
   read from disk.
+
+### What you can decorate
+
+<!-- claim: cash/decorator/cached_function.py:checked_target @1e4b8126 -->
+`@cash.cache` goes directly on a function: a `def`, an `async def`, a
+method, a `lambda` or another callable object. Anything else raises a
+`TypeError` on the decorator line, with the fix in the message:
+
+- **`@property`, `@classmethod` and `@staticmethod` go above it**, so cash
+  wraps the plain function:
+
+    ```python
+    import cash
+
+    class Report:
+        @property
+        @cash.cache
+        def total(self):
+            return 42
+
+        @staticmethod
+        @cash.cache
+        def split_row(text):
+            return text.split(",")
+    ```
+
+- **Options are named.** `@cash.cache(128)`, the `functools.lru_cache`
+  habit, is refused: there is no `maxsize`, entries live on disk and the
+  [cache size limit](#cache-size-limit) bounds the folder.
+- **A class is not a function.** Decorate the function that builds the
+  instance, or the slow methods.
 
 To configure your own instance instead of the shared default, create a `Cash`
 and use its `cache` method:
@@ -167,6 +201,7 @@ Pick the narrowest tool that does the job:
 | One function's entries, from a shell | `cash clear --function slow_square` |
 | One entry | `cash clear --entry ID` (ids from `cash inspect --function NAME`) |
 | Entries whose `ttl` has run out | `cash clear --expired`, or `cash.cleanup()` in code |
+| Every function this process has decorated | `cash.clear_all()` in code |
 | Everything | `cash clear --all` |
 
 A clear reaches processes that are still running, whichever of these made it:
@@ -309,8 +344,9 @@ format instead of stderr.
 prints as one line: the code, what happened, the fix, and a link to its entry
 on [Warnings](warnings.md). The `file:line` in front is the call in your code
 that set it off; a `line N` inside the message is a line of the cached
-function's own file. When a second function gets the same finding under
-the same code, its line says only `also on <name>`. `f.cache_info()["warnings"]` keeps each one's
+function's own file. When a second function gets a warning under a code
+already shown, its line names what was found in it and ends
+`Same fix as for <name>`. `f.cache_info()["warnings"]` keeps each one's
 full text, with every finding listed, and `CASH_WARNING_DETAIL=full` prints
 that instead. `logging.captureWarnings(True)` routes warnings to your
 handlers.
@@ -586,7 +622,7 @@ argument carries stays in the key whatever the key function returns
 
 ## Parameters
 
-<!-- claim: cash/core.py:Cash.cache @2248de10 -->
+<!-- claim: cash/core.py:Cash.cache @1db754d3 -->
 All parameters are keyword-only and optional:
 
 | Parameter | Default | What it does |
@@ -617,12 +653,17 @@ Checks and rules that hold for all of them:
   and `key=` (and a `cash.Ignore` annotation): they decide what the key
   reads, so adding, removing or changing one recomputes, as does adding,
   removing or changing a declared dependency.
-- Locking is not a decorator parameter: it is `Cash(use_locking=True)`, see
+- Locking is not a decorator parameter: it is the `use_locking` setting
+  (`cash.configure(use_locking=True)`), see
   [Threads and processes](tutorials/feature-guides/thread-safety.md).
 
 ### `ttl=`
 
 ```python
+import requests
+
+import cash
+
 @cash.cache(ttl=300)   # five minutes
 def rates():
     return requests.get("https://api.example.com/rates").json()
@@ -649,6 +690,10 @@ After the ttl, the next call recomputes and replaces the entry.
 ### `file_depends_on=` and `depends_on=`
 
 ```python
+import yaml
+
+import cash
+
 @cash.cache(file_depends_on="config.yaml")
 def parse_config():
     return yaml.safe_load(open("config.yaml"))
@@ -667,6 +712,8 @@ run time, a library function whose code you want in the key, or a
 is keyed by its source:
 
 ```python
+import cash
+
 def score(user):             # not decorated
     return user.visits * 2
 
@@ -687,6 +734,8 @@ See [Dynamic dependencies](tutorials/feature-guides/dynamic-dependencies.md).
 ### `cache_if=`
 
 ```python
+import cash
+
 @cash.cache(cache_if=lambda r: r is not None)
 def lookup(key):
     return cache_backend.get_or_none(key)
@@ -880,6 +929,8 @@ frame is hashed on every call it is passed to. When a result comes from another
 cached function and nothing changes it afterwards, say so on the producer:
 
 ```python
+import cash
+
 @cash.cache(frozen=True)
 def train(data):
     # nothing downstream modifies the model
@@ -1112,6 +1163,10 @@ that changes nothing is keyed by its code and cached as usual, and
 is fine, put a comment on the line the warning names:
 
 ```python
+import requests
+
+import cash
+
 @cash.cache
 def fetch_user(uid):
     url = f"https://api.example.com/users/{uid}"
@@ -1170,6 +1225,8 @@ To tell cash about a helper it cannot judge, mark it with `@cash.pure` or
 **`f.cache_info()`** returns this process's counters:
 
 ```python
+import cash
+
 @cash.cache
 def double(x):
     return x * 2
@@ -1218,7 +1275,9 @@ print(double.explain(5))
 [HIT] model.double - hit
   cache_dir: /srv/proj/.cash
   ...
-  execution_time_saved: 3.5e-06
+  cached_at: 2026-03-02 09:14:07 (local time)
+  cache_age_seconds: 0.0016 s
+  execution_time_saved: 3.5e-06 s
 ```
 
 `reason` is one of `hit`, `no_entry`, `ttl_expired`, `file_changed`,
@@ -1323,7 +1382,7 @@ with its fix:
   a logger or a `verbose=` flag.
 - <a id="methods-and-self"></a>[Methods and `self`](decorator-limitations.md#methods-and-self)
 - <a id="code-you-pass-as-an-argument"></a>[Code you pass as an argument](decorator-limitations.md#code-you-pass-as-an-argument)
-- [Library settings before Python 3.12](decorator-limitations.md#library-settings-before-python-312)
+- [Library settings cash cannot check](decorator-limitations.md#library-settings-cash-cannot-check)
 - <a id="reads-cash-cannot-see"></a>[Reads cash cannot see](decorator-limitations.md#reads-cash-cannot-see):
   C extensions, subprocesses, threads you start.
 - [An edit that keeps the size and timestamps](decorator-limitations.md#an-edit-that-keeps-the-size-and-timestamps)

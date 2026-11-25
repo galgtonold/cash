@@ -1,11 +1,16 @@
 tool,argument,outcome,seconds_per_call,calls,cpu,cores,python,platform,cash_version,joblib_version,numpy_version,measured_on
-cash,small,hit,0.000109521,20000,Intel(R) Xeon(R) Processor @ 2.10GHz,4,3.11.15,Linux-6.18.44-fc-v37-x86_64-with-glibc2.39,0.11.0,1.6.0,2.4.6,2026-09-26
-cash,small,miss,0.001012422,2000,Intel(R) Xeon(R) Processor @ 2.10GHz,4,3.11.15,Linux-6.18.44-fc-v37-x86_64-with-glibc2.39,0.11.0,1.6.0,2.4.6,2026-09-26
-cash,array,hit,0.005763125,60,Intel(R) Xeon(R) Processor @ 2.10GHz,4,3.11.15,Linux-6.18.44-fc-v37-x86_64-with-glibc2.39,0.11.0,1.6.0,2.4.6,2026-09-26
-cash,array,miss,0.012401406,40,Intel(R) Xeon(R) Processor @ 2.10GHz,4,3.11.15,Linux-6.18.44-fc-v37-x86_64-with-glibc2.39,0.11.0,1.6.0,2.4.6,2026-09-26
-lru_cache,small,hit,0.000000035,20000,Intel(R) Xeon(R) Processor @ 2.10GHz,4,3.11.15,Linux-6.18.44-fc-v37-x86_64-with-glibc2.39,0.11.0,1.6.0,2.4.6,2026-09-26
-lru_cache,small,miss,0.000000074,2000,Intel(R) Xeon(R) Processor @ 2.10GHz,4,3.11.15,Linux-6.18.44-fc-v37-x86_64-with-glibc2.39,0.11.0,1.6.0,2.4.6,2026-09-26
-joblib,small,hit,0.000166204,20000,Intel(R) Xeon(R) Processor @ 2.10GHz,4,3.11.15,Linux-6.18.44-fc-v37-x86_64-with-glibc2.39,0.11.0,1.6.0,2.4.6,2026-09-26
-joblib,small,miss,0.001177679,2000,Intel(R) Xeon(R) Processor @ 2.10GHz,4,3.11.15,Linux-6.18.44-fc-v37-x86_64-with-glibc2.39,0.11.0,1.6.0,2.4.6,2026-09-26
-joblib,array,hit,0.013204579,60,Intel(R) Xeon(R) Processor @ 2.10GHz,4,3.11.15,Linux-6.18.44-fc-v37-x86_64-with-glibc2.39,0.11.0,1.6.0,2.4.6,2026-09-26
-joblib,array,miss,0.014560876,40,Intel(R) Xeon(R) Processor @ 2.10GHz,4,3.11.15,Linux-6.18.44-fc-v37-x86_64-with-glibc2.39,0.11.0,1.6.0,2.4.6,2026-09-26
+cash,small,hit,0.000000426,20000,Intel(R) Xeon(R) Processor @ 2.10GHz,4,3.14.6,Linux-6.18.44-fc-v880-x86_64-with-glibc2.39,0.15.0,1.6.0,2.5.5,2026-11-25
+cash,small,first_hit,0.000277684,2000,Intel(R) Xeon(R) Processor @ 2.10GHz,4,3.14.6,Linux-6.18.44-fc-v880-x86_64-with-glibc2.39,0.15.0,1.6.0,2.5.5,2026-11-25
+cash,small,miss,0.002180677,2000,Intel(R) Xeon(R) Processor @ 2.10GHz,4,3.14.6,Linux-6.18.44-fc-v880-x86_64-with-glibc2.39,0.15.0,1.6.0,2.5.5,2026-11-25
+cash,array,hit,0.002036301,60,Intel(R) Xeon(R) Processor @ 2.10GHz,4,3.14.6,Linux-6.18.44-fc-v880-x86_64-with-glibc2.39,0.15.0,1.6.0,2.5.5,2026-11-25
+cash,array,first_hit,0.002563658,40,Intel(R) Xeon(R) Processor @ 2.10GHz,4,3.14.6,Linux-6.18.44-fc-v880-x86_64-with-glibc2.39,0.15.0,1.6.0,2.5.5,2026-11-25
+cash,array,miss,0.006187914,40,Intel(R) Xeon(R) Processor @ 2.10GHz,4,3.14.6,Linux-6.18.44-fc-v880-x86_64-with-glibc2.39,0.15.0,1.6.0,2.5.5,2026-11-25
+lru_cache,small,hit,0.000000031,20000,Intel(R) Xeon(R) Processor @ 2.10GHz,4,3.14.6,Linux-6.18.44-fc-v880-x86_64-with-glibc2.39,0.15.0,1.6.0,2.5.5,2026-11-25
+lru_cache,small,first_hit,0.000000036,2000,Intel(R) Xeon(R) Processor @ 2.10GHz,4,3.14.6,Linux-6.18.44-fc-v880-x86_64-with-glibc2.39,0.15.0,1.6.0,2.5.5,2026-11-25
+lru_cache,small,miss,0.000000076,2000,Intel(R) Xeon(R) Processor @ 2.10GHz,4,3.14.6,Linux-6.18.44-fc-v880-x86_64-with-glibc2.39,0.15.0,1.6.0,2.5.5,2026-11-25
+joblib,small,hit,0.000124781,20000,Intel(R) Xeon(R) Processor @ 2.10GHz,4,3.14.6,Linux-6.18.44-fc-v880-x86_64-with-glibc2.39,0.15.0,1.6.0,2.5.5,2026-11-25
+joblib,small,first_hit,0.000169290,2000,Intel(R) Xeon(R) Processor @ 2.10GHz,4,3.14.6,Linux-6.18.44-fc-v880-x86_64-with-glibc2.39,0.15.0,1.6.0,2.5.5,2026-11-25
+joblib,small,miss,0.001368548,2000,Intel(R) Xeon(R) Processor @ 2.10GHz,4,3.14.6,Linux-6.18.44-fc-v880-x86_64-with-glibc2.39,0.15.0,1.6.0,2.5.5,2026-11-25
+joblib,array,hit,0.013551291,60,Intel(R) Xeon(R) Processor @ 2.10GHz,4,3.14.6,Linux-6.18.44-fc-v880-x86_64-with-glibc2.39,0.15.0,1.6.0,2.5.5,2026-11-25
+joblib,array,first_hit,0.013366101,40,Intel(R) Xeon(R) Processor @ 2.10GHz,4,3.14.6,Linux-6.18.44-fc-v880-x86_64-with-glibc2.39,0.15.0,1.6.0,2.5.5,2026-11-25
+joblib,array,miss,0.014369836,40,Intel(R) Xeon(R) Processor @ 2.10GHz,4,3.14.6,Linux-6.18.44-fc-v880-x86_64-with-glibc2.39,0.15.0,1.6.0,2.5.5,2026-11-25

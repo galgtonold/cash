@@ -233,8 +233,8 @@ def test_a_picked_function_with_a_side_effect_is_not_served(load):
         assert m.pick("noisy", 5) == 5
         assert m.pick("noisy", 5) == 5
     assert m.RUNS == ["noisy", "noisy"]
-    # The function's own list: the shown warning is shortened to "also on
-    # pick" when a test before this one in the process gave the same reason.
+    # The function's own list: the shown warning is shortened (no fix, no
+    # explanation) when a test before this one in the process gave the same reason.
     texts = [w["message"] for w in m.pick.cache_info()["warnings"] if w["code"] == "KEY-UNTRACKABLE-DEP"]
     assert texts and "noisy" in texts[0], texts
 

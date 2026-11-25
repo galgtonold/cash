@@ -65,6 +65,46 @@ def test_module_cleanup_removes_expired_entries():
         cash.reset_session()
 
 
+def test_module_level_clear_all_clears_the_default_instances_functions():
+    """``cash.cleanup()`` had a module-level form and ``clear_all`` did not:
+    clearing from code needed the instance, or a shell."""
+    cash.reset_session()
+    try:
+
+        @cash.cache
+        def f(x):
+            return x * 2
+
+        @cash.cache
+        def g(x):
+            return x + 1
+
+        assert (f(1), f(1), g(1), g(1)) == (2, 2, 2, 2)
+        assert f.cache_info()["hits"] == g.cache_info()["hits"] == 1
+        assert f.explain(1).would_hit and g.explain(1).would_hit
+        assert cash.clear_all() is None
+        assert not f.explain(1).would_hit and not g.explain(1).would_hit
+        assert f.cache_info()["hits"] == g.cache_info()["hits"] == 0
+        assert "clear_all" in cash.__all__
+    finally:
+        cash.reset_session()
+
+
+def test_dir_lists_the_public_names_only():
+    """``dir(cash)`` feeds tab completion. It listed what the module imports
+    to build its API (``os``, ``threading``, ``Any``, about 60 submodules)
+    beside the API."""
+    names = dir(cash)
+    assert set(names) == {*cash.__all__, "cache", "show_stats", "register_hasher", "help", "__version__"}
+    assert names == sorted(names)
+    for private in ("os", "threading", "contextlib", "Any", "Iterator", "core", "install_read_watch"):
+        assert private not in names
+    # Still reachable, as before: only the listing is narrower.
+    assert cash.core.Cash is cash.Cash
+    for name in names:
+        assert getattr(cash, name) is not None
+
+
 # --- #4: ASCII warning text -----------------------------------------------
 
 

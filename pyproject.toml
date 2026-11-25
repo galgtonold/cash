@@ -119,8 +119,11 @@ dependencies = [
     "tomli>=1.1; python_version < '3.11'",
     # Hashes big arrays, columns and files, ten times faster than SHA-256 on
     # a CPU without SHA instructions. Where it cannot load, cash falls back
-    # to hashlib's SHA-256.
-    "blake3>=1.0,<2",
+    # to hashlib's SHA-256. Asked for on CPython only, where it has wheels:
+    # on another interpreter pip would build it from source (a Rust
+    # toolchain) or, told to use wheels only, quietly pick an old cash that
+    # did not depend on it.
+    "blake3>=1.0,<2; platform_python_implementation == 'CPython'",
 ]
 
 [project.optional-dependencies]

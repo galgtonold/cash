@@ -1,6 +1,6 @@
 """Per-call cost of helper_memos.watched on the call path (one scan of the
-function's globals + every user module, per call executed). Place under
-tests/test_notebook/calls/ and run with -rP -n 0."""
+function's globals + every user module, per call executed). Run with -rP -n 0
+to see the timings."""
 
 import time
 

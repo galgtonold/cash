@@ -61,12 +61,12 @@ so and does nothing.
 ```
 
 ### `%cash_off`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_off @c73748cd -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_off @b38b65dd -->
 
 **Usage:** `%cash_off`
 
 Cells after this one run uncached until the next `%cash_on`. It also clears the
-default `ttl`.
+default `ttl`. It prints `Cash disabled.`; what the cache holds is kept.
 
 ### `%cash_persist`
 <!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_persist @729a986b -->
@@ -149,7 +149,7 @@ explains each line.
 ```
 
 ### `%cash_status`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @17cd0ee5 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @c37db8ff -->
 
 **Usage:** `%cash_status [dict|json]`
 
@@ -162,13 +162,22 @@ whether folders are watched for changes to the files cells read
 [invalidation](how-it-works/invalidation.md#files)), and whether cash sees
 files that C libraries open themselves (`native_file_hook`; see
 [Reads through a loader cash cannot see](known-limitations.md#reads-through-a-loader-cash-cannot-see)). With no argument it prints JSON and
-returns the dict; `dict` returns it without printing; `json` returns a JSON
-string. Statuses use the enum names: `COMPUTED` for the badge's EXECUTED,
+returns nothing; `dict` returns the dict without printing; `json` returns a
+JSON string. Statuses use the enum names: `COMPUTED` for the badge's EXECUTED,
 `RESTORED` for CACHED, and `MIXED` for a statement that ran while calls inside
 it came from the cache (a cached helper called in a loop). What those calls
 saved counts in the statement's `saved_time` and the cell's
 `total_restored_time`, and its `calls` entry counts them. Any other argument
 prints an error and returns `None`.
+
+<!-- claim: cash/notebook/code_read.py:status @75f7a454 -->
+`library_rules` has one line per rule that rests on a library's own pickling
+code: a fitted scikit-learn estimator, or a numpy masked array, that keeps a
+slice of your data can be stored only while that code is a text cash has read.
+`on` names the release it was read in and the one installed. `off` means the
+installed release changed that code: such a statement then runs every time,
+which is safe, until a cash release has read the new code. `not loaded` means
+the library has not been imported.
 
 ```python
 status = %cash_status dict

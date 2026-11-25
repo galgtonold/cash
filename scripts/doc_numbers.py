@@ -229,6 +229,38 @@ class Fact:
         return self._render(self._compute())
 
 
+#: The per-call cost figures ``benchmarks/measure_call_cost.py`` measured,
+#: as committed. One fact per row, ``cc_<tool>_<argument>_<outcome>``
+#: (``cc_cash_small_miss``), written the way the script prints it, plus the
+#: versions the rows were measured on. The pages that advise on the figures
+#: (when to skip caching, thread pools) quote them through markers, so
+#: re-running the script and ``--update`` moves every page at once.
+CALL_COST_CSV = REPO / "benchmarks" / "call_cost.frozen.csv"
+
+
+def _call_cost_facts() -> list[Fact]:
+    import csv
+
+    sys.path.insert(0, str(REPO))
+    from benchmarks._seconds import format_seconds
+
+    with CALL_COST_CSV.open(newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    facts = [
+        Fact(
+            f"cc_{row['tool']}_{row['argument']}_{row['outcome']}",
+            lambda row=row: format_seconds(float(row["seconds_per_call"])),
+        )
+        for row in rows
+    ]
+    first = rows[0]
+    facts.append(Fact("cc_cash_version", lambda: first["cash_version"]))
+    facts.append(Fact("cc_python", lambda: ".".join(first["python"].split(".")[:2])))
+    facts.append(Fact("cc_joblib_version", lambda: first["joblib_version"]))
+    facts.append(Fact("cc_numpy_version", lambda: first["numpy_version"]))
+    return facts
+
+
 def _build_facts() -> dict[str, Fact]:
     version = _read_version()
     facts = [
@@ -239,6 +271,7 @@ def _build_facts() -> dict[str, Fact]:
         Fact("claims", _count_claims, _approx(10)),
         Fact("test_files", _count_test_files, _approx(10)),
     ]
+    facts.extend(_call_cost_facts())
     for name, args in SUITES.items():
         facts.append(Fact(name, lambda a=args: _collect(a), _approx(10), expensive=True))
     facts.append(

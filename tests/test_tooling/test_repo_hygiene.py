@@ -56,6 +56,11 @@ WRAPPED_ROUND = re.compile(r"\bround\r?\n[ \t]*(?:#[ \t]*)?\d+\b", re.IGNORECASE
 # A file NAMED after a ticket ("test_" + "cas" + "123_....py").
 PATH_PATTERN = re.compile(r"cas\d+", re.IGNORECASE)
 
+# A test file or folder NAMED after the review that found the bug: the word
+# as a whole part of the name ("test_" + "review_x.py", a "review/" folder),
+# not inside another word ("preview").
+REVIEW_NAMED = re.compile(r"(?:^|[/_])" + "re" + r"views?(?:[/_.]|$)", re.IGNORECASE)
+
 # Files the content check skips. Keep this list short and explained.
 SKIPPED_FILES = {
     # The changelog is history: it may name what shipped the way it was known then.
@@ -124,6 +129,25 @@ def test_no_tracker_ids_or_test_round_codes_in_tracked_files():
 def test_no_file_is_named_after_a_ticket():
     named = [rel for rel in _scanned_files() if PATH_PATTERN.search(rel)]
     assert not named, "Name these files after the behaviour they check:\n" + "\n".join(named)
+
+
+def test_no_test_is_named_after_a_review():
+    named = [rel for rel in _scanned_files() if rel.startswith("tests/") and REVIEW_NAMED.search(rel)]
+    assert not named, "Name these tests after the behaviour they check:\n" + "\n".join(named)
+
+
+@pytest.mark.parametrize(
+    ("path", "named_after_a_review"),
+    [
+        ("tests/test_notebook/calls/test_" + "re" + "view_call_entry.py", True),
+        ("tests/test_notebook_integration/" + "re" + "view/test_too_many.py", True),
+        ("tests/test_x/test_second_" + "re" + "views.py", True),
+        ("tests/test_ui/test_explorer_preview.py", False),
+        ("tests/test_ui/test_a_cell_is_previewed.py", False),
+    ],
+)
+def test_the_review_name_pattern_catches_the_word_not_its_letters(path, named_after_a_review):
+    assert bool(REVIEW_NAMED.search(path)) is named_after_a_review
 
 
 @pytest.mark.parametrize(

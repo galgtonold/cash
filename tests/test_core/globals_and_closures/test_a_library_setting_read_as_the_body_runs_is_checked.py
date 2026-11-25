@@ -421,6 +421,44 @@ def test_the_first_unrecorded_call_stored_says_so_once(c, unrecorded):
     assert g.cache_info()["hits"] == 1
 
 
+def _fix_of(message) -> str:
+    return str(message).partition("Fix: ")[2]
+
+
+def test_the_way_out_named_fits_why_nothing_was_recorded(c, unrecorded):
+    """With the recording off by ``CASH_TRACE=0`` (or below Python 3.12) the
+    fix names that, and not a way out for coroutines."""
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
+        assert c.cache(adds_one)(1) == 2
+    [said] = _said(seen)
+    fix = _fix_of(said.message)
+    assert fix.startswith("pass the setting in as an argument, ")
+    assert ("unset CASH_TRACE" if RECORDED else "run on Python 3.12 or newer") in fix
+    assert "sync function" not in fix and "iterator" not in fix
+
+
+async def doubles_later(x):
+    return x * 2
+
+
+def test_a_coroutine_is_not_told_to_do_what_it_already_does(c, monkeypatch):
+    """A coroutine's body is never recorded: on Python 3.12+ with tracing on,
+    the first fix named used to be "run on Python 3.12+ with tracing on"."""
+    import asyncio
+
+    monkeypatch.setattr(library_reads, "UNSEEN_SAID", False)
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
+        assert asyncio.run(c.cache(doubles_later)(2)) == 4
+    [said] = _said(seen)
+    assert "a coroutine's body is not recorded" in str(said.message)
+    fix = _fix_of(said.message)
+    assert "3.12" not in fix and "tracing" not in fix and "CASH_TRACE" not in fix, fix
+    assert "pass the setting in as an argument" in fix
+    assert "into a sync function and cache that one instead" in fix
+
+
 def test_a_library_reached_through_an_arguments_method_is_said(c, unrecorded):
     pd = pytest.importorskip("pandas")
     frame = pd.DataFrame({"x": [1.23456]})

@@ -69,6 +69,10 @@ class TestCLIInfo:
         captured = capsys.readouterr()
         assert "Backend" in captured.out
         assert "Cache dir" in captured.out
+        # The first line names the version as `cash version` does.
+        import cash
+
+        assert captured.out.splitlines()[0] == f"cash {cash.__version__}"
 
     def test_info_shows_what_this_projects_cache_holds(self, tmp_path, capsys, monkeypatch):
         """`cash info` named the cache dir but not how big it is --

@@ -116,7 +116,7 @@ load only makes a call slower.
 Unrelated-edit confound, found while calibrating this module
 -------------------------------------------------------------
 The probe for an unrelated upstream edit re-running a loop
-(``upstream/test_review_driven_probes.py::test_unrelated_upstream_edit_reruns_loop``) uses
+(``upstream/test_a_rerun_after_an_edit_matches_a_clean_run.py::test_unrelated_upstream_edit_reruns_loop``) uses
 a bare-expression loop body (``results.append(i * i)``, no function call).
 Every unrelated-edit case in this module measures 0 real calls, so none of
 them reproduces it.

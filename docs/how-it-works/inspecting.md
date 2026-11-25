@@ -33,9 +33,9 @@ For a function in `demo.py`, that prints:
   cache_dir: /home/me/project/.cash
   cache_key: demo.load:c57a56db...::99622373...
   entry_id: 1cea148d7152
-  cached_at: 1790204693.5030863
-  cache_age_seconds: 0.0016086101531982422
-  execution_time_saved: 4.1041999793378636e-05
+  cached_at: 2026-03-02 09:14:07 (local time)
+  cache_age_seconds: 0.00161 s
+  execution_time_saved: 4.1e-05 s
 [MISS] demo.load - no_entry
   cache_dir: /home/me/project/.cash
   cache_key: demo.load:c57a56db...::f6f5c047...
@@ -47,7 +47,8 @@ For a function in `demo.py`, that prints:
 The reason is `hit` or one of `no_entry`, `ttl_expired`, `file_changed`,
 `key_uncomputable` and `disabled`, each with details such as which file
 changed or which argument type could not be hashed. The result is a
-[`CacheExplanation`](../api/cash.md).
+[`CacheExplanation`](../api/cash.md); its `details` dict holds the same
+values as numbers (`cached_at` in seconds since the epoch).
 
 <!-- claim: cash/decorator/explain.py:Explainer._note_matched_by @1d34c690 -->
 For a function with `key=`, a hit whose arguments differ from those of the

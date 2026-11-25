@@ -19,8 +19,8 @@ import warnings
 from cash.backends.persistence_policy import PersistencePolicy
 from cash.notebook import helper_memos
 from tests._cell_driver import run_cash_cell
-from tests.test_notebook.restore.test_review_memofill4_e2e import _plain
-from tests.test_notebook.restore.test_review_memofill5_e2e import IMPORTS, SLEEP, _cycle2
+from tests.test_notebook.restore.test_a_helper_memo_keeps_unusual_keys_apart import IMPORTS, SLEEP, _cycle2
+from tests.test_notebook.restore.test_a_memo_filling_helper_with_defaults_runs_as_plain import _plain
 
 ORIG_OCT = builtins.oct
 

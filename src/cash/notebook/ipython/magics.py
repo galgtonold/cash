@@ -28,7 +28,7 @@ from ...tracking import file_watch, io_watch, log_lines, native_reads, reader_pa
 from ...tracking.function_tracker import FunctionTracker
 from ...tracking.randomness import capture_rng_state, rng_modules_changed, rng_virtual_var
 from ...value_hash import compute_hash
-from .. import shadow
+from .. import code_read, shadow
 from .._protocols import ShellProtocol
 from ..cache_status import CacheStatus
 from ..control_structures import ControlStructureProcessor
@@ -433,7 +433,7 @@ class CashMagics(Magics):
         # reducers again, as they do in a script.
         reducer_writes.unwatch()
         self.global_ttl = None
-        print("[OK] Auto-caching disabled")
+        print("Cash disabled. Cells run as plain Python; the cache is kept.")
 
     @line_magic
     def cash_debug(self, line: str) -> None:
@@ -559,7 +559,7 @@ class CashMagics(Magics):
         """Get machine-readable status of the last cell execution.
 
         Usage:
-            %cash_status          # Print JSON status
+            %cash_status          # Print JSON status (returns nothing)
             %cash_status json     # Return JSON string
             %cash_status dict     # Return Python dict
 
@@ -585,6 +585,10 @@ class CashMagics(Magics):
               cells read, on by default (``CASH_FILE_WATCH=0`` turns it off):
               "on (inotify, N folders watched)", "off (CASH_FILE_WATCH=0; ...)"
               or "off: not supported on macOS; ..."
+            - library_rules: per rule that rests on a library's own pickling
+              code (scikit-learn's estimators, numpy's masked arrays): "on
+              (...)" while the installed code is a text cash read, "off:
+              ..." with what runs every time instead, or "not loaded"
         """
 
         mode = parse_mode(line, ("", "print", "json", "dict"))
@@ -605,6 +609,7 @@ class CashMagics(Magics):
             "fast_path": value_watch.status_line(),
             "native_file_hook": native_reads.status_line(),
             "file_watch": file_watch.status_line(),
+            "library_rules": code_read.status(),
         }
         shadow_status = shadow.status()
         if shadow_status is not None:
@@ -629,9 +634,10 @@ class CashMagics(Magics):
             return status
         if mode == "json":
             return json.dumps(status, default=str, indent=2)
-        # Print formatted output
+        # Printed only: a notebook shows what a cell's last line returns, so
+        # a returned dict put the whole status on the screen a second time.
         print(json.dumps(status, default=str, indent=2))
-        return status
+        return None
 
     @line_magic
     def cash_stats(self, line: str) -> None:

@@ -90,6 +90,12 @@ def forget_cash_memos() -> None:
             memo.cache_clear()
         else:
             memo.clear()
+    # The memos a session owns, by the list each one registered with: plain
+    # dicts and sets the size scan above cannot find, which would otherwise
+    # carry one test's lineages and keys into the next test of the worker.
+    registry = sys.modules.get("cash._memo_registry")
+    if registry is not None:
+        registry.reset("session")
     trace_items = sys.modules.get("cash.tracking.trace_items")
     if trace_items is not None:
         trace_items._TABLES.clear()

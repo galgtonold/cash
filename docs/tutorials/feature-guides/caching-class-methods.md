@@ -12,6 +12,7 @@ entries. That default goes wrong in three ways:
   a row count. That can take seconds per call.
 - **`self` can't be pickled.** An instance holding a connection, a thread or a
   lock gives cash nothing to hash. Every call runs uncached, with a warning
+  that names the attribute
   ([`KEY-UNHASHABLE-ARG`](../../warnings.md#key-unhashable-arg)).
 - **`self` carries state that doesn't matter.** A lazy attribute or a memo
   dict changes the key while the instance means the same thing.

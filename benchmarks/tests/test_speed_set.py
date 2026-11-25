@@ -101,7 +101,21 @@ def test_a_scenario_that_raises_is_reported_not_fatal(monkeypatch, tmp_path):
     assert row["skipped"].startswith("error: ValueError: old cash lacks this")
 
 
-@pytest.mark.parametrize("name", ["nb_seeded_rerun", "dec_first_call"])
+def test_the_new_process_scenario_times_a_hit_from_disk(tmp_path):
+    """Its second metric is the first call of a new process over a warm
+    cache: were the entry not stored by the process before, it would time
+    a miss and call it a hit."""
+    (sc,) = [s for s in SCENARIOS if s.name == "dec_new_process"]
+    assert [m for m, _ in sc.metrics] == ["import", "first_hit"] and sc.clock == "wall"
+    ctx = h.Context(tmp=tmp_path)
+    timings = sc.sample("cash", ctx)
+    assert timings["import"].wall > 0 and timings["first_hit"].wall > 0
+    entries = [p for p in (tmp_path / ".cash-new-process").rglob("*") if p.is_file()]
+    assert entries, "the warm-up process stored nothing"
+    assert sc.sample("plain", ctx)["first_hit"].wall > 0
+
+
+@pytest.mark.parametrize("name", ["nb_seeded_rerun", "dec_first_call", "dec_new_process"])
 def test_real_scenarios_run(name):
     (sc,) = [s for s in SCENARIOS if s.name == name]
     rows = h.measure(sc, repeats=1)

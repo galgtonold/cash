@@ -15,6 +15,7 @@ from cash import (
     Cash,
     Ignore,
     cleanup,
+    clear_all,
     configure,
     disabled,
     reset_session,
@@ -28,11 +29,11 @@ for some functions.
 
 ## Signatures at a glance
 
-<!-- claim: cash/core.py:Cash.__init__ @d6897bc2, cash/core.py:Cash.cache @2248de10 -->
+<!-- claim: cash/core.py:Cash.__init__ @b48de2b0, cash/core.py:Cash.cache @1db754d3 -->
 ```text
 Cash(
     backend=None, cache_dir=None, backends=None, compress=None,
-    register_magic=None, debug=None, use_locking=False,
+    register_magic=None, debug=None, use_locking=None,
     config_path=None, verbose=None, **config_overrides)
 
 Cash.cache(
@@ -72,6 +73,13 @@ and also has these attributes:
 | `f.cache_info()` | Returns a dict: `hits`, `misses`, `hit_rate`, `total_time_saved` (seconds), `miss_reasons` (count per reason, such as `"new arguments"`), `changed` (the `code or state changed` misses counted by what changed, such as `"helper ticks._parse changed"`), `warnings` (the last 20, each with `category`, `code`, `message`, `timestamp`, in full even when the printed line was short) and `phase_times` (where the calls' time went, empty unless `CASH_PHASE_TIMES=1`). |
 | `f.cache_clear()` | Deletes this function's entries and resets its statistics and warning log, so its warnings are shown again. |
 | `f.__wrapped__` | The undecorated function; calling it bypasses the cache. |
+
+A type checker (mypy, pyright, the editor's completion) sees the same: the
+decorated function keeps its parameters and return type, and has the four
+attributes above. Its type is `cash.CachedCallable[P, T]`, for a parameter
+or variable that holds a cached function:
+`def warm(f: cash.CachedCallable[[int], str]) -> None`.
+<!-- claim: cash/decorator/cached_callable.py:CachedCallable @72bb3e79 broad="the protocol as a whole is what a type checker sees" -->
 
 ```python
 import cash
@@ -118,6 +126,8 @@ These act on the default `Cash` that `@cash.cache` uses.
 ::: cash.reset_session
 
 ::: cash.cleanup
+
+::: cash.clear_all
 
 ## Related
 

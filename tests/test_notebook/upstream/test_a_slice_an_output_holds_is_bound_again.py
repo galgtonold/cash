@@ -16,6 +16,7 @@ import warnings
 import pytest
 
 from cash.backends.file_backend import FileBackend
+from cash.notebook import code_read
 from cash.notebook.anchors import (
     array_digest,
     array_memory_held_apart,
@@ -27,19 +28,16 @@ from tests._cell_driver import run_cash_cell
 
 np = pytest.importorskip("numpy")
 
-#: The library versions whose pickling code cash read for the two
-#: exceptions it makes (scikit-learn's ``BaseEstimator``, numpy's
-#: ``MaskedArray``); with any other installed, an output holding one of them
-#: with an anchored slice runs every time.
-SKLEARN_READ = "1.9.1"
-NUMPY_READ = "2.5.4"
-
 
 def _read_versions(*, masked: bool = False) -> bool:
     """Whether the installed scikit-learn (and numpy, for an output holding
-    a masked array) is the version whose pickling cash read."""
-    sklearn = pytest.importorskip("sklearn")
-    return sklearn.__version__ == SKLEARN_READ and (not masked or np.__version__ == NUMPY_READ)
+    a masked array) pickles by code cash read (`cash.notebook.code_read`);
+    with any other, an output holding an estimator or a masked array with
+    an anchored slice runs every time."""
+    pytest.importorskip("sklearn.base")
+    import numpy.ma  # noqa: F401 - a rule looks only at modules already loaded
+
+    return code_read.is_read("estimator_pickling") and (not masked or code_read.is_read("masked_array_pickling"))
 
 
 KEEPER = (
@@ -641,17 +639,21 @@ def test_an_object_hashed_by_its_own_methods_is_refused_as_a_key_only():
     assert array_memory_held_apart({"m": {held: 1}}, {"X_train": X_train}) == "X_train"
 
 
-def test_the_estimator_exception_holds_for_the_version_read_only(monkeypatch):
-    """``BaseEstimator``'s pickling passes in the scikit-learn version
-    whose code was read; in any other, an estimator is refused."""
-    sklearn = pytest.importorskip("sklearn")
+def test_the_estimator_exception_holds_for_the_code_read_only(monkeypatch):
+    """``BaseEstimator``'s pickling passes while its two functions are the
+    text that was read; with either replaced, an estimator is refused."""
+    base = pytest.importorskip("sklearn.base").BaseEstimator
     from sklearn.neighbors import KNeighborsClassifier
 
     X_train = np.arange(12.0).reshape(3, 4)[:2]
     knn = KNeighborsClassifier(n_neighbors=1, algorithm="brute").fit(X_train, [0, 1])
-    if sklearn.__version__ == SKLEARN_READ:
+    if _read_versions():
         assert array_memory_held_apart({"m": knn}, {"X_train": X_train}) is None
-        monkeypatch.setattr(sklearn, "__version__", "0.0.0")
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+
+    monkeypatch.setattr(base, "__setstate__", __setstate__)
     assert array_memory_held_apart({"m": knn}, {"X_train": X_train}) == "X_train"
 
 

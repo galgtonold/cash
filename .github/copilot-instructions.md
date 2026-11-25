@@ -325,9 +325,11 @@ pytest @tools/test_selection/core_set.txt
 ```
 
 The core set is the few hundred integration tests that together cover every
-line, feature, feature pair and step sequence the whole suite covers. The whole
-suite runs nightly in shards (`.github/workflows/nightly.yml`); to run one
-shard locally, add `-p tools.test_selection.shard --shard=2/6` to
+line, feature, feature pair and step sequence the whole suite covers, plus at
+least 5% of each feature folder's tests. The whole suite runs nightly in
+shards on Python 3.10, 3.12 and 3.14 (`.github/workflows/nightly.yml`), on the
+merge branch when it is scheduled and on the chosen branch when started by
+hand; to run one shard locally, add `-p tools.test_selection.shard --shard=2/6` to
 `python -m pytest tests/test_notebook_integration`.
 
 To re-pick the core set after the suite has changed a lot:
@@ -340,7 +342,14 @@ python tools/test_selection/select_core.py    # re-pick from an existing baselin
 `select_core.py` greedily picks the passing tests that add new covered lines,
 features, feature pairs or step sequences per second of runtime, and writes
 `.testsel/core_set.txt` plus a report. Copy both over the committed ones in
-`tools/test_selection/`.
+`tools/test_selection/`. It then tops each feature folder up to the 5% floor.
+After adding many tests to one folder without a new baseline,
+`python tools/test_selection/select_core.py --top-up` adds what the floor
+asks for to the committed list; run the tests it prints before committing.
+
+A workflow names each action by commit hash with the version in a comment
+(`uses: actions/checkout@<40 hex> # v6`), and sets `permissions: contents:
+read` at the top; a job that needs more asks for it itself.
 
 ### Before reporting work as done
 
@@ -501,6 +510,13 @@ Edit only `__version__ = "..."` in `src/cash/__init__.py`. `pyproject.toml` read
 (`dynamic = ["version"]`, `[tool.hatch.version]`); never add a `version =` line there.
 `tests/test_core/project/test_docs_version_currency.py` fails if a user-facing page names
 another version.
+
+For a new minor version, measure the per-call cost again on a quiet machine
+and refresh the pages that quote it (the benchmarks page, *Why cash*, the
+FAQ, the threads guide):
+`python benchmarks/measure_call_cost.py --out benchmarks/call_cost.frozen.csv`,
+then `python scripts/doc_numbers.py --update`. The same test file fails while
+the CSV names another minor version.
 
 Then move the try-it notebooks to the new version: run
 `python scripts/build_try_cash_colab.py` and set the `cash-lib~=X.Y.0` pin in

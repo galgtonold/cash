@@ -279,8 +279,9 @@ CODE_ARG_FIX = (
 )
 
 
-def unhashable_arg_fix(value: Any, type_name: str) -> str:
-    """The fix line for an argument of *type_name* that could not be hashed."""
+def unhashable_arg_fix(value: Any, type_name: str, attribute: str | None = None) -> str:
+    """The fix line for an argument of *type_name* that could not be hashed;
+    *attribute* is the one of its attributes found to be the reason."""
     if instance_of(value, CODE_VALUE_TYPES):
         return CODE_ARG_FIX
     if is_bare(value):
@@ -289,6 +290,19 @@ def unhashable_arg_fix(value: Any, type_name: str) -> str:
         return (
             f"fix {type_name}.__cash_key__(): it must return a value cash can hash, such as a "
             f"string, a number or a tuple of them, and must not raise."
+        )
+    if attribute is not None:
+        top = attribute.partition(".")[0]
+        state = plain_getattr(value, "__dict__", None)
+        others = [name for name in state if name != top and name.isidentifier()] if type(state) is dict else []
+        kept = ", ".join(f"self.{name}" for name in others[:4]) + (", ..." if len(others) > 4 else "")
+        example = (
+            f", such as `def __cash_key__(self): return ({kept}{',' if len(others) == 1 else ''})`" if others else ""
+        )
+        return (
+            f"if {type_name} is your own class, give it a __cash_key__(self) method that returns what "
+            f"identifies an instance and leaves `{top}` out{example}; otherwise register a hasher with "
+            f"cash.register_hasher({type_name}, ...), or pass the argument by a hashable value."
         )
     return (
         f"if {type_name} is your own class, give it a __cash_key__(self) method that returns what "
@@ -2150,7 +2164,24 @@ class ArgHasher:
             )
         else:
             which = f"an argument of type {arg_type_name} could not be hashed"
-            suggestion = unhashable_arg_fix(self.first_unhashable_arg(args, kwargs), arg_type_name)
+            suspect = self.first_unhashable_arg(args, kwargs)
+            attribute = None
+            # Looked for once per function and type: the walk hashes each
+            # attribute, and this runs on every call that cannot be keyed.
+            if not self._notices.has_warned(
+                (CashCacheIneffectiveWarning, func_name, arg_type_name, "KEY-UNHASHABLE-ARG")
+            ):
+                # By name where the call binds to the signature (a key
+                # build that failed early hands the call as it was written).
+                named = self.normalize_call_args(func_name, args, kwargs)[1]
+                parameter = next((name for name, value in named.items() if value is suspect), None)
+                if parameter is not None:
+                    which = f"the argument `{parameter}`, of type {arg_type_name}, could not be hashed"
+                found = self.unhashable_attribute(suspect)
+                if found is not None:
+                    attribute, held = found
+                    which += f": its attribute `{attribute}` ({class_qualname(type(held))}) cannot be hashed"
+            suggestion = unhashable_arg_fix(suspect, arg_type_name, attribute)
         self._notices.warn_once(
             CashCacheIneffectiveWarning,
             func_name,
@@ -2223,6 +2254,30 @@ class ArgHasher:
             except Exception:  # noqa: BLE001 - exactly what we are looking for
                 return candidate
         return candidates[0] if candidates else NO_SUSPECT
+
+    def unhashable_attribute(self, value: Any, depth: int = 3) -> tuple[str, Any] | None:
+        """The first attribute of *value* that cannot be hashed on its own,
+        as ``(dotted name, the value held)``, or None.
+
+        For the warning only: an object with one lock, client or logger
+        among its attributes is the common unhashable argument, and the
+        user has to know which attribute to leave out of ``__cash_key__``.
+        Reads the instance's ``__dict__`` and nothing else (no property, no
+        ``__getattr__`` of the user's runs), and follows an attribute that
+        is itself such an object, *depth* levels at most.
+        """
+        state = plain_getattr(value, "__dict__", None)
+        if type(state) is not dict or instance_of(value, (type, types.ModuleType, *CODE_VALUE_TYPES)):
+            return None
+        for name, held in list(state.items()):
+            if type(name) is not str or type(held) in IMMUTABLE_PRIMS:
+                continue
+            try:
+                self.hash_payload((held,), {})
+            except Exception:  # noqa: BLE001 - exactly what we are looking for
+                deeper = self.unhashable_attribute(held, depth - 1) if depth > 1 else None
+                return (f"{name}.{deeper[0]}", deeper[1]) if deeper is not None else (name, held)
+        return None
 
     def normalize_call_args(
         self,

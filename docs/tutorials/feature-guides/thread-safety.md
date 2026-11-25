@@ -100,21 +100,25 @@ and Windows every other live thread counts.
 
 ## `use_locking=True`: compute once
 
-<!-- claim: cash/decorator/runtime.py:CallRunner.compute_with_lock @b4c5c8c2, cash/core.py:Cash.__init__ @d6897bc2 -->
-Turn on locking on the `Cash` instance. It is not a decorator parameter, and it
-applies to every function registered through that instance:
+<!-- claim: cash/decorator/runtime.py:CallRunner.compute_with_lock @b4c5c8c2, cash/config/schema.py:CashConfig.use_locking == False -->
+`use_locking` is a setting, off by default. Turn it on for the whole
+program with one line, or without touching the code with
+`CASH_USE_LOCKING=1` or `use_locking = true` under `[tool.cash]`:
 
 ```python
-from cash import Cash
+import cash
 
-app = Cash(use_locking=True)
+cash.configure(use_locking=True)
 
-@app.cache
+@cash.cache
 def train(n_trees):
     return {"trees": n_trees}
 
 train(300)   # first call: computes
 ```
+
+It is not a decorator parameter: it applies to every function of the
+instance, and `Cash(use_locking=True)` sets it for an instance of your own.
 
 On a miss, the caller takes a lock for that cache key, looks again, and only
 computes if the entry is still missing. The other callers wait for the lock,
@@ -165,13 +169,23 @@ duplicate computation costs less than the lock.
 Cash's own work for a call -- building the key, looking it up, storing a
 result -- is Python code, and a Python process runs one thread's Python code
 at a time. In a thread pool that work does not overlap: eight threads pay it
-one after another. A hit costs about 0.2 ms of it and a miss 1 to 2 ms, so a
-function whose body only waits a few milliseconds (a quick HTTP request, a
-small database query) called from many threads at once runs slower cached
-than uncached, on hits too. Below about 5 ms of waiting per call, leave such a
-function uncached, cache the larger step that calls it, or run the calls in
-processes (`ProcessPoolExecutor`, `multiprocessing.Pool`), where each worker
-does its own share of cash's work in parallel.
+one after another. A miss costs about <!-- docnum:cc_cash_small_miss -->2.2 ms<!-- /docnum --> of it and
+the first hit of a key about <!-- docnum:cc_cash_small_first_hit -->278 µs<!-- /docnum -->
+([Per call of a decorated function](../../benchmarks.md#per-call-of-a-decorated-function)),
+while the uncached calls wait side by side. So from eight threads:
+
+- **A first run over new arguments is slower cached than uncached** when
+  the body only waits (a quick HTTP request, a small database query) for
+  less than about eight times the miss cost, some 20 ms. The cache pays
+  this back on the later runs.
+- **Hits are faster than the uncached call** unless the body waits under
+  about 2 ms; a call met again in the same process costs next to nothing.
+
+For a function that waits a few milliseconds and is seldom called twice with
+the same arguments, leave it uncached, cache the larger step that calls it,
+or run the calls in processes (`ProcessPoolExecutor`,
+`multiprocessing.Pool`), where each worker does its own share of cash's work
+in parallel.
 
 ## Across processes: Pool, ProcessPoolExecutor, joblib { #across-processes-pool-processpoolexecutor-joblib }
 

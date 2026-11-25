@@ -170,7 +170,9 @@ def test_the_function_log_keeps_the_full_text(tmp_path):
     assert str(tmp_path) in logged, "the log lists the full path"
 
 
-def test_the_same_code_on_a_second_function_says_also_on(tmp_path):
+def test_the_same_code_on_a_second_function_keeps_its_finding(tmp_path):
+    """The explanation and the fix are said once; what the second function
+    does is its own and is said again."""
     cash = Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
     first = cash.cache(_writes_a_zip(tmp_path))
     second_body = _writes_a_zip(tmp_path)
@@ -179,8 +181,75 @@ def test_the_same_code_on_a_second_function_says_also_on(tmp_path):
     shown = _observed(cash, first, second)
     assert len(shown) == 2, shown
     assert shown[0].startswith("[IMPURE-OBSERVED-EFFECTS] @cash.cache on ")
-    assert shown[1] == "[IMPURE-OBSERVED-EFFECTS] also on other (other.cache_info()['warnings'])"
+    assert shown[1].startswith("[IMPURE-OBSERVED-EFFECTS] other: "), shown[1]
+    assert "file write: .../" in shown[1] and "1.zip" in shown[1], shown[1]
+    assert shown[1].endswith(". Same fix as for plain. (other.cache_info()['warnings'])"), shown[1]
+    assert "Fix:" not in shown[1] and "\n" not in shown[1]
     assert "Fix:" in second.cache_info()["warnings"][-1]["message"], "the log still has it all"
+
+
+SIDE_EFFECTS = """
+import subprocess, sys, warnings
+import cash
+
+@cash.cache
+def report(x):
+    print("working on", x)
+    return x
+
+@cash.cache
+def export(x):
+    with open("out.txt", "w") as f:
+        f.write(str(x))
+    return x
+
+@cash.cache
+def notify(x):
+    subprocess.run([sys.executable, "-c", "pass"])
+    return x
+
+with warnings.catch_warnings(record=True) as got:
+    warnings.simplefilter("always")
+    report(1); export(1); notify(1)
+for w in got:
+    print("W", str(w.message))
+"""
+
+
+def test_each_function_with_a_side_effect_names_its_own(tmp_path):
+    """Three functions under one code: a ``print``, a file write and a
+    subprocess. The second and third lines name the write and the
+    subprocess, which a hit skips; only the fix is said once."""
+    (tmp_path / "main.py").write_text(SIDE_EFFECTS, encoding="utf-8")
+    out = run_python("main.py", cwd=tmp_path).stdout
+    lines = [line[2:] for line in out.splitlines() if line.startswith("W [IMPURE-SIDE-EFFECTS]")]
+    assert len(lines) == 3, out
+    assert "@cash.cache on" in lines[0] and "print()" in lines[0] and "Fix:" in lines[0]
+    assert lines[1].startswith("[IMPURE-SIDE-EFFECTS] export: 2 findings, e.g. line 12: [impure_call] open()"), lines[1]
+    assert lines[2].startswith("[IMPURE-SIDE-EFFECTS] notify: line 18: [impure_call] subprocess.run()"), lines[2]
+    for line, name in ((lines[1], "export"), (lines[2], "notify")):
+        assert line.endswith(f". Same fix as for report. ({name}.cache_info()['warnings'])"), line
+
+
+def test_a_repeat_without_a_list_keeps_its_first_sentence():
+    from cash.diagnostics import repeat_diagnostic
+
+    text = repeat_diagnostic(
+        "CACHE-THRASH",
+        "draw",
+        "@cash.cache on pkg.draw: Unseeded randomness detected: ``random.random()`` at line 4. A seed set "
+        "before the call is part of the key.",
+        first="sample",
+        more="draw.cache_info()['warnings']",
+    )
+    assert text == (
+        "[CACHE-THRASH] draw: Unseeded randomness detected: `random.random()` at line 4. "
+        "Same fix as for sample. (draw.cache_info()['warnings'])"
+    )
+    short = repeat_diagnostic(
+        "CACHE-THRASH", "f", "@cash.cache on f: result not cached. A Figure is live.", first="g", more="m"
+    )
+    assert short == "[CACHE-THRASH] f: result not cached. A Figure is live. Same fix as for g. (m)"
 
 
 def test_full_detail_repeats_the_full_text_per_function(tmp_path):

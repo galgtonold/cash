@@ -152,7 +152,7 @@ def cmd_info(args: argparse.Namespace) -> None:
     source, origins, files = config_provenance(config)
 
     cache_dir = local_cache_dir(config)
-    print(f"Cash v{get_version()}")
+    print(f"cash {get_version()}")
     print(f"  Backend:    {config.backend}")
     print(f"  Cache dir:  {cache_dir}")
     # What it holds, next to where it is: the number a user asks for when

@@ -24,6 +24,7 @@ without touching these files fails here instead of shipping.
 
 from __future__ import annotations
 
+import csv
 import re
 from pathlib import Path
 
@@ -99,6 +100,25 @@ def test_the_readme_does_not_restate_the_version_in_prose() -> None:
     assert not offenders, (
         "README prose names a version literal; let the PyPI badge be the single "
         "place a reader learns the current version:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_the_per_call_cost_figures_were_measured_on_this_minor_version() -> None:
+    """The per-call cost table on ``docs/benchmarks.md``, and the advice
+    other pages build on it (when to skip caching, thread pools), is filled
+    from ``benchmarks/call_cost.frozen.csv``. The figures once stayed four
+    minor versions behind: a hit had become far cheaper and a miss dearer
+    than the pages said. A new minor version re-measures:
+
+        python benchmarks/measure_call_cost.py --out benchmarks/call_cost.frozen.csv
+        python scripts/doc_numbers.py --update
+    """
+    with (REPO_ROOT / "benchmarks" / "call_cost.frozen.csv").open(newline="", encoding="utf-8") as fh:
+        measured = {row["cash_version"] for row in csv.DictReader(fh)}
+    assert len(measured) == 1, measured
+    assert measured.pop().split(".")[:2] == cash.__version__.split(".")[:2], (
+        "benchmarks/call_cost.frozen.csv was measured on another minor version of cash; "
+        "re-run benchmarks/measure_call_cost.py and scripts/doc_numbers.py --update"
     )
 
 

@@ -9,9 +9,12 @@ def test_core_exports_stable():
         # Core API
         "Cash",
         "CacheExplanation",
+        # What @cash.cache returns, as a type: users annotate with it.
+        "CachedCallable",
         "reset_session",
         "configure",
         "cleanup",
+        "clear_all",
         "disabled",  # a no-cache block that restores CASH_DISABLE
         "Ignore",  # leaves an annotated parameter out of the key
         # Purity declarations

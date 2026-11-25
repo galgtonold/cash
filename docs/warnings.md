@@ -14,7 +14,7 @@ Every cash warning starts with a code in square brackets, such as
 
 ## How much a warning says {#warning-detail}
 
-<!-- claim: cash/diagnostics.py:short_diagnostic @aa9e9b1c, cash/decorator/reporting.py:Notices._displayed @96d4fb79 -->
+<!-- claim: cash/diagnostics.py:short_diagnostic @c2ec4888, cash/decorator/reporting.py:Notices._displayed @f33ddf79, cash/diagnostics.py:repeat_diagnostic @cb619e23 -->
 By default a warning is one line: the code, what happened, the fix,
 and where to read more. A list of findings or effects
 is cut to how many there are and the first one. The rest is in the code's
@@ -26,11 +26,16 @@ model.py:10: CashImpurityWarning: [IMPURE-OBSERVED-EFFECTS] @cash.cache on model
 
 For a decorated function, `f.cache_info()["warnings"]` keeps the full text
 (every finding), which the line names. When a second function
-gets the same finding under a code the first already showed, its line only
-says so:
-`[IMPURE-OBSERVED-EFFECTS] also on backtest2 (backtest2.cache_info()['warnings'])`.
-A different finding under that code (the first function's effects will not
-repeat on a hit, the second's calls are never stored) gets its own line.
+gets a warning under a code the first already showed, its line keeps what
+was found in that function and leaves out the explanation and the fix:
+
+```text title="Output"
+[IMPURE-SIDE-EFFECTS] export: 2 findings, e.g. line 14: [impure_call] open() - known I/O / side-effecting. Same fix as for report. (export.cache_info()['warnings'])
+```
+
+A different kind of finding under that code (the first function's effects
+will not repeat on a hit, the second's calls are never stored) gets its
+full line.
 
 Set [`warning_detail`](getting-started/configuration.md#output-and-switches)
 to `"full"` (`CASH_WARNING_DETAIL=full`) to print the full text instead:
@@ -204,7 +209,7 @@ argument back. See [Silencing one code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/core.py:Cash.cache @2248de10 -->
+<!-- claim: cash/core.py:Cash.cache @1db754d3 -->
 **What happened.** You put `@cash.cache` on an async generator (an
 `async def` that `yield`s). cash does not cache those, so it returned your
 function unwrapped.
@@ -1194,7 +1199,7 @@ several lines in a row, wrap them in `with cash.assume_safe():` instead. A line
 that changes an argument in place is better fixed than waived: return a
 modified copy.
 
-<!-- claim: cash/decorator/reporting.py:Notices._not_shown_before @7e3fc337, cash/decorator/reporting.py:Notices.warn_once @26b61dee -->
+<!-- claim: cash/decorator/reporting.py:Notices._not_shown_before @7e3fc337, cash/decorator/reporting.py:Notices.warn_once @772110d6 -->
 **When it is safe to ignore.** When every line is a `print` to stdout or a
 progress bar: you only lose the printout on hits. Never ignore
 `mutable_global` or `dynamic_pattern`. This warning is shown once per cache,
@@ -1229,7 +1234,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-INSTANCE-STATE](#key-instance-state) | decorator | a bound method's instance cannot be hashed |
 | [KEY-ITERATOR-CONSUMED](#key-iterator-consumed) | decorator | a registered hasher read an iterator argument; the call ran uncached |
 | [KEY-LIBRARY-STATE-UNREAD](#key-library-state-unread) | decorator | the body read a library setting or a `ContextVar` whose value cannot be compared; not cached |
-| [KEY-LIBRARY-STATE-UNSEEN](#key-library-state-unseen) | both | below Python 3.12, with `CASH_TRACE=0` or for a coroutine, a changed library setting is not detected; said once per process |
+| [KEY-LIBRARY-STATE-UNSEEN](#key-library-state-unseen) | both | below Python 3.12, with `CASH_TRACE=0`, for a coroutine or a returned iterator, a changed library setting is not detected; said once per process |
 | [KEY-LIBRARY-VALUE-UNREAD](#key-library-value-unread) | both | a value set on a library's module is too big to look through for an iterator; code reading it runs every time |
 | [KEY-MEMO-BEFORE-IMPORT](#key-memo-before-import) | both | a `functools` memo already held results when cash was imported |
 | [KEY-LOOP-VAR-CHANGED](#key-loop-var-changed) | notebook | a loop body changes its loop variable before work cached for each pass |
@@ -1659,10 +1664,13 @@ still keyed, and so, in a notebook, is a setting made on a module the
 statement names (`sklearn.preprocessing.StandardScaler()` after
 `sklearn.set_config(...)`).
 
-**What to do.** Run on Python 3.12 or newer with tracing on (the default),
-pass the setting in as an argument, or clear the cache after changing a
-setting. In a notebook, `# @cash:no-cache` runs a statement whose result a
-setting changes every time.
+**What to do.** Pass the setting in as an argument, or clear the cache
+after changing a setting. The message also names the way out for its case:
+below Python 3.12, run on 3.12 or newer; with `CASH_TRACE=0`, unset it; for
+an `async def`, move the part that reads the setting into a sync function
+and cache that one instead; for a returned iterator, return a finished
+value such as a list. In a notebook, `# @cash:no-cache` runs a statement
+whose result a setting changes every time.
 
 **When it is safe to ignore.** When your cached code does not depend on
 library settings, or you never change them between runs.
@@ -1972,6 +1980,17 @@ The message names the type, says the value is nested in a container, or says
 it is nested too deeply to key: deeper than pickle follows, such as a long
 linked list. A value a cached `functools.partial` binds counts as an argument
 too. The call ran uncached.
+
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.unhashable_attribute @fa9cf9cb -->
+When the argument is an object and one of its attributes is the reason (a
+lock, a client or a logger an instance holds), the message names the
+parameter and that attribute, and the fix line names the attributes that are
+left to key on:
+
+```text title="Output"
+[KEY-UNHASHABLE-ARG] @cash.cache on app.Model.predict: the argument `self`, of type Model, could not be hashed: its attribute `_lock` (lock) cannot be hashed, so this call and every call like it does not cache.
+  Fix: if Model is your own class, give it a __cash_key__(self) method that returns what identifies an instance and leaves `_lock` out, such as `def __cash_key__(self): return (self.weights, self.name)`; otherwise register a hasher with cash.register_hasher(Model, ...), or pass the argument by a hashable value.
+```
 
 It is also shown for an argument that is an `object()` or an instance of an
 empty class that no module-level name or class attribute holds

@@ -36,7 +36,8 @@ from .decorator.arg_hashing import (
 )
 from .decorator.arg_key import arg_key_spec, key_function_impurities
 from .decorator.backend_slot import BackendSlot
-from .decorator.cached_function import CHUNK_MAX_BYTES, CHUNK_MAX_ITEMS, CachedFunction, checked_ttl
+from .decorator.cached_callable import CachedCallable
+from .decorator.cached_function import CHUNK_MAX_BYTES, CHUNK_MAX_ITEMS, CachedFunction, checked_target, checked_ttl
 from .decorator.cash_key import KeyCheck
 from .decorator.class_data import ClassDataFold
 from .decorator.closure_fold import CaptureAnalysis, ClosureFold, HelperIdentity
@@ -177,16 +178,14 @@ class _ExitWork:
 
 def _constructor_overrides(
     backend: CacheBackend | str | None,
-    use_locking: bool,
     config_overrides: dict[str, Any],
     **convenience: Any,
-) -> tuple[CacheBackend | None, bool]:
+) -> CacheBackend | None:
     """Check `Cash`'s arguments and fold the settings among them into
-    *config_overrides*; return the backend instance (if one was given) and
-    ``use_locking`` as a bool.
+    *config_overrides*; return the backend instance, if one was given.
 
     *convenience* is the named settings `Cash` takes as its own keywords
-    (``cache_dir``, ``compress``, ``debug``, ``verbose``).
+    (``cache_dir``, ``compress``, ``debug``, ``verbose``, ``use_locking``).
     """
     # ``backend`` is also the name of a setting ("tiered", "file",
     # "sqlite", ...), and a setting may be passed by name: a string is
@@ -199,16 +198,13 @@ def _constructor_overrides(
             f"Cash(backend=...) takes a backend instance or a backend type name such as 'sqlite', "
             f"not {class_name(type(backend))}"
         )
-    if not isinstance(use_locking, bool) and use_locking not in (0, 1):
-        raise ValueError(f"Cash(use_locking={use_locking!r}): expected True or False")
-    use_locking = bool(use_locking)
     # Map the explicit convenience kwargs (cache_dir, compress, debug)
     # into the overrides dict so the config layer treats them with the
     # same priority as any other constructor-supplied override (highest).
     for key, val in convenience.items():
         if val is not None:
             config_overrides.setdefault(key, val)
-    return backend, use_locking
+    return backend
 
 
 def _summary_at_exit(ref: weakref.ref[Cash]) -> None:
@@ -269,12 +265,13 @@ class Cash:
         cache_dir: Directory for the disk tier (the ``cache_dir`` setting).
         backends: Backends to stack as tiers, fastest first; two or more are
             combined into a `TieredBackend`.
-        compress: gzip entries on disk (the ``compress`` setting).
+        compress: Compress entries on disk, with zstd on Python 3.14 and
+            later and zlib before (the ``compress`` setting).
         register_magic: Register the notebook magics. ``None`` (default)
             registers them only when an IPython session is running.
         debug: Log every cache decision (the ``debug`` setting).
         use_locking: Take a per-key lock so concurrent calls with the same
-            arguments compute once.
+            arguments compute once (the ``use_locking`` setting).
         config_path: A TOML file read above the project and user config.
         verbose: Log one line per cached call (the ``verbose`` setting).
         **config_overrides: Any other setting by name, for example
@@ -301,7 +298,6 @@ class Cash:
     data_sources: dict[str, DataSource]
     source_hashes: dict[str, str]
     debug: bool | None
-    use_locking: bool
     config: CashConfig
 
     def __reduce__(self):
@@ -340,17 +336,22 @@ class Cash:
         compress: bool | None = None,
         register_magic: bool | None = None,
         debug: bool | None = None,
-        use_locking: bool = False,
+        use_locking: bool | None = None,
         config_path: str | None = None,
         verbose: bool | None = None,
         **config_overrides: Any,
     ) -> None:
-        backend, use_locking = _constructor_overrides(
-            backend, use_locking, config_overrides, cache_dir=cache_dir, compress=compress, debug=debug, verbose=verbose
+        backend = _constructor_overrides(
+            backend,
+            config_overrides,
+            cache_dir=cache_dir,
+            compress=compress,
+            debug=debug,
+            verbose=verbose,
+            use_locking=use_locking,
         )
         self.config = get_config(config_path=config_path, overrides=config_overrides or None)
         self._init_infrastructure(backend, backends)
-        self.use_locking = use_locking
         # Asking for debug output has to produce some, also in a script that
         # configured no logging.
         debug, verbose = self.config.debug, self.config.verbose
@@ -570,6 +571,15 @@ class Cash:
         self.config.debug = bool(value)
 
     @property
+    def use_locking(self) -> bool:
+        """``config.use_locking``: concurrent calls of one key compute once."""
+        return bool(self.config.use_locking)
+
+    @use_locking.setter
+    def use_locking(self, value: bool) -> None:
+        self.config.use_locking = bool(value)
+
+    @property
     def verbose(self) -> bool:
         """``config.verbose``: log one line per decorated call."""
         return bool(self.config.verbose)
@@ -590,7 +600,7 @@ class Cash:
         return f"Cash(backend={backend_name}, functions={n_funcs}, debug={self.debug})"
 
     @overload
-    def cache(self, func: Callable[P, T]) -> Callable[P, T]: ...
+    def cache(self, func: Callable[P, T]) -> CachedCallable[P, T]: ...
 
     @overload
     def cache(
@@ -610,7 +620,7 @@ class Cash:
         frozen: bool = ...,
         key: Callable[..., Any] | None = ...,
         ignore: str | list[str] | tuple[str, ...] | None = ...,
-    ) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
+    ) -> Callable[[Callable[P, T]], CachedCallable[P, T]]: ...
 
     def cache(
         self,
@@ -629,7 +639,7 @@ class Cash:
         frozen: bool = False,
         key: Callable[..., Any] | None = None,
         ignore: str | list[str] | tuple[str, ...] | None = None,
-    ) -> Callable[P, T] | Callable[[Callable[P, T]], Callable[P, T]]:
+    ) -> CachedCallable[P, T] | Callable[[Callable[P, T]], CachedCallable[P, T]]:
         """Cache a function's results, keyed on its arguments, code and inputs.
 
         Use it bare (``@c.cache``) or with options (``@c.cache(ttl=3600)``).
@@ -677,11 +687,15 @@ class Cash:
             ValueError: ``strict`` and ``assume_safe`` are both set,
                 ``ttl`` is negative, NaN or infinite, or ``ignore`` names a
                 parameter the function does not have.
-            TypeError: ``ttl`` is not a number, timedelta or ``None``, a
+            TypeError: ``func`` is not a function (a class, a ``property`` or
+                ``classmethod`` object, a number passed positionally),
+                ``ttl`` is not a number, timedelta or ``None``, a
                 ``depends_on`` entry is neither a callable nor a `DataSource`,
                 ``key`` is combined with ignored parameters, or ``key`` is not
                 a plain function.
         """
+        if func is not None:
+            checked_target(func)
         ttl = checked_ttl(ttl)
         depends_on = checked_depends_on(depends_on)
         if strict and assume_safe:

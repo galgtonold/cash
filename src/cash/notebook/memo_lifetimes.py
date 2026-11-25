@@ -50,6 +50,7 @@ LIFETIMES: dict[str, dict[str, str]] = {
         "_FOREIGN_C_TYPES": _P,
         "_NOTEBOOK": _B,
     },
+    "cash.notebook.code_read": {"_JUDGED": _P},
     "cash.notebook.compiled_source": {"_PLACE": _B},
     "cash.notebook.file_records": {"_OWN": _S, "_MERGED": _S},
     "cash.notebook.held_functions": {

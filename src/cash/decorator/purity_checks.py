@@ -2243,7 +2243,8 @@ class PurityChecks:
             f"{func_name.rpartition('.')[2]} changed {changed} in place; cash stores the state it leaves {them} in, "
             f"and a hit writes it back.",
             # Its own code: under the one that also says "this call is never
-            # stored", a later function's refusal printed only "also on f".
+            # stored", a later function's refusal would be shortened to
+            # "Same fix as for f", and this note has no fix.
             code="CACHE-ARG-WRITTEN-BACK",
             fix="",
         )

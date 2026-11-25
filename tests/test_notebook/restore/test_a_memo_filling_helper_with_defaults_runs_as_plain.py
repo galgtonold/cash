@@ -1,6 +1,6 @@
-"""Review repros for claude/served-memo-fill @e0575c53 (end to end, cash_magics).
+"""A memo-filling helper with a mutable default, a redefined callee or a
+shadowed builtin gives what plain Python gives (end to end, cash_magics).
 
-Place under tests/test_notebook/restore/ and run with pytest -s -n 0 (or -n 4).
 Pattern: Run All, restart, Run All; compare with plain Python. A slow cell
 (sleep over the persistence floor) is stored and served after the restart;
 a fast one is not persisted and reruns, which is where the memo's state shows.

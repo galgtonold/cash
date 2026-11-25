@@ -1,8 +1,7 @@
-"""Review repro: the check is one-directional (memo now holds >= what the
+"""The memo check is one-directional (memo now holds >= what the
 run left). An entry stored when the helper MISSED (its body ran, printed)
 is served where the memo already holds the answer and plain Python would
 hit silently: the served statement replays the miss's output.
-Place under tests/test_notebook/restore/.
 """
 
 from __future__ import annotations

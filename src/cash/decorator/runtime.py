@@ -3206,14 +3206,20 @@ class CallRunner:
         library reached through an argument's method (``df.to_string()``)
         is not named in the function's own code."""
         library_reads.UNSEEN_SAID = True
+        # The way out depends on why nothing was recorded: "run on Python
+        # 3.12+ with tracing on" is already true for a coroutine there.
         if inspect.iscoroutinefunction(func):
             where = "a coroutine's body is not recorded"
+            way_out = "move the part that reads the setting into a sync function and cache that one instead"
         elif not code_trace.TRACEABLE:
             where = "Python below 3.12 does not record what a body reads"
+            way_out = "run on Python 3.12 or newer"
         elif not code_trace.on():
             where = "CASH_TRACE=0 turns off recording what a body reads"
+            way_out = "unset CASH_TRACE"
         else:
             where = "it returns an iterator, whose code runs after the call and is not recorded"
+            way_out = "return a finished value such as a list instead of an iterator"
         self._notices.warn_once(
             CashCacheIneffectiveWarning,
             func_name,
@@ -3223,8 +3229,7 @@ class CallRunner:
             "is not detected: a later "
             "call could be served a result made under the old setting. Said once per process.",
             code="KEY-LIBRARY-STATE-UNSEEN",
-            fix="run on Python 3.12+ with tracing on (the default), pass the setting in as an argument, "
-            "or clear the cache after changing it.",
+            fix=f"pass the setting in as an argument, {way_out}, or clear the cache after changing it.",
         )
 
     def _refuse_untraced(self, spec: CachedFunction, why: str) -> str:

@@ -20,7 +20,7 @@ from __future__ import annotations
 import contextlib
 import threading
 from collections.abc import Iterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ._dataclass_code import compiled_dataclass_methods
 
@@ -43,6 +43,7 @@ from .config.template import create_default_config
 from .core import CacheExplanation, Cash
 from .data_source import DataSource
 from .decorator.arg_key import Ignore
+from .decorator.cached_callable import CachedCallable
 from .effect_observer import assume_safe
 from .exceptions import (
     AmbiguousCellError,
@@ -314,6 +315,18 @@ def cleanup(max_age: int | None = None) -> int:
     return _get_global_cash().cleanup(max_age)
 
 
+def clear_all() -> None:
+    """Delete the entries of every function ``@cash.cache`` has decorated in
+    this process, and reset their statistics.
+
+    Module-level form of :meth:`Cash.clear_all` on the default instance:
+    ``f.cache_clear()`` for each cached function. Entries of functions this
+    process has not decorated are kept; ``cash clear --all`` in a terminal
+    empties the whole cache folder.
+    """
+    _get_global_cash().clear_all()
+
+
 # The coding-agent guide entry point: ``cash.help()`` prints/returns the compact
 # reference (see ``_agent_guide.py``). Deliberately shadows the builtin at the
 # ``cash.help`` path only, and is kept out of ``__all__`` so that a star import
@@ -321,7 +334,7 @@ def cleanup(max_age: int | None = None) -> int:
 from ._agent_guide import help as help
 
 
-def __getattr__(name):
+def __getattr__(name: str) -> Any:
     """Proxy module-level attribute access to the global ``Cash`` singleton.
 
     Supported attributes: ``cache``, ``show_stats``, ``register_hasher``.
@@ -336,12 +349,23 @@ def __getattr__(name):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
+if TYPE_CHECKING:
+    # What a type checker and an editor see for the three names the module
+    # ``__getattr__`` below serves: the methods of a ``Cash``, signatures
+    # and overloads included. Nothing here runs.
+    _typed = Cash()
+    cache = _typed.cache
+    show_stats = _typed.show_stats
+    register_hasher = _typed.register_hasher
+
 #: Served by the module ``__getattr__``, which builds the global ``Cash``.
 _LAZY_NAMES = ("cache", "show_stats", "register_hasher")
 
 
 def __dir__() -> list[str]:
-    return sorted(set(globals()) | set(_LAZY_NAMES))
+    """The public names, for ``dir(cash)`` and tab completion: not the
+    modules and helpers this file imports to build them."""
+    return sorted({*__all__, *_LAZY_NAMES, "help", "__version__"})
 
 
 # Left out of ``__all__``: ``help``, so ``from cash import *`` does not replace
@@ -351,12 +375,14 @@ __all__ = [
     # Core API (stable)
     "Cash",
     "CacheExplanation",
+    "CachedCallable",
     "Ignore",
     "opaque",
     "reset_session",
     "configure",
     "disabled",
     "cleanup",
+    "clear_all",
     # Purity declarations (stable)
     "pure",
     "stateful",
