@@ -36,6 +36,7 @@ from ..tracking.randomness import (
     seeded_rng_modules,
     unseeded_streams,
     watch_seeds,
+    watch_seeds_unless_disabled,
 )
 from . import state_memo
 
@@ -389,7 +390,7 @@ class RngWatch:
         #: func_name -> the global streams that moved under its last
         #: computed call while other threads ran (`maybe_another_threads`).
         self._moved_beside_threads: dict[str, set[str]] = {}
-        watch_seeds()
+        watch_seeds_unless_disabled()
 
     def fold_rng_epoch(self, func_name: str, state_hash: str) -> str:
         """Fold the current seed epoch into the key, for RNG-drawing functions.
@@ -706,7 +707,7 @@ class RngWatch:
         """
         # A seed the caller sets must be seen from now on (`watch_seeds`), and
         # the module that imports numpy has usually just been imported.
-        watch_seeds()
+        watch_seeds_unless_disabled()
         self.note_self_seeding(func, func_name)
         if allow_random:
             return

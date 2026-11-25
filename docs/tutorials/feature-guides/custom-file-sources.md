@@ -42,7 +42,7 @@ cheap. Every file is hashed in full, whatever its size. The full rule is in
 
 ## What's automatically tracked
 
-<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @30862715, cash/tracking/read_events.py:_on_open @c8d075ad, cash/tracking/read_events.py:_on_listing @218e8bfc -->
+<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @30862715, cash/tracking/read_events.py:_on_open @81b5b69a, cash/tracking/read_events.py:_on_listing @218e8bfc -->
 cash tracks `open()` and `os.open` in a read mode and what reads through them, the pandas, polars,
 pyarrow, numpy and soundfile readers, `h5py`, `tables`, `rasterio` and xarray's
 `open_*`, `sqlite3.connect`, directory listings (a new
@@ -128,7 +128,9 @@ Object stores keep a validator for every object, such as an ETag, a version id
 or a GCS generation, and it changes when the bytes change. A read of `s3://`,
 `gs://`, `az://` or `https://` through a tracked reader records that validator.
 Each hit asks the store for it again: one small metadata request instead of a
-download.
+download. A miss asks twice, before the read and when the result is stored:
+an object replaced in between is not stored under either version
+([`STORE-INPUT-CHANGED`](../../warnings.md#store-input-changed)).
 
 <!-- test:skip reason="needs a reachable bucket" -->
 ```python
@@ -137,7 +139,7 @@ def load_events(url):
     return pd.read_parquet(url)
 
 url = "s3://bucket/events.parquet"
-load_events(url)   # first call: downloads, records the ETag
+load_events(url)   # first call: downloads, records the ETag (two metadata requests)
 load_events(url)   # cache hit: one metadata request
 ```
 
@@ -210,7 +212,7 @@ bound earlier by `from my_lib import read_data` keeps the original. Pass
 ## Edge cases
 
 - **A file that changes during the call.** If a file moved between the read and
-  the end of the call, the result is returned but not stored
+  the end of the call, or a remote object was replaced, the result is returned but not stored
   ([`STORE-INPUT-CHANGED`](../../warnings.md#store-input-changed)), since cash
   can't tell which version it came from. The next call caches normally.
 - **Symlinks** record both the link and its target, so editing the target and

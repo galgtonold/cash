@@ -15,8 +15,8 @@ import sys
 import textwrap
 from collections.abc import Iterable, Mapping
 
-from ..._user_attrs import plain_getattr
 from ...loaded_modules import loaded_module
+from ..._stand_in import stand_in
 from ...source_norm import exact_source_digest
 from .detect import get_drawing_rng_modules, get_seeding_rng_modules
 
@@ -279,11 +279,8 @@ def _state_wrapper(module: str, original, *, sets: bool):
                     _STATE_SET.add(module)
         return original(*args, **kwargs)
 
-    state.__wrapped__ = original  # type: ignore[attr-defined]
     state.__cash_seed_watch__ = True  # type: ignore[attr-defined]
-    state.__name__ = plain_getattr(original, "__name__", "setstate" if sets else "getstate")
-    state.__doc__ = plain_getattr(original, "__doc__", None)
-    return state
+    return stand_in(original, state)
 
 
 def _seed_wrapper(module: str, original):
@@ -299,11 +296,20 @@ def _seed_wrapper(module: str, original):
         _note_seed(module, args, kwargs)
         return result
 
-    seed.__wrapped__ = original  # type: ignore[attr-defined]
     seed.__cash_seed_watch__ = True  # type: ignore[attr-defined]
-    seed.__name__ = plain_getattr(original, "__name__", "seed")
-    seed.__doc__ = plain_getattr(original, "__doc__", None)
-    return seed
+    return stand_in(original, seed)
+
+
+def watch_seeds_unless_disabled() -> None:
+    """`watch_seeds`, but not in a process started with ``CASH_DISABLE``
+    set: caching off promises nothing is replaced. For the places that run
+    whether or not caching is on (``import cash``, building a ``Cash``,
+    decorating); a cached call or ``%cash_on`` that does run calls
+    `watch_seeds` itself."""
+    from cash.config.schema import disabled_by_environment
+
+    if not disabled_by_environment():
+        watch_seeds()
 
 
 def start_seed_watch(loaded_before: Iterable[str]) -> None:
@@ -375,9 +381,11 @@ def watch_seeds() -> None:
             continue
         if not getattr(original, "__cash_seed_watch__", False):
             try:
-                setattr(mod, attr, _seed_wrapper(rng, original))
+                wrapper = _seed_wrapper(rng, original)
+                setattr(mod, attr, wrapper)
             except (AttributeError, TypeError):  # pragma: no cover - read-only module
                 continue
+            wrapper.installed_at(module, attr)
             newly.add(rng)
         _WATCHED.add(rng)
     for module, attr, sets in _STATE_FUNCTIONS:
@@ -389,9 +397,11 @@ def watch_seeds() -> None:
             continue
         if not getattr(original, "__cash_seed_watch__", False):
             try:
-                setattr(mod, attr, _state_wrapper(module, original, sets=sets))
+                wrapper = _state_wrapper(module, original, sets=sets)
+                setattr(mod, attr, wrapper)
             except (AttributeError, TypeError):  # pragma: no cover - read-only module
                 continue
+            wrapper.installed_at(module, attr)
         _WATCHED.add(module + "." + attr)
     unseen = newly - _LOADED_UNDER_WATCH - {"torch"}
     if unseen:

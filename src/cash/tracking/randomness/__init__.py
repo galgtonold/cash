@@ -55,6 +55,7 @@ from .lineage import (
     unseeded_streams,
     watch_first_seeds,
     watch_seeds,
+    watch_seeds_unless_disabled,
 )
 from .state import (
     capture_argument_carrier_states,
@@ -135,4 +136,5 @@ __all__ = [
     "warn_unseeded_estimator_fit",
     "watch_first_seeds",
     "watch_seeds",
+    "watch_seeds_unless_disabled",
 ]

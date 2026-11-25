@@ -1237,6 +1237,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-NETWORK-READ](#key-network-read) | decorator | the body reads from a server or database |
 | [KEY-OPAQUE-CALLABLE](#key-opaque-callable) | decorator | a callable's code cannot be hashed |
 | [KEY-READ-UNRECORDED](#key-read-unrecorded) | both | cash failed to record a read; the call or statement runs every time |
+| [KEY-READS-NOT-KEPT](#key-reads-not-kept) | decorator | a helper read more files outside cached calls than cash remembers; a call it may have handed data to is not stored |
 | [KEY-SOURCE-CHANGED](#key-source-changed) | decorator | a code file changed after import |
 | [KEY-STALE-CASH-KEY](#key-stale-cash-key) | decorator | one `__cash_key__` stands for two different contents |
 | [KEY-UNHASHABLE-ARG](#key-unhashable-arg) | decorator | an argument cannot be hashed; not cached |
@@ -1865,6 +1866,33 @@ have handed back the old result after the file changed.
 message, so cash can record that read.
 
 **When it is safe to ignore.** When the call or statement is cheap.
+
+### KEY-READS-NOT-KEPT {#key-reads-not-kept}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/tracking/read_credit.py:IDLE_READS_PER_CODE @8c252123, cash/tracking/read_credit.py:note_untracked_read @60d31a03, cash/decorator/file_deps.py:FileDeps.credit_remembered_reads @f7e24bfa -->
+**What happened.** A helper of the cached function read files while no
+cached function was running, more of them than cash remembers for one
+function (4,096), and this call reached the helper without the helper
+reading a file. The message names the helper. The result was returned but
+not cached, and the next call's miss says so.
+
+**Why it matters.** A helper that keeps what it read (`functools.lru_cache`,
+a module dict) hands a later call its data without reading again. cash
+credits the cached call with the files the helper read earlier, so an edit
+to one of them recomputes. Past the number it remembers, cash can no longer
+say which file the helper handed over, and an entry stored with no file
+would be served after the file changed. So the call runs every time
+instead.
+
+**What to do.** Pass the path the helper reads to the cached function as an
+argument: a path the call was given is still matched against the files cash
+remembers. Or call the helper only from inside cached functions, where each
+read is recorded with the call that made it.
+
+**When it is safe to ignore.** When the call is cheap, or the helper keeps
+nothing between calls and the cached function did not call it this time.
 
 ### KEY-SOURCE-CHANGED {#key-source-changed}
 
@@ -3220,7 +3248,7 @@ statement, on the line above it or at the end of its line. It turns off the
 rewind as well as caching, and the statement no longer raises this warning.
 `# @cash:allow-random` only silences the warning.
 
-<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @923fc9d4 -->
+<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @f47b657d -->
 With `@cash.cache`: the check runs when the decorator is applied, once per
 function, and reads only that function's source. A draw from the global
 `random` or `numpy.random` stream is not reported when a seed of that stream
@@ -3530,24 +3558,32 @@ multiple of 8 inside the memory the process uses.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.inputs_moved_during_call @7d2264c0, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @803cd545 -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.inputs_moved_during_call @7d2264c0, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @56f98d79 -->
 <!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @4364ed7d, cash/tracking/file_dep_snapshot.py:snapshot_file_deps @c3b72772 -->
-<!-- claim: cash/notebook/statement/store.py:StatementStore.inputs_moved @0669c2ad, cash/notebook/statement/processor.py:StatementProcessor._post_execute @a8c3dc59 -->
+<!-- claim: cash/notebook/statement/store.py:StatementStore.inputs_moved @e60eaaeb, cash/notebook/statement/processor.py:StatementProcessor._post_execute @a8c3dc59 -->
 === "Decorator"
 
-    **What happened.** A file the function read changed before it returned.
-    The result was returned but not stored.
+    **What happened.** A file the function read changed before it returned,
+    or a remote object it read (`s3://`, `https://`) was replaced. The result
+    was returned but not stored.
 
 === "Notebook"
 
-    **What happened.** A file the statement read changed before it finished,
-    another process replacing it, say. The statement's value is kept for this
+    **What happened.** A file or a remote object the statement read changed
+    before it finished, another process replacing it, say. The statement's value is kept for this
     run but not stored, and the statements below it that use the value are
     not served from what they stored for it; the next run reads the settled
     file. The warning comes once per statement.
 
 **Why it matters.** Nobody can say which version of the file the result came
 from, so storing it could serve a stale result later.
+
+<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker.add_tracked_remote @d35cd256, cash/tracking/file_tracker.py:FileAccessTracker._remote_changed_since_read @005b2b15, cash/tracking/file_dep_snapshot.py:remote_moved @4e5eda40 -->
+For a remote object cash asks the store for its validator before the read and
+again when the result is stored, and compares the two: a miss costs two
+metadata requests per object. Inside a revalidation window
+(`remote_revalidate_max_age_seconds`) the store is asked once, before the
+read, and the entry keeps that answer.
 
 <!-- claim: cash/tracking/file_tracker.py:FileAccessTracker.created_by_block @edb2ba0e, cash/tracking/file_tracker.py:FileAccessTracker.get_accessed_files @5c8d904e, cash/tracking/read_events.py:_on_mkdir @309b5321 -->
 A file the function creates itself (opened for writing, in a directory it made
@@ -3758,7 +3794,7 @@ made the setting.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.work_outlived_call @0f141a00, cash/tracking/reader_patches.py:_patch_thread_pool_submit @b3742318, cash/tracking/reader_patches.py:_patch_thread_start @1b59e2a1, cash/tracking/file_tracker.py:FileAccessTracker.__exit__ @690809e9 -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.work_outlived_call @0f141a00, cash/tracking/reader_patches.py:_patch_thread_pool_submit @bc00fd4f, cash/tracking/reader_patches.py:_patch_thread_start @1b59e2a1, cash/tracking/file_tracker.py:FileAccessTracker.__exit__ @2fb104a9 -->
 **What happened.** The function handed work to a `ThreadPoolExecutor`
 (`submit`, `map`) or started a `threading.Thread`, and returned while some of
 it was still running: it never waited for the future or joined the thread,

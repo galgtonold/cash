@@ -56,6 +56,8 @@ __all__ = [
     "snapshot_file_deps",
     "walk_dataset_dir",
     "snapshot_remote_deps",
+    "remote_token_now",
+    "remote_moved",
     "snapshot_absent_deps",
     "snapshot_present_deps",
     "probe_answers",
@@ -908,8 +910,33 @@ def probe_state_parts(probes: Mapping[str, str] | None) -> list[str]:
     return parts
 
 
-def snapshot_remote_deps(urls: Iterable[str]) -> dict[str, dict[str, Any]]:
+def remote_token_now(url: str) -> str:
+    """The token the store of *url* gives for it now, asked with the options
+    the read of it was made with (`read_options`). ``unresolved:...`` when
+    it could not be asked."""
+    return RemoteFileDataSource(url, storage_options=read_options(url)).state_token()
+
+
+def remote_moved(before: str, now: str) -> bool:
+    """Did a remote object change between two tokens taken of it?
+
+    A token that could not be read now says nothing here: the snapshot
+    records such an object as never fresh (`snapshot_remote_deps`). One that
+    could not be read BEFORE the read, and can now, cannot say the object
+    held still, so it counts as moved.
+    """
+    if now.startswith("unresolved:"):
+        return False
+    return before != now
+
+
+def snapshot_remote_deps(urls: Iterable[str], tokens: dict[str, str] | None = None) -> dict[str, dict[str, Any]]:
     """Return ``{url: {'remote': True, 'hash': token}}`` for remote reads.
+
+    *tokens*, when given, is filled with the token taken of each URL: the
+    check that no input moved during the call compares it with the one taken
+    before the read (`FileAccessTracker.remote_as_read`) instead of asking
+    the store once more.
 
     The token is whatever the object's store maintains to describe its content -
     an ETag, a version id, a GCS generation - read with a single metadata
@@ -934,6 +961,8 @@ def snapshot_remote_deps(urls: Iterable[str]) -> dict[str, dict[str, Any]]:
         if named:
             entry["options"] = named
         token = RemoteFileDataSource(url, storage_options=options).state_token()
+        if tokens is not None:
+            tokens[url] = token
         if token.startswith("unresolved:"):
             entry["unresolved"] = True
         else:
@@ -954,6 +983,7 @@ def snapshot_dependencies(
     as_read: Mapping[str, tuple[int, int, int]] | None = None,
     taken: Mapping[str, os.stat_result] | None = None,
     read_lstats: Mapping[str, os.stat_result] | None = None,
+    remote_tokens: dict[str, str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Snapshot everything a call read — local files and remote objects — as one dict.
 
@@ -961,7 +991,8 @@ def snapshot_dependencies(
     (``FileAccessTracker.get_unresolved_files``): each is recorded as never
     fresh. *present* are paths it probed and found without reading
     (``FileAccessTracker.get_present_files``). *stats*, *checked*,
-    *as_read*, *taken* and *read_lstats* are `snapshot_file_deps`'s.
+    *as_read*, *taken* and *read_lstats* are `snapshot_file_deps`'s;
+    *remote_tokens* is `snapshot_remote_deps`'s *tokens*.
 
     The single entry point both caching subsystems use, so neither has to
     remember to merge two helpers. Local and remote entries answer the same
@@ -986,7 +1017,7 @@ def snapshot_dependencies(
             extra["read_lstats"] = read_lstats
         snapshot = snapshot_file_deps(set(paths), known, **extra)
     if urls:
-        snapshot.update(snapshot_remote_deps(urls))
+        snapshot.update(snapshot_remote_deps(urls, remote_tokens))
     if absent:
         # After the present ones, and never over them: a path both probed and
         # read is present, and the read is the stronger record.
