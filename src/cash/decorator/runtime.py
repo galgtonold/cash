@@ -2553,7 +2553,7 @@ class CallRunner:
                 body_t1 = _perf_counter()
                 if pt is not None:
                     _phases.mark(pt, _phases.BODY)
-                code_trace.end(call.trace_unit)
+                call.trace_unit = code_trace.end(call.trace_unit)
                 NESTED_CASH_SECONDS.reset(nested_token)
                 # The nested calls' cash time is theirs, and this call's
                 # caller's body ran it too: handed up as such, never as this
