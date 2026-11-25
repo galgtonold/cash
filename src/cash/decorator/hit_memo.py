@@ -94,6 +94,7 @@ from .user_code import (
     own_package,
     unregistered_namespace_code,
 )
+from ..loaded_modules import loaded_module
 
 if TYPE_CHECKING:
     from .cached_function import CachedFunction
@@ -201,7 +202,7 @@ def numpy_scalars_keyed() -> int:
     the bytes of its value (iterating an array gives such scalars). Imports
     nothing: while numpy is not loaded no argument is one. How many types
     the extension took."""
-    numpy = sys.modules.get("numpy")
+    numpy = loaded_module("numpy")
     if numpy is None or numpy is _SCALARS_OF[0] or _cw is None or not hasattr(_cw, "set_scalar_types"):
         return 0
     from .._plain_data import numpy_scalar_types
@@ -236,7 +237,7 @@ def epochs(spec: CachedFunction, args: tuple, kwargs: dict) -> tuple | None:
     # the cash epoch now, not at the next fast hit, so a hit keyed under
     # the new state is not remembered under the old (`warning_state`).
     _cw.warn_check()
-    if _SCALARS_OF[0] is not sys.modules.get("numpy"):
+    if _SCALARS_OF[0] is not loaded_module("numpy"):
         numpy_scalars_keyed()
     state = spec.hit_state
     return _world_epoch(), _cash_epoch(), state[S_ENTRIES] if state is not None else None, _cw.keyed(args, kwargs)
@@ -845,11 +846,11 @@ class _Scan:
         module = t.__module__
         if module == "pandas._libs.properties" and t.__name__ == "AxisProperty":
             return True
-        pd = sys.modules.get("pandas")
+        pd = loaded_module("pandas")
         if pd is not None and v is getattr(pd, "NaT", None):
             return True
         if module == "numpy" and not t.__flags__ & _HEAPTYPE:
-            np = sys.modules.get("numpy")
+            np = loaded_module("numpy")
             return np is not None and isinstance(v, np.generic) and not isinstance(v, (np.void, np.object_))
         return False
 
@@ -947,7 +948,7 @@ class _Scan:
     def _sklearn_config(self, v: Any) -> bool:
         """sklearn's settings (``sklearn._config._threadlocal``, read by
         ``get_config``): watched by reading them again."""
-        config = sys.modules.get("sklearn._config")
+        config = loaded_module("sklearn._config")
         if config is None or v is not getattr(config, "_threadlocal", None):
             return False
         get_config = getattr(config, "get_config", None)
@@ -1597,7 +1598,7 @@ class ContentProbe:
                 return cls(v, _array_content)
             except Exception:  # noqa: BLE001 - cannot be read whole: not probed
                 return None
-        pd = sys.modules.get("pandas")
+        pd = loaded_module("pandas")
         if pd is not None and (t is pd.DataFrame or t is pd.Series):
             try:
                 if not _plain_frame(v, pd):
@@ -1732,10 +1733,10 @@ def _global_stream(owner: Any) -> bool:
     part kept reads the method by its library's name only, never the
     stream's position, which every draw moves and no watcher sees. So the
     state memo's scan watches the stream's class, not the stream."""
-    mtrand = sys.modules.get("numpy.random.mtrand")
+    mtrand = loaded_module("numpy.random.mtrand")
     if mtrand is not None and owner is getattr(mtrand, "_rand", None):
         return type(owner) is getattr(mtrand, "RandomState", None)
-    stdlib = sys.modules.get("random")
+    stdlib = loaded_module("random")
     return stdlib is not None and owner is getattr(stdlib, "_inst", None) and type(owner) is stdlib.Random
 
 

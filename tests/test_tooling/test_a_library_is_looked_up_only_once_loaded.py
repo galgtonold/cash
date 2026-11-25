@@ -25,8 +25,6 @@ HELPER = "loaded_modules.py"
 #: here: the test fails for a file listed that has none left.
 PENDING = frozenset(
     {
-        "canonical_form.py",
-        "decorator/hit_memo.py",
         "notebook/call_key.py",
         "notebook/shared_objects.py",
     }

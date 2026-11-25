@@ -60,6 +60,7 @@ from .value_types import (
     WEAK_PROXY_TYPES,
     is_dead_proxy,
 )
+from .loaded_modules import loaded_module
 
 
 class CyclicValueError(TypeError):
@@ -622,7 +623,7 @@ def _pandas_index(type_: type) -> bool:
     module = class_module(type_)
     if module != "pandas" and not module.startswith("pandas."):
         return False
-    pd = sys.modules.get("pandas")
+    pd = loaded_module("pandas")
     index = getattr(pd, "Index", None)
     return isinstance(index, type) and issubclass(type_, index)
 
@@ -1095,7 +1096,7 @@ def numpy_times() -> frozenset:
     (never imported here); empty otherwise. Each keys as its 8 bytes and
     its unit: a list of 868,000 of them (``list(frame['t'].diff())``) was
     pickled one by one."""
-    numpy = sys.modules.get("numpy")
+    numpy = loaded_module("numpy")
     known = _NUMPY_TIMES
     if numpy is known[0]:
         return known[1]
@@ -1117,7 +1118,7 @@ _NUMPY_TIMES: tuple[Any, frozenset] = (None, frozenset())
 
 def numpy_ndarray() -> type | None:
     """``numpy.ndarray`` when numpy is loaded (never imported here), else None."""
-    numpy = sys.modules.get("numpy")
+    numpy = loaded_module("numpy")
     known = _NDARRAY
     if numpy is known[0]:
         return known[1]
@@ -1142,7 +1143,7 @@ def pandas_dates() -> frozenset:
     when pandas 2 or later is loaded (never imported here), which key by
     their values (`_date_form`); empty otherwise. Subclasses are not in it:
     they keep the route of any object."""
-    pandas = sys.modules.get("pandas")
+    pandas = loaded_module("pandas")
     known = _PANDAS_DATES
     if pandas is known[0]:
         return known[1]
