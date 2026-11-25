@@ -29,6 +29,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from cash._user_attrs import attribute_or, has_attribute, own_dict
+from cash.builtin_calls import NO_EFFECT
 
 from ..._type_memo import class_module
 from ..._user_attrs import static_attr
@@ -86,33 +87,7 @@ CHEAP_REST_MIN_SAVING_SEC = 0.05
 # iterator unseen, because every value the header reads is checked
 # for being one; that check, not this list, is what stops `sorted(g)`
 # being skipped on a hit.
-PURE_ITER_PRODUCERS = frozenset(
-    {
-        "range",
-        "sorted",
-        "reversed",
-        "list",
-        "tuple",
-        "set",
-        "frozenset",
-        "dict",
-        "enumerate",
-        "zip",
-        "map",
-        "filter",
-        "iter",
-        "bytes",
-        "bytearray",
-        "str",
-        "len",
-        "min",
-        "max",
-        "abs",
-        "round",
-        "int",
-        "float",
-    }
-)
+PURE_ITER_PRODUCERS = NO_EFFECT
 
 #: Methods that build a FRESH iterator over their object on every call: a
 #: header calling one is sized from the object.

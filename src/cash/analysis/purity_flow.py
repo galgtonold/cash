@@ -32,6 +32,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
 
+from cash.builtin_calls import PUT_NOTHING_IN
+
 from .. import source_reads
 from .._type_memo import class_name
 from .._user_attrs import named_attr, plain_getattr
@@ -285,40 +287,7 @@ _NON_INSERTING_METHODS = frozenset(
 )
 
 #: Calls a container can be handed without anything being put into it.
-_READ_ONLY_CALLS = frozenset(
-    {
-        "len",
-        "sorted",
-        "sum",
-        "min",
-        "max",
-        "any",
-        "all",
-        "print",
-        "repr",
-        "str",
-        "enumerate",
-        "zip",
-        "reversed",
-        "iter",
-        "isinstance",
-        "bool",
-        "list",
-        "tuple",
-        "set",
-        "frozenset",
-        "dict",
-        "next",
-        "map",
-        "filter",
-        "hash",
-        "id",
-        "type",
-        "format",
-        "round",
-        "abs",
-    }
-)
+_READ_ONLY_CALLS = PUT_NOTHING_IN
 
 #: Constructors of an EMPTY container, and the defaultdict factories whose
 #: values are fresh or immutable.

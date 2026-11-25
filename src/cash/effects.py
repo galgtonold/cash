@@ -47,6 +47,8 @@ from collections.abc import Callable, Iterable, Mapping
 from enum import Enum
 from typing import Any, NamedTuple
 
+from cash.builtin_calls import NUMBER_MAKERS
+
 from ._user_attrs import plain_getattr
 
 __all__ = [
@@ -1033,7 +1035,7 @@ def _named_kind(name: str, call: ast.Call) -> EffectKind | None:
 
 
 #: Builtins whose answer is a number.
-_NUMBER_MAKERS = frozenset({"int", "float", "bool", "complex", "len", "abs", "round", "ord", "sum", "divmod"})
+_NUMBER_MAKERS = NUMBER_MAKERS
 
 
 def _hash_is_unsalted(node: ast.expr | None) -> bool:
