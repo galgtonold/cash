@@ -117,6 +117,7 @@ def _cell_key_parts(mock_shell, cash_instance, cell: str, monkeypatch) -> tuple:
 
     cash_instance.backend.clear()
     source_reading._SOURCE_LINES.clear()
+    source_reading._SOURCE_TEXT.clear()
     source_reading._HELD_LINES.clear()
     components: list[str] = []
     real = lineage.callable_source_component
