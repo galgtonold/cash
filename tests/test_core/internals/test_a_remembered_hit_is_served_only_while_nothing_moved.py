@@ -504,7 +504,7 @@ def test_a_memo_the_world_kept_off_scans_again_after_a_while(c):
     memo for good. A scan is also due a quarter second after the last one."""
     f = c.cache(plus_one)
     assert warm(f, 1) == 2
-    (memo,) = [m for m in hit_memo._MEMOS if m.state is hit_memo._STATE_OF[f]]
+    (memo,) = [m for m in hit_memo._MEMOS if m.state is hit_memo._STATE_OF[f]()]
     memo.backoff = 1024  # as ten scans that served nothing leave it
     sys.modules["_cash_test_world_moves"] = None
     del sys.modules["_cash_test_world_moves"]
