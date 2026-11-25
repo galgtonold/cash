@@ -21,7 +21,7 @@ from cash._user_attrs import attribute_or, instance_of
 
 from ..._clock import perf_counter as _perf_counter
 from ...analysis.ast_util import parse_cached
-from ...analysis.code_analyzer import clean_cell_source, parse_cell_source
+from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source
 from ...analysis.mutation_effects import (
     WATCHED_STRUCTURES,
     StatementEffects,
@@ -55,6 +55,7 @@ from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
 from ..cache_key import CacheKeyContext, compute_cache_key, draw_key, statement_source_hash
 from ..callee_reach import helper_seeded_modules, module_state_names
+from ..effects_record import EffectsRecord, inputs_digest
 from ..consumables import (
     drawn_stream_inputs,
     is_stream,
@@ -592,10 +593,42 @@ class StatementLineage:
             drawn = self.pyplot_draw_outputs(stmt_code, tree)
             outputs |= drawn
             inputs |= drawn
+            # What its runs were seen to change that its text does not say,
+            # where no object is left to ask (`EffectsRecord`).
+            outputs |= self._changed_as_recorded(stmt_code, tree, bound_above)
         # Nor IPython's history it does not bind, as the runtime takes it
         # (`history_names`).
         outputs -= history_names(outputs - set(effects.outputs), self.shell.user_ns)
         return effects, inputs, outputs
+
+    def effects_record(self, stmt_code: str) -> EffectsRecord | None:
+        """What the runs of *stmt_code* were seen to change: this session's
+        record, else an earlier kernel's, else None."""
+        source_hash = statement_source_hash(stmt_code)
+        record = self.tracking_state.effects_records.get(source_hash)
+        if record is None and self.probe.cash_instance is not None:
+            record = self.probe.effects(source_hash)
+        return record
+
+    def _changed_as_recorded(
+        self, stmt_code: str, tree: ast.Module | None, bound_above: Mapping[str, str] | None
+    ) -> frozenset[str]:
+        """The variables a run of *stmt_code* changed besides those its text
+        binds: of the run that read the inputs its text names at the
+        lineages the simulation gives them here (*bound_above*, else the
+        kernel's), else of every run on record."""
+        record = self.effects_record(stmt_code)
+        if record is None or not record.runs:
+            return frozenset()
+        live = self.tracking_state.variable_lineage
+        entry: dict[str, str] = {}
+        for name in CodeAnalyzer.analyze_code_block(stmt_code, tree=tree)[0]:
+            lineage = bound_above.get(name) if bound_above is not None else None
+            if lineage is None:
+                lineage = live.get(name)
+            if lineage is not None:
+                entry[name] = lineage
+        return record.changed(inputs_digest(entry))
 
     def _inputs_moved(self, inputs: set[str], virtual_lineage: Mapping[str, str], stmt_code: str = "") -> bool:
         """Whether the simulation gives one of *inputs* another lineage than

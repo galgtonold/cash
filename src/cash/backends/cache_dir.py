@@ -113,7 +113,12 @@ __all__ = [
 #: a relative read's second spelling in its absolute twin's record. An
 #: older build reads such an entry as one that depends on none of those
 #: files, and would serve it after they changed; they are cleared.
-CACHE_FORMAT_VERSION = 11
+#: 12: what of the process a statement changed is kept in its effects record
+#: (`statement_effects_key`), with the variables its runs changed that its
+#: text does not bind. An older cache holds it under a key this build does
+#: not read, so a restart's rebuild would leave those settings unmade; they
+#: are cleared.
+CACHE_FORMAT_VERSION = 12
 
 #: The per-directory format stamp. No entry suffix, so entry globs skip it.
 VERSION_FILENAME = "CACHE_VERSION"

@@ -4022,6 +4022,40 @@ class StatementProcessor:
         user_ns = self.shell.user_ns
         return any(_open_stream(user_ns.get(name)) for name in run.outputs)
 
+    def _note_changed_names(self, run: StatementRun, execution: StatementExecution) -> None:
+        """Keep for the upstream simulation the variables *run* changed that
+        its statement's text does not bind (`StatementRecords.note_changed_names`):
+        what the objects it met said (``f(4)`` with ``f`` holding
+        ``lst.append``, a call of a closure that counts), which a
+        simulation after a restart has no object to ask.
+
+        Of a statement the user wrote at cell level: a loop's or a branch's
+        body statements are the structure's, which the simulation reads as
+        one unit from the outcome its run recorded."""
+        if not execution.result.success or run.tree is None or not run.source_hash:
+            return
+        if is_control_body(run.code) or is_one_structure(run.tree) or run.magic_reads is not None:
+            return
+        try:
+            names = set(run.outputs) - {
+                node.id
+                for node in walk_tree(run.tree)
+                if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load)
+            }
+            if not names and run.source_hash not in self.tracking_state.effects_records:
+                return
+            # What the text alone says, as a simulation with no object to
+            # ask reads it: the names it binds, and the inputs the run is
+            # filed under.
+            reads, binds = CodeAnalyzer.analyze_code_block(run.code, tree=run.tree)
+            # ``lst.append(5)``: the simulation takes the receiver of a
+            # bare method call as changed from the text.
+            names -= binds | _bare_call_receivers(run.tree)
+            entry = {name: lineage for name, lineage in run.entry_lineages.items() if name in reads}
+            self._records.note_changed_names(run.source_hash, entry, names)
+        except Exception:  # noqa: BLE001 - best-effort: the simulation reads the text alone
+            logger.debug("%s could not record what %r changed", _LOG_PROCESSOR, run.code[:80], exc_info=True)
+
     def _post_execute(self, run: StatementRun, execution: StatementExecution) -> None:
         """Auto-track imports, capture vars, detect mutations, save to cache, record analytics.
 
@@ -4287,6 +4321,7 @@ class StatementProcessor:
         storage = (saved_metadata.storage if saved_metadata else None) or ()
         self._note_unstored(run, storage, execution.cost or execution.wall_time or 0.0)
         self._note_last_run(run, storage)
+        self._note_changed_names(run, execution)
         self._rebuild_cost.note(
             run.cache_key, run.inputs, run.outputs, execution.store_cost, on_disk=any(s != "RAM" for s in storage)
         )
@@ -6592,6 +6627,23 @@ def _open_stream(value: Any) -> bool:
         return not value.closed
     except Exception:  # noqa: BLE001 - a handle that cannot say is taken as open
         return True
+
+
+def _bare_call_receivers(tree: ast.Module) -> set[str]:
+    """The names the bare method calls of *tree* are made on: ``lst`` in
+    ``lst.append(5)`` and in ``box.items[0].add(x)``."""
+    found: set[str] = set()
+    for node in tree.body:
+        if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
+            continue
+        root = node.value.func
+        if not isinstance(root, ast.Attribute):
+            continue
+        while isinstance(root, (ast.Attribute, ast.Subscript)):
+            root = root.value
+        if isinstance(root, ast.Name):
+            found.add(root.id)
+    return found
 
 
 def _loop_targets(tree: ast.AST | None) -> frozenset[str]:
