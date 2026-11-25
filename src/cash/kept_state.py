@@ -3566,7 +3566,7 @@ def reference_recipe(obj: Any, reduced: Any) -> bytes | None:
     """The bytes that find *obj* again from its reduce value *reduced*, as
     loading a pickle of it does (`find_by_recipe`); None when they cannot
     be pickled."""
-    recipe = (by_name, (pickle.whichmodule(obj, reduced), reduced)) if isinstance(reduced, str) else reduced[:2]
+    recipe = (by_name, (module_pickle_names(obj, reduced), reduced)) if isinstance(reduced, str) else reduced[:2]
     try:
         return pickle.dumps(recipe, protocol=4)
     except Exception:  # noqa: BLE001 - whatever stops this pickle: no recipe
@@ -3743,8 +3743,36 @@ def _formatter_state(formatter: Any) -> Any:
 def _by_name_reduce(obj: Any, name: str, state: Any) -> tuple:
     """A reduce value naming *obj* as pickle does for the *name* its reduce
     gave, with *state* beside it: keyed, never loaded."""
-    module = pickle.whichmodule(obj, name)
-    return by_name, (module, name), state
+    return by_name, (module_pickle_names(obj, name), name), state
+
+
+def module_pickle_names(obj: Any, name: str) -> str:
+    """The module a pickle of *obj* by *name* (the string its reduce gave)
+    names: its ``__module__``, else the loaded module that holds it under
+    *name*, else ``__main__``.
+
+    ``pickle.whichmodule`` answered this up to Python 3.13. From 3.14 it
+    also checks that the name finds the object and raises when it does not
+    (one made in a function, one replaced under its name), so what was a
+    question became a refusal on one version. Asked here, a key and a
+    recipe are the same on every version; whether the name finds the object
+    is asked where that matters (`finds_itself`)."""
+    module = getattr(obj, "__module__", None)
+    if module is not None:
+        return module
+    path = name.split(".")
+    for module_name, held in sys.modules.copy().items():
+        if module_name in ("__main__", "__mp_main__") or held is None:
+            continue
+        found = held
+        try:
+            for part in path:
+                found = getattr(found, part)
+        except AttributeError:
+            continue
+        if found is obj:
+            return module_name
+    return "__main__"
 
 
 class _Keying:
