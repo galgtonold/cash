@@ -425,9 +425,11 @@ class TieredBackend(CacheBackend):
                             # tier may keep it as the copy handed out.
                             holder, value = [value], None
                             try:
-                                keep_read(key, holder, metadata, stream, restore_s)
-                            finally:
+                                value = keep_read(key, holder, metadata, stream, restore_s)
+                            except BaseException:
+                                # Not kept: the holder is still this read's.
                                 value = holder[0]
+                                raise
                             laid_out = True
                             continue
                         self.backends[j].set(key, value, metadata)

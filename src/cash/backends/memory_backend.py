@@ -1467,10 +1467,12 @@ class InMemoryBackend(CacheBackend):
             _remember_own_polars(frame)  # read from disk: its store is a clone
         return self.set(key, value, metadata) is not False
 
-    def keep_read(self, key: str, holder: list, metadata: MetadataDict, stream: bytes | None, seconds: float) -> None:
+    def keep_read(self, key: str, holder: list, metadata: MetadataDict, stream: bytes | None, seconds: float) -> Any:
         """Keep ``holder[0]``, a value a slower tier just unpickled out of
         *stream* and nothing has touched since, as `set` keeps it; *holder*
-        is its only reference, and holds the value to hand out after.
+        is its only reference. Returns the value to hand out: once this
+        tier keeps it, *holder* is the tier's (another thread's hit may
+        empty it), so the caller reads *holder* again only when this raised.
 
         A value this tier keeps as pickle bytes (`_Pickled`) is kept as
         *stream* itself, not pickled again: unpickling those bytes gives
@@ -1493,21 +1495,21 @@ class InMemoryBackend(CacheBackend):
         del value
         set_order.restore(holder[0], metadata)
         if stored is False:
-            return
+            return holder[0]
         with self._lock:
             entry = self._store.get(key)
             if entry is None or entry[0] is not metadata:
-                return
+                return holder[0]
             frozen = _keeps_frozen(metadata)
             if not frozen and entry[1] is not kept:
-                return
+                return holder[0]
         if frozen:
             # The stored entry is a copy of its own, or the very bytes the
             # value was read out of: the value is the caller's, kept for
             # the hits after as any copy a frozen hit hands out.
             holder[0] = self._keep_frozen(key, entry[1], holder)
-            return
-        self._keep_handed(key, _ReadOut(None, kept, seconds, False), holder)
+            return holder[0]
+        return self._keep_handed(key, _ReadOut(None, kept, seconds, False), holder)
 
     def peek_metadata(self, key: str) -> MetadataDict | None:
         """The metadata, without counting an access. See `BaseBackend.peek_metadata`."""
@@ -1787,11 +1789,24 @@ class InMemoryBackend(CacheBackend):
             if handed is None:
                 kept.misses += 1
                 return holder[0]
-            self._release_handed(key)
-            kept.handed = handed
-            self._handed[key] = kept
-            self._trim_handed()
-        return holder[0]
+            # The caller's reference, taken while the lock is held: from
+            # here another thread's hit may look at the kept copy, and one
+            # only cash holds is one it hands out (`handed_copies.reuse`);
+            # and a kept copy let go (`_release_handed`, by the trim below
+            # or by another thread) leaves *holder* empty.
+            value = holder[0]
+            try:
+                self._release_handed(key)
+                kept.handed = handed
+                self._handed[key] = kept
+                self._trim_handed()
+            except Exception:  # noqa: BLE001 - not kept; the caller still gets its copy
+                logger.debug("could not keep the copy handed out for %r", key, exc_info=True)
+                if self._handed.get(key) is kept:
+                    del self._handed[key]
+                kept.handed = None
+                handed_copies.release(handed)
+        return value
 
     def _release_handed(self, key: str) -> None:
         """Stop keeping the copy handed out for *key*. Lock held."""
