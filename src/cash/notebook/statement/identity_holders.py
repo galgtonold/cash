@@ -58,7 +58,7 @@ import struct
 import sys
 import types
 import weakref
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from itertools import accumulate, chain, compress, repeat
 from typing import Any
 
@@ -415,7 +415,9 @@ def identity_held_reason(
         return IdentityHeld(f"'{name}' could not be looked through", name, ID_KIND, what)
 
 
-def returned_identity_reason(value: Any, holders: dict[str, Any], seconds: float) -> IdentityHeld | None:
+def returned_identity_reason(
+    value: Any, holders: dict[str, Any] | Callable[[], dict[str, Any]], seconds: float
+) -> IdentityHeld | None:
     """For ``@cash.cache``: why *value*, what a call returned, must not be
     served from the cache, as `identity_held_reason` tells it for a
     statement's value; None when it may.
@@ -438,8 +440,12 @@ def returned_identity_reason(value: Any, holders: dict[str, Any], seconds: float
     kept = {length: list(reads) for length, reads in _FLAT_READS.items()}
     count = _flat_kept[0]
     try:
-        if _plain_tree_without_ids(value):
+        # A lone number or text is read as a list of it would be.
+        if _plain_tree_without_ids((value,) if type(value) in _PLAIN_LEAVES else value):
             return None
+        if callable(holders):
+            # Given as a function: asked only now that they are looked through.
+            holders = holders()
         with walk_budget(seconds):
             return identity_held_reason("the result", value, holders, id_free=False)
     finally:
@@ -572,6 +578,8 @@ def _candidate_ids(numbers: set[int]) -> set[int]:
 #: points at it or into it, and only its numbers and strings could find an
 #: object by its ``id()``.
 _PLAIN_TREE_TYPES = frozenset((dict, list, tuple, *IMMUTABLE_LEAF_TYPES))
+#: Of `_PLAIN_TREE_TYPES`, the leaves.
+_PLAIN_LEAVES = frozenset(IMMUTABLE_LEAF_TYPES)
 #: Of `_PLAIN_TREE_TYPES`, the leaves an ``id()`` can be read from.
 _ID_LEAVES = frozenset({int, str})
 

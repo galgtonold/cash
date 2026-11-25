@@ -586,11 +586,31 @@ def other_thread_alive(notebook_ns: Any, working: bool = False) -> bool:
     for t in threads:
         if t is me or t in HOST_THREADS or not t.is_alive():
             continue
-        if runs_user_code(t, notebook_ns):
-            return True
-        if _kernel_code(t):
+        if notebook_ns is not None:
+            if _counts_as_another(t, notebook_ns):
+                return True
             continue
-        name = getattr(_code_of(t), "__module__", None)
-        if not (isinstance(name, str) and (name == "cash" or name.startswith("cash."))):
+        # Outside a notebook the answer for a thread hangs on the code it
+        # was started with alone, and is kept with the thread: every miss
+        # of a cached function asks twice, about cash's own writer threads.
+        counts = _COUNTED.get(t)
+        if counts is None:
+            counts = _COUNTED[t] = _counts_as_another(t, None)
+        if counts:
             return True
     return False
+
+
+#: Per live thread, `_counts_as_another` outside a notebook. Held weakly.
+_COUNTED: weakref.WeakKeyDictionary[threading.Thread, bool] = _weak.WeakKeyDictionary()
+
+
+def _counts_as_another(t: threading.Thread, notebook_ns: Any) -> bool:
+    """Is *t*, alive and not this thread, one `other_thread_alive` counts:
+    any but the kernel's own and cash's own, told by the code it runs?"""
+    if runs_user_code(t, notebook_ns):
+        return True
+    if _kernel_code(t):
+        return False
+    name = getattr(_code_of(t), "__module__", None)
+    return not (isinstance(name, str) and (name == "cash" or name.startswith("cash.")))
