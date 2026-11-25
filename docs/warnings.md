@@ -926,10 +926,10 @@ the line.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/config/resolve.py:_validated_layer @ea2b7c73, cash/config/resolve.py:_unknown_key @6098acf3 -->
-**What happened.** A `[tool.cash]` table, a `[cash]` table or a
-`CASH_TIER_<N>_*` variable sets a key that is not a cash setting. The message
-names the closest real setting:
+<!-- claim: cash/config/resolve.py:_validated_layer @ea2b7c73, cash/config/resolve.py:_unknown_key @6098acf3, cash/config/sources.py:_notice_if_misspelt @5685ec88 -->
+**What happened.** A `[tool.cash]` table, a `[cash]` table, a
+`CASH_TIER_<N>_*` variable or a misspelt `CASH_*` variable sets a key that is
+not a cash setting. The message names the closest real setting:
 
 ```text title="Output"
 [CONFIG-UNKNOWN-KEY] …/pyproject.toml sets `max_cache_siz`,
@@ -937,9 +937,11 @@ which is not a cash setting, so it does nothing. Did you mean
 `max_cache_size`?
 ```
 
-Plain `CASH_*` variables that are not settings are not reported, because
-other tools use that prefix. The same key given in code, to `Cash(...)` or
-`cash.configure(...)`, raises `ValueError` instead.
+A plain `CASH_*` variable is reported when its name is nearly that of a
+setting, as `CASH_DISABLED` is of `CASH_DISABLE`. One that resembles no
+setting is not reported, because other tools use that prefix. The same key
+given in code, to `Cash(...)` or `cash.configure(...)`, raises `ValueError`
+instead.
 
 **Why it matters.** The setting you meant is not in effect.
 

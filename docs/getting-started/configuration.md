@@ -78,8 +78,8 @@ Values are checked whichever layer they come from:
 | Value | Accepted |
 |---|---|
 | Any setting, as a string | Read as an environment variable would be: `"true"`, `"8"`. |
-| Byte sizes | A number of bytes, or a string with a unit: `"2GB"`, `"500MB"`, `"512MiB"`. KB/MB/GB are powers of 1000, KiB/MiB/GiB of 1024. At least 1; leave unset for no cap. |
-| Entry counts | At least 1; leave unset for no cap. |
+| Byte sizes | A number of bytes, or a string with a unit: `"2GB"`, `"500MB"`, `"512MiB"`. KB/MB/GB are powers of 1000, KiB/MiB/GiB of 1024. At least 1; leave unset for the automatic cap. |
+| Entry counts | At least 1; leave unset for no limit. |
 | Seconds and other numbers | At least 0. |
 | `min_cache_savings_pct` | Between 0 and 1. |
 | `cache_dir` | Any path except the empty string. |
@@ -91,7 +91,7 @@ What happens on an error depends on where the value was set:
 |---|---|---|
 | Code: `Cash(...)`, `cash.configure(...)` | Raises `ValueError`. | Raises `ValueError` naming the closest setting (`Cash(ttl=60)`, a misspelt name, an unknown key in a tier table). |
 | A config file | Skipped, with [`CONFIG-INVALID`](../warnings.md#config-invalid). | Warns [`CONFIG-UNKNOWN-KEY`](../warnings.md#config-unknown-key). |
-| An environment variable | Skipped, with [`CONFIG-INVALID`](../warnings.md#config-invalid). | `CASH_TIER_<N>_*` warns `CONFIG-UNKNOWN-KEY`; another `CASH_*` name is ignored, since other tools share the prefix. |
+| An environment variable | Skipped, with [`CONFIG-INVALID`](../warnings.md#config-invalid). | `CASH_TIER_<N>_*` warns `CONFIG-UNKNOWN-KEY`, and so does another `CASH_*` name that is nearly a setting's (`CASH_DISABLED` for `CASH_DISABLE`). Any other `CASH_*` name is ignored, since other tools share the prefix. |
 
 ### Storage
 

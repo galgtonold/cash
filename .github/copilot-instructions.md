@@ -60,7 +60,9 @@ storage backends and the effect vocabulary (`effects.py`), not a key builder.
 - **`src/cash/config/`**: the settings. `schema.py` holds `CashConfig` and
   `TierConfig` and what each value may be; `sources.py` reads a config file and
   the `CASH_*` variables; `resolve.py` merges the layers (`get_config`);
-  `template.py` writes the documented config file. Which keys a tier type uses
+  `template.py` writes the documented config file. `env_names.py` lists the
+  `CASH_*` switches that are not settings; a new switch is added there, or a
+  mistyped setting cannot be told from it. Which keys a tier type uses
   is `backends/factory.py`'s `TIER_FIELDS`. Byte sizes (`"2GB"`) are read and
   formatted in `units.py`.
 - **`src/cash/tracking/`** and **`src/cash/analysis/`**, plus `purity.py`,
