@@ -434,6 +434,26 @@ def _job(text: str, name: str) -> str:
     return m.group("body")
 
 
+class TestTheFrameMemoMeetsTheNextPandas:
+    """pandas is not a dependency, so nothing pins the pandas the frame
+    memo meets. The nightly ``pandas-prerelease`` job writes a frame through
+    every known route under the newest pandas, pre-releases included, so a
+    route a new pandas opens is found before users have that pandas."""
+
+    PROBE = "tests/test_core/arguments/test_a_frame_written_by_any_route_is_hashed_again.py"
+
+    def test_the_nightly_workflow_probes_the_newest_pandas(self):
+        job = _job(NIGHTLY_YML.read_text(encoding="utf-8"), "pandas-prerelease")
+        assert re.search(r"pip install --upgrade --pre pandas\b", job), job
+        run = _step_run(job, "Write a frame through every known route")
+        assert self.PROBE in run, run
+        for narrowing in ("--deselect", " -k ", "::"):
+            assert narrowing not in run, f"the probe is narrowed by {narrowing.strip()!r}: {run}"
+
+    def test_the_probe_exists(self):
+        assert (REPO_ROOT / self.PROBE).is_file()
+
+
 class TestTheWheelIsChecked:
     """The suites run the editable install; only these jobs see the built wheel."""
 
