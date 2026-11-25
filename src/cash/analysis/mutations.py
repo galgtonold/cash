@@ -1542,6 +1542,9 @@ class TopLevelCalls:
     #: -> ``{'nx': {'G', 'region'}}``. Such a call may set on what it is
     #: handed rather than on the module (`classify_receivers`).
     setting_arguments: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    #: The receivers among ``method_calls`` that a decorator calls a method
+    #: on: ``@reg.add('x')`` and ``@reg.plain`` above a ``def`` -> ``{'reg'}``.
+    decorator_receivers: frozenset[str] = frozenset()
 
 
 #: `top_level_calls`'s answers, by the tree, held weakly. A statement's
@@ -1632,6 +1635,7 @@ class _TopLevelCallCollector:
         self.argument_bases: set[str] = set()
         self.setting_arguments: dict[str, frozenset[str]] = {}
         self.own_settings: set[str] = set()
+        self.decorator_receivers: set[str] = set()
 
     def statement(self, node: ast.stmt) -> None:
         if isinstance(node, ast.Match):
@@ -1640,6 +1644,10 @@ class _TopLevelCallCollector:
             for case in node.cases:
                 for sub in _nested_statements(case.body):
                     self.statement(sub)
+            return
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            for decorator in node.decorator_list:
+                self._decorator(decorator)
             return
         value = node.value if isinstance(node, (ast.Expr, ast.Assign, ast.AnnAssign)) else None
         if isinstance(value, ast.Call):
@@ -1658,6 +1666,25 @@ class _TopLevelCallCollector:
             # The whole RHS, so a draw nested in a larger expression
             # (``h = [ax.hist(d) for d in data]``) is caught too.
             self._nested_method_calls(node.value)
+
+    def _decorator(self, decorator: ast.expr) -> None:
+        """A decorator is the call it is: ``@reg.plain`` above a ``def`` is
+        ``reg.plain(f)``, ``@reg.add('x')`` is ``reg.add('x')(f)``, and
+        either can change ``reg`` as much as the call standing alone
+        (a registry, ``functools.singledispatch``'s ``register``, a web
+        app's ``route``). Each call of the chain is a bare call's
+        candidate; a method call in an argument is one whose result is
+        kept."""
+        layer: ast.expr = ast.Call(func=decorator, args=[], keywords=[])
+        while isinstance(layer, ast.Call):
+            self._bare_call(layer)
+            if isinstance(layer.func, ast.Attribute):
+                base = _extract_receiver_base_name(layer.func.value)
+                if base:
+                    self.decorator_receivers.add(base)
+            for arg in [*layer.args, *(kw.value for kw in layer.keywords)]:
+                self._nested_method_calls(arg)
+            layer = layer.func
 
     def _nested_method_calls(self, value: ast.expr, skip: ast.Call | None = None) -> None:
         for sub, local in _walk_with_locals(value):
@@ -1730,6 +1757,7 @@ class _TopLevelCallCollector:
             setting_receivers=frozenset(self.setting_receivers),
             assigned_method_calls=frozenset(self.assigned_method_calls),
             argument_bases=frozenset(self.argument_bases),
+            decorator_receivers=frozenset(self.decorator_receivers),
             setting_arguments={
                 base: names for base, names in self.setting_arguments.items() if base not in self.own_settings
             },

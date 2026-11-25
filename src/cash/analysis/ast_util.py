@@ -373,26 +373,49 @@ def nodes_in(tree: ast.AST | None, scope: CallScope = "all") -> list[ast.AST]:
     return out
 
 
-def _call_names(tree: ast.AST | None, scope: CallScope, pick) -> frozenset[str]:
-    """The names *pick* takes from each ``Call`` in *tree*, within *scope*."""
+def _call_names(tree: ast.AST | None, scope: CallScope, pick, decorators: bool = False) -> frozenset[str]:
+    """The names *pick* takes from each ``Call`` in *tree*, within *scope*.
+
+    With *decorators*, a decorator counts as the call it is: ``@register``
+    above a ``def`` calls ``register``, and it runs with the statement, so
+    the decorators of a definition *scope* skips are still looked at.
+    """
     if tree is None or plain_statement(tree):
         return frozenset()
     if scope == "all":
-        return frozenset(name for n in walk_tree(tree) if isinstance(n, ast.Call) for name in pick(n))
-    out: set[str] = set()
+        out = {name for n in walk_tree(tree) if isinstance(n, ast.Call) for name in pick(n)}
+        if decorators:
+            out.update(
+                deco.id
+                for n in walk_tree(tree)
+                if isinstance(n, _DEFINITIONS)
+                for deco in n.decorator_list
+                if isinstance(deco, ast.Name)
+            )
+        return frozenset(out)
+    out = set()
 
     def visit(node: ast.AST, top: bool) -> None:
         if isinstance(node, ast.Call):
             out.update(pick(node))
+        elif decorators and isinstance(node, _DEFINITIONS):
+            out.update(deco.id for deco in node.decorator_list if isinstance(deco, ast.Name))
         for field, value in ast.iter_fields(node):
             if scope == "no_control_bodies" and isinstance(node, _CONTROL_STATEMENTS) and field in _CONTROL_BODY_FIELDS:
                 continue
             for child in value if isinstance(value, list) else (value,):
                 if not isinstance(child, ast.AST):
                     continue
-                if scope == "top_level" and top and isinstance(child, _DEFINITIONS):
-                    continue
-                if scope == "eager" and isinstance(child, _DEFERRED):
+                skipped = (scope == "top_level" and top and isinstance(child, _DEFINITIONS)) or (
+                    scope == "eager" and isinstance(child, _DEFERRED)
+                )
+                if skipped:
+                    if decorators and isinstance(child, _DEFINITIONS):
+                        for deco in child.decorator_list:
+                            if isinstance(deco, ast.Name):
+                                out.add(deco.id)
+                            else:
+                                visit(deco, False)
                     continue
                 visit(child, False)
 
@@ -415,8 +438,10 @@ def calls_in(tree: ast.AST | None, scope: CallScope = "all") -> frozenset[ast.Ca
 
 
 def called_names(tree: ast.AST | None, scope: CallScope = "all") -> frozenset[str]:
-    """The bare names called as ``name(...)`` in *tree*, within *scope*."""
-    return _call_names(tree, scope, _called_name)
+    """The bare names called as ``name(...)`` in *tree*, within *scope*, or
+    used as a decorator (``@name`` above a ``def`` or ``class`` is the call
+    ``name(f)``)."""
+    return _call_names(tree, scope, _called_name, decorators=True)
 
 
 def handed_names(tree: ast.AST | None, scope: CallScope = "all") -> frozenset[str]:

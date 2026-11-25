@@ -36,7 +36,9 @@ REFUSED = {
         "iterator or stream",
     ),
     "a bound method of a lock": ("acq()", "a lock"),
-    "a registration on a function": ("fmt.register(int, fi)", "on a function for its effect"),
+    # Counted as changing the function, which also makes the statement a
+    # producer of it for the cells that call the function.
+    "a registration on a function": ("fmt.register(int, fi)", "In-place mutation on: fmt"),
     "a del of a name": ("del a", "Deletes 'a'"),
 }
 
