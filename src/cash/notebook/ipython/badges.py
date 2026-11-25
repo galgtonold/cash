@@ -261,16 +261,24 @@ class BadgePresenter:
         total: int,
         code: str | None,
     ) -> None:
-        """Render a RUNNING badge update, if the throttle allows one."""
+        """Render a RUNNING badge update, if the throttle allows one.
+
+        The interval is counted from the end of the render: a render draws
+        every row so far, and once one took longer than the interval (a long
+        cell, a busy machine), an interval counted from its start had passed
+        by the next statement, and every statement rendered them all again."""
         if self.mode == "html" and self._throttle_allows():
-            self.render(
-                metrics,
-                display_id=display_id,
-                status="RUNNING",
-                current_step=step,
-                total_steps=total,
-                current_code=code,
-            )
+            try:
+                self.render(
+                    metrics,
+                    display_id=display_id,
+                    status="RUNNING",
+                    current_step=step,
+                    total_steps=total,
+                    current_code=code,
+                )
+            finally:
+                self._last_render_time = time.time()
 
     def arm_progress(
         self, metrics: list[ProcessResult], display_id: str, step: int, total: int, code: str | None
