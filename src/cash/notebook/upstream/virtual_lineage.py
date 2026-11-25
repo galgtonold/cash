@@ -446,6 +446,23 @@ class VirtualLineage:
             return False
         return self.tracking_state.share_edges_changed_since(cached.share_edge_generation, cached.statement_hashes)
 
+    def _text_changed_from(self, start: int, current_cell_idx: int, notebook_cells: list[str]) -> bool:
+        """Whether a cell from *start* up to the running one has another
+        text than its snapshot was simulated with.
+
+        `_scan_main_cache_for_changes` reports an edited cell only when it
+        is the first cell it stops at. After a restart and a rebuild, the
+        first cell's snapshot is simulated again on the next check (its
+        statements ran since), the scan stopped there, and a saved edit to
+        a cell below it was not counted as a modification above: the value
+        the old code left in memory was then taken for an unsaved edit, or
+        for a loop's trusted output, and served."""
+        for idx in range(start, min(current_cell_idx, len(self.cache.entries))):
+            if self.cache.entries[idx].cell_code_hash != exact_source_digest(notebook_cells[idx].replace("\r\n", "\n")):
+                logger.debug("[UPSTREAM_DEBUG] Hash mismatch in cell %d (below the first cell simulated again)", idx)
+                return True
+        return False
+
     def _check_lightweight_hash_cache(
         self,
         current_cell_idx: int,
@@ -556,6 +573,14 @@ class VirtualLineage:
                     "[UPSTREAM_DEBUG] A tracked module was reloaded; re-simulating from cell %d, its first reader.",
                     reader,
                 )
+
+        # The scan stops at the first cell it simulates again for any reason
+        # (a share record, a file, what of the cell ran): an edited cell
+        # below that one is an upstream modification all the same.
+        if not cache_had_hash_mismatch and self._text_changed_from(
+            first_changed_cell, current_cell_idx, notebook_cells
+        ):
+            cache_had_hash_mismatch = True
 
         # Check the lightweight hash cache for cells beyond the main cache range.
         if not cache_had_hash_mismatch and self.cache.cell_hashes:
