@@ -53,10 +53,13 @@ from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.call_effects import DigestHandoff
 from cash.notebook.compiled_source import register_cell_source
 from cash.notebook.consumables import (
+    LOCK,
     STREAM,
     UNREAD,
     drawn_stream_inputs,
     drawn_stream_inputs_why,
+    effect_calls_on_functions,
+    moved_through_callables,
     with_other_names,
     without_read_handles,
 )
@@ -2669,6 +2672,42 @@ class StatementProcessor:
             run.skip_cache = True
             run.value_varies = True
             run.drew_from_stream = any(isinstance(self.shell.user_ns.get(name), io.IOBase) for name in drawn)
+            return
+        held = moved_through_callables(run.tree, run.inputs, run.outputs, self.shell.user_ns)
+        if held:
+            # ``w = buf.write`` then ``w('hi')``: the same call as
+            # ``buf.write('hi')``, which the statement's text refuses.
+            streams = [repr(name) for name, kind in held.items() if kind == STREAM]
+            locks = [repr(name) for name, kind in held.items() if kind == LOCK]
+            if streams:
+                run.metrics["uncacheable_reasons"].append(
+                    f"Calls {', '.join(streams)}, which holds an iterator or stream: "
+                    f"a cache hit would not advance it, so the statement runs every time"
+                )
+            if locks:
+                run.metrics["uncacheable_reasons"].append(
+                    f"Calls {', '.join(locks)}, which holds a lock: "
+                    f"a cache hit would not take or release it, so the statement runs every time"
+                )
+            run.skip_cache = True
+            run.value_varies = True
+            return
+        registered = effect_calls_on_functions(run.tree, self.shell.user_ns)
+        if registered:
+            run.metrics["uncacheable_reasons"].append(
+                f"Calls {', '.join(registered)} on a function for its effect: "
+                f"what it changes is kept on the function, which a cache hit would not change, "
+                f"so the statement runs every time"
+            )
+            run.skip_cache = True
+            return
+        deleted = _deleted_names(run.tree)
+        if deleted:
+            run.metrics["uncacheable_reasons"].append(
+                f"Deletes {', '.join(repr(name) for name in deleted)}: "
+                f"a cache hit would leave it bound, so the statement runs every time"
+            )
+            run.skip_cache = True
             return
         drawn = library_streams_read(run.code, self.shell.user_ns)
         if drawn:
@@ -6627,6 +6666,21 @@ def _open_stream(value: Any) -> bool:
         return not value.closed
     except Exception:  # noqa: BLE001 - a handle that cannot say is taken as open
         return True
+
+
+def _deleted_names(tree: ast.Module | None) -> list[str]:
+    """The names the top-level ``del`` statements of *tree* unbind."""
+    if tree is None:
+        return []
+    return sorted(
+        {
+            target.id
+            for node in tree.body
+            if isinstance(node, ast.Delete)
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        }
+    )
 
 
 def _bare_call_receivers(tree: ast.Module) -> set[str]:
