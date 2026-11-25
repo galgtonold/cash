@@ -18,7 +18,11 @@ compare; ``--quick`` only takes fewer samples.
 from __future__ import annotations
 
 import importlib
+import os
 import shutil
+import subprocess
+import sys
+import time
 from collections.abc import Callable
 
 from benchmarks import _speed_fixtures as fx
@@ -182,6 +186,68 @@ def _first_call(side: str, ctx: Context) -> dict[str, Timing]:
                 target = importlib.import_module(name).target
                 (instance.cache(target) if instance else target)(50)
     return {"": per_call(t[0], len(names))}
+
+
+_NEW_PROCESS_SCRIPT = """import time
+
+{setup}
+
+
+def helper(x):
+    return x * x % 7
+
+
+{decorator}def target(n):
+    total = 0
+    for i in range(n):
+        total += helper(i)
+    return {{"n": n, "total": total}}
+
+
+started = time.perf_counter()
+target(200_000)
+print(time.perf_counter() - started)
+"""
+
+
+def _child(ctx: Context, *argv: str) -> tuple[float, str]:
+    """Run ``python *argv`` over the scenario's own cache folder; the wall
+    time of the whole process and what it printed."""
+    env = dict(os.environ, CASH_CACHE_DIR=str(ctx.tmp / ".cash-new-process"))
+    started = time.perf_counter()
+    done = subprocess.run(
+        [sys.executable, *argv], cwd=str(ctx.tmp), env=env, capture_output=True, text=True, encoding="utf-8"
+    )
+    elapsed = time.perf_counter() - started
+    if done.returncode != 0:
+        raise RuntimeError(f"python {' '.join(argv)} exited {done.returncode}: {done.stderr[-500:]}")
+    return elapsed, done.stdout
+
+
+@scenario(
+    "dec_new_process",
+    "decorator",
+    "a new process: start-up, and the first call over a warm cache",
+    clock="wall",
+    metrics=(
+        ("import", "`python -c 'import cash'` against a bare interpreter start"),
+        ("first_hit", "first call in a new process: a hit from disk against running the 10 ms body"),
+    ),
+)
+def _new_process(side: str, ctx: Context) -> dict[str, Timing]:
+    script = ctx.tmp / f"new_process_{side}.py"
+    if not script.exists():
+        cash = side == "cash"
+        script.write_text(
+            _NEW_PROCESS_SCRIPT.format(setup="import cash" if cash else "", decorator="@cash.cache\n" if cash else ""),
+            encoding="utf-8",
+        )
+        # The process that stores the entry: the samples are the ones after.
+        _child(ctx, script.name)
+    start, _ = _child(ctx, "-c", "import cash" if side == "cash" else "pass")
+    _, printed = _child(ctx, script.name)
+    call = float(printed.strip().splitlines()[-1])
+    return {"import": Timing(start, start), "first_hit": Timing(call, call)}
 
 
 @scenario("dec_keying", "decorator", "RAM hit keyed on an array, a frame, a config dict and a name list")
