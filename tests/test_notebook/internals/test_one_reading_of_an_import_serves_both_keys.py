@@ -99,3 +99,16 @@ def test_neither_key_scans_for_imports_itself(module):
     source = inspect.getsource(module)
     assert "IMPORT_NAME" not in source
     assert "imports_of" in source
+
+
+@pytest.mark.parametrize("filler", list(FILLERS))
+def test_the_run_time_trace_reads_the_same_imports_in_a_long_body(filler):
+    """What a call's trace takes from its imports (`code_trace.import_reads_now`)
+    follows the instructions after each import too, so it keeps its own
+    loop; in a long body it found no import at all."""
+    from cash.decorator.code_trace import import_reads_now
+
+    found = import_reads_now(_function_code(FILLERS[filler]), {"__package__": "mypkg.sub"})
+    assert ("mypkg.sub.helper", "mypkg.sub.helper", ("scale",)) in found
+    assert ("sklearn", "sklearn", ("linear_model",)) in found
+    assert ("numpy", "numpy", ()) in found
