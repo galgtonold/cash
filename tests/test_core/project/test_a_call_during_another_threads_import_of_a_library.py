@@ -131,6 +131,26 @@ def test_a_module_is_loaded_only_once_its_import_has_finished(tmp_path, monkeypa
     assert loaded_module("gated_library") is half
 
 
+def test_the_thread_importing_a_module_sees_it_as_plain_python_does(tmp_path, monkeypatch):
+    """A hook run as an import finishes (the one that wraps a pool's module
+    first imported inside a cached call) asks on the importing thread,
+    before the import system calls the module whole."""
+    (tmp_path / "asks_for_itself.py").write_text(
+        "import sys\n"
+        "from cash.loaded_modules import loaded_module\n"
+        "SEEN = loaded_module(__name__)\n"
+        "INITIALIZING = __spec__._initializing\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    try:
+        module = __import__("asks_for_itself")
+        assert module.INITIALIZING is True, "the import system no longer marks a module being imported"
+        assert module.SEEN is module
+    finally:
+        sys.modules.pop("asks_for_itself", None)
+
+
 def test_a_module_that_is_absent_or_has_no_spec_is_answered_plainly(monkeypatch):
     from cash.loaded_modules import loaded_module
 
