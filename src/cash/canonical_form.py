@@ -188,7 +188,9 @@ def stable_key_repr(
 
     * Every dict, list, tuple, set and frozenset becomes a tuple tagged with its
       type (`_typed`), so containers of different types never key alike.
-    * The items of a set are sorted by their pickled bytes: a set of strings
+    * The items of a set are sorted: by value when they are all strings,
+      ints, bytes, floats or tuples of those (`_sorted_atoms`), else by
+      their pickled bytes. A set of strings
       iterates in an order PYTHONHASHSEED picks. The order its items that
       hash alike in every process (numbers, and tuples of them) iterate in
       is kept beside them where it is not that sorted order
@@ -880,6 +882,53 @@ def _remember_sorted(value: frozenset, form: Any) -> None:
     _SORTED_SETS[key] = (wref, form)
 
 
+#: Item types that sort among themselves by value, one distinct value one
+#: place (`_sorted_atoms`).
+_SELF_ORDERED = frozenset((str, int, bytes))
+
+
+def _sorted_atoms(walked: list, tuples: bool = True) -> list | None:
+    """The items of a set sorted by value, when its content alone decides
+    that order at the cost of one sort: all strings, all ints or all bytes,
+    all floats with no NaN among them, or all tuples of one length whose
+    places each hold one of those kinds. None for any other set, whose
+    items are sorted by their pickled content (`_by_content_of_form`).
+
+    That pickle, one item at a time through the Python-level pickler, was
+    10-15 us an item on every key build, hits included: a set of 100,000
+    ids took a second where the list of them took 10 ms. Which way a set
+    sorts depends on the types of its items alone, so equal sets sort
+    alike, in any process, with or without the C extension. Not *tuples*
+    when a hook is asked about every value that is not a primitive.
+    """
+    kinds = set(map(type, walked))
+    if len(kinds) != 1:
+        return None
+    (kind,) = kinds
+    if kind in _SELF_ORDERED:
+        return sorted(walked)
+    if kind is float:
+        return sorted(walked) if _no_nan(walked) else None
+    if kind is tuple and tuples:
+        widths = set(map(len, walked))
+        if len(widths) != 1 or not next(iter(widths)):
+            return None
+        for column in zip(*walked):
+            column_kinds = set(map(type, column))
+            if len(column_kinds) != 1:
+                return None
+            (column_kind,) = column_kinds
+            if column_kind not in _SELF_ORDERED and not (column_kind is float and _no_nan(column)):
+                return None
+        return sorted(walked)
+    return None
+
+
+def _no_nan(numbers: Any) -> bool:
+    """Is no float of *numbers* a NaN (which sorts nowhere)?"""
+    return all(map(operator.eq, numbers, numbers))
+
+
 def _by_content_of_form(pair: tuple) -> bytes:
     """A set item's sort key: the content of its form (`_object_steps`)."""
     return _plain_data.content_dumps(pair[0])
@@ -904,15 +953,21 @@ def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
                 if entry is not None and entry[0]() is value:
                     return entry[1]
             walked = list(value)
-            for v in walked:
-                if type(v) in prims:
-                    items.append((v, v))
-                else:
-                    remembered = False
-                    items.append(((yield v), v))
-            items.sort(key=_by_content_of_form)
-            order = kept_state.set_walk_order(walked, [v for _, v in items])
-            sorted_forms = tuple(f for f, _ in items)
+            ordered = _sorted_atoms(walked, tuples=walk.hook is None)
+            if ordered is not None:
+                # Each item is its own form: no item is pickled to sort it.
+                sorted_forms = tuple(ordered)
+            else:
+                for v in walked:
+                    if type(v) in prims:
+                        items.append((v, v))
+                    else:
+                        remembered = False
+                        items.append(((yield v), v))
+                items.sort(key=_by_content_of_form)
+                ordered = [v for _, v in items]
+                sorted_forms = tuple(f for f, _ in items)
+            order = kept_state.set_walk_order(walked, ordered)
             form = yield from _typed(value, sorted_forms if order is None else (sorted_forms, order), walk)
             if remembered:
                 _remember_sorted(value, form)

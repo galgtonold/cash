@@ -73,7 +73,7 @@ import typing
 import weakref
 from typing import TYPE_CHECKING, Any
 
-from .. import _native, _weak
+from .. import _native, _verify, _weak
 from .._clock import perf_counter as _perf_counter
 from .._memo import CODE_OBJECTS, LruMemo
 from .._type_memo import class_flags, class_mro, class_name
@@ -111,8 +111,9 @@ def _flag(name: str, default: str) -> bool:
 
 #: Is the fast path on? Needs the extension; ``CASH_HITPATH=0`` turns it off.
 ENABLED = _cw is not None and _flag("CASH_HITPATH", "1")
-#: ``CASH_HITPATH_VERIFY=1``: every fast hit builds the key again and compares.
-VERIFY = ENABLED and _flag("CASH_HITPATH_VERIFY", "0")
+#: ``CASH_HITPATH_VERIFY=1`` (or ``CASH_VERIFY=1``): every fast hit builds
+#: the key again and compares.
+VERIFY = ENABLED and _verify.requested("CASH_HITPATH_VERIFY")
 
 _fast_lookup = _cw.fast_lookup if ENABLED else None
 if ENABLED:
@@ -136,7 +137,7 @@ if ENABLED:
     _cw.world_scope(_SCOPED_NAMES)
 
 
-class HitMemoMismatch(AssertionError):
+class HitMemoMismatch(_verify.Mismatch):
     """``CASH_HITPATH_VERIFY=1``: the fast path served a key the ordinary
     key build no longer gives."""
 
@@ -2314,7 +2315,16 @@ class HitMemo:
         # The memo is at the core epoch, and at the epochs of the scoped
         # names its scans met (`_SCOPED_NAMES`), kept among its cells.
         core_now = _core_epoch()
-        if state[S_WORLD] != core_now or (self.scoped and not _cw.world_holds(self.scoped, ())):
+        # A write to a closure cell moves no epoch: the cells are compared.
+        # This call's key was built from what they hold NOW; remembered
+        # beside cells that held something else, it would be served again
+        # the day they hold that again -- a variable of the enclosing
+        # function going 1, 9, 1 got the answer for 9.
+        if (
+            state[S_WORLD] != core_now
+            or (self.scoped and not _cw.world_holds(self.scoped, ()))
+            or not _cw.world_holds(state[S_CELLS], state[S_TYPES])
+        ):
             if self.failed_epoch == world_now:
                 return
             self.slow_since_scan += 1

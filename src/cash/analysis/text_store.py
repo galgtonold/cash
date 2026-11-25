@@ -39,6 +39,7 @@ import threading
 from collections.abc import Callable
 from typing import Any, TypeVar
 
+from .. import _verify
 from . import scan_store
 
 __all__ = ["STATS", "StoredTextMismatch", "flush", "held", "kept", "status"]
@@ -66,7 +67,7 @@ _PENDING: dict[tuple[Any, str], set[str]] = {}
 _USED: dict[str, set[str]] = {}
 
 
-class StoredTextMismatch(AssertionError):
+class StoredTextMismatch(_verify.Mismatch):
     """``CASH_ANALYSIS_MEMO_VERIFY=1``: a stored answer is not what working
     it out again from the text gives."""
 

@@ -658,7 +658,9 @@ def _incremental_simulation_agrees():
     (``cash.notebook.upstream.cell_memo``). The check also raises, but the
     cell executor steps aside on any error, so the test might not see it.
     A kernel's differences go to ``CASH_VERIFY_INCREMENTAL_SIM_LOG``."""
-    if os.environ.get("CASH_VERIFY_INCREMENTAL_SIM", "") in ("", "0"):
+    from cash._verify import requested
+
+    if not requested("CASH_VERIFY_INCREMENTAL_SIM"):
         yield
         return
     from cash.notebook.upstream import virtual_lineage

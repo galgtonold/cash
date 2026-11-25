@@ -44,7 +44,7 @@ import os
 from collections.abc import Callable
 from typing import Any
 
-from .. import _native, _weak
+from .. import _native, _verify, _weak
 from .._memo import LruMemo
 from .._type_memo import class_module, class_qualname
 from . import hit_memo, main_rebinding, state_memo
@@ -71,7 +71,7 @@ def _flag(name: str, default: str) -> bool:
 #: Is the memo on? Needs the extension's world watch, as the state memo does.
 ENABLED = state_memo.ENABLED and _flag("CASH_CLASS_MEMO", "1")
 #: Fold again behind every reuse and compare.
-VERIFY = ENABLED and (_flag("CASH_CLASS_MEMO_VERIFY", "0") or state_memo.VERIFY)
+VERIFY = ENABLED and (_verify.requested("CASH_CLASS_MEMO_VERIFY") or state_memo.VERIFY)
 
 #: Classes watched at once; a class beyond is scanned again when met again.
 _PROOFS = 1024
@@ -88,7 +88,7 @@ STATS = {"scans": 0, "refused": 0, "served": 0, "recorded": 0, "verified": 0}
 CALLEE_STATES_BUILT = [0]
 
 
-class ClassMemoMismatch(AssertionError):
+class ClassMemoMismatch(_verify.Mismatch):
     """``CASH_CLASS_MEMO_VERIFY=1``: a remembered class fold is not what
     folding it again gives."""
 

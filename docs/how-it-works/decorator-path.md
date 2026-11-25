@@ -208,7 +208,7 @@ A categorical column is checked like any other; one you wrote through an
 array pandas handed you (`s.values`, `s.array`, `pd.Categorical(s,
 copy=False)`) is read again on the next call.
 
-<!-- claim: cash/canonical_form.py:_object_steps @f6bc3e0c, cash/canonical_form.py:SORTED_SET_MIN == 256 -->
+<!-- claim: cash/canonical_form.py:_object_steps @83b03d05, cash/canonical_form.py:SORTED_SET_MIN == 256 -->
 A frozenset of 256 or more numbers, strings and bytes is put in its sorted
 order once and recognised after that for as long as it exists, so a repeat
 call with a big frozenset costs milliseconds; a set, or a frozenset holding
@@ -254,7 +254,7 @@ the entry records that hash, so `explain()` can say when a hit was matched by
 
 ## When there is no key
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @4ced0037 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @8554213c -->
 If any part of the key cannot be built, the call runs uncached and cash warns.
 It never caches under a partial key. The usual causes:
 

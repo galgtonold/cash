@@ -21,7 +21,7 @@ import types
 from collections.abc import Callable, Collection, Iterator
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from .. import _weak, argument_sharing, rewrite_in_place
+from .. import _verify, _weak, argument_sharing, rewrite_in_place
 from .. import phase_times as _phases
 from .._active import EXPLAINING as _EXPLAINING
 from .._clock import perf_counter as _perf_counter
@@ -537,6 +537,11 @@ class KeyBuilder:
         except KeyBuildFailed as e:
             self._notices.warn_once(CashCacheIneffectiveWarning, func_name, e.code, e.message, code=e.code, fix=e.fix)
             return Unkeyable(_KEY_FAILED), watch, ledger
+        except _verify.Mismatch:
+            # A self-check's finding (``CASH_VERIFY=1``) is a bug in cash to
+            # see, not a key build to step around: as a warning and an
+            # uncached call it passed every test whose result stayed right.
+            raise
         except Exception as e:  # noqa: BLE001 - any failure building the key means no key
             self._args.warn_key_build_failed(func_name, args, kwargs, e)
             return Unkeyable(_KEY_FAILED), watch, ledger
