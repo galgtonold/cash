@@ -148,17 +148,65 @@ def _install_wrapper(owner: Any, name: str, original: Any, kind: Any, make: Call
 
     Trackers open and close around every cached call, so a wrapper is built
     once per original and only set again after that.
+
+    A module-level function gets ONE wrapper however many modules expose it
+    (``os.path.getsize`` is ``genericpath.getsize``), named as the original
+    and also set where that name points (``posix.stat`` for ``os.stat``):
+    pickle stores a function by module and name and checks that the name
+    still gives the same object, and a program may hand
+    ``os.path.getsize`` to a process pool while a cached call runs. Two
+    wrappers of one function, or one that is not where its name says,
+    raised ``PicklingError`` there.
     """
-    key = (id(owner), name, kind)
+    in_module = issubclass(type(owner), types.ModuleType)
+    key = (id(original), "", kind) if in_module else (id(owner), name, kind)
     cached = _wrappers.get(key)
     if cached is not None and cached[0] is original:
         wrapper = cached[1]
     else:
         wrapper = make(original)
         _mark_patch(wrapper, original)
+        if in_module:
+            _name_as(wrapper, original)
         _wrappers[key] = (original, wrapper)
     if not _patches.replace(owner, name, wrapper):
         logger.debug("[FILE_TRACKER] Failed to patch %r.%s", owner, name)
+    elif in_module:
+        home = _named_home(original)
+        if home is not None and home[0] is not owner:
+            _patches.replace(home[0], home[1], wrapper)
+
+
+def _name_as(wrapper: Any, original: Any) -> None:
+    """Give *wrapper* the module and name of *original*, as
+    ``functools.wraps`` does; a handler registered without it is named too."""
+    if type(wrapper) is not types.FunctionType:
+        return
+    for attribute in ("__module__", "__name__", "__qualname__"):
+        value = plain_getattr(original, attribute, None)
+        if isinstance(value, str) and plain_getattr(wrapper, attribute, None) != value:
+            try:
+                setattr(wrapper, attribute, value)
+            except (AttributeError, TypeError):
+                pass
+
+
+def _named_home(original: Any) -> tuple[Any, str] | None:
+    """``(module, name)`` where *original*'s own ``__module__`` and
+    ``__qualname__`` point, when that is a library module's attribute
+    holding it."""
+    module_name = plain_getattr(original, "__module__", None)
+    name = plain_getattr(original, "__qualname__", None)
+    if not isinstance(module_name, str) or not isinstance(name, str) or "." in name:
+        return None
+    module = sys.modules.get(module_name)
+    if module is None or not issubclass(type(module), types.ModuleType):
+        return None
+    if module_name == "__main__" or _is_user_module(module):
+        return None  # a stand-in of the user's own: its name there is theirs
+    if plain_getattr(module, "__dict__", {}).get(name) is not original:
+        return None
+    return module, name
 
 
 def _install_module_patches(module_name: str, module_obj: Any) -> None:
@@ -651,7 +699,7 @@ def _patch_thread_pool_submit() -> None:
 
             def run(*args, **kwargs):
                 try:
-                    return context.run(fn, *args, **kwargs)
+                    return context.run(_run_handed_task, fn, args, kwargs)
                 finally:
                     tracker.work_finished(trackers)
 
@@ -799,14 +847,33 @@ _PATH_MACHINERY = frozenset({"os", "posixpath", "ntpath", "genericpath", "pathli
 _NOTEBOOK_STATEMENT_PREFIX = CELL_NAME_PREFIX
 
 
+#: Modules that run a task someone handed them. A probe or metadata call
+#: they make directly IS the task -- ``pool.map(os.path.getsize, files)``,
+#: ``Thread(target=os.path.exists, args=(flag,))`` -- so it counts as asked
+#: by the user's code: in a pool's worker no frame of the user's is on the
+#: stack at all, and an answer nobody recorded is an input no entry checks.
+_TASK_RUNNERS = frozenset(
+    {"multiprocessing.pool", "concurrent.futures.process", "concurrent.futures.thread", "threading"}
+)
+
+
+def _run_handed_task(fn: Callable[..., Any], args: tuple, kwargs: dict) -> Any:
+    """Run the task a pool was handed, from cash's own relay of it. A frame
+    of this function stands for the task runner (`_TASK_RUNNERS`)."""
+    return fn(*args, **kwargs)
+
+
 def _who_asked(frame: Any) -> str:
     """`frame_kind` of the code that made the call *frame* made, looking
     through pathlib and ``os``, which only pass a path question on. A
-    notebook statement is the user's code."""
+    notebook statement is the user's code, and so is a task runner calling
+    the probe as its task (`_TASK_RUNNERS`)."""
     while frame is not None and frame.f_globals.get("__name__") in _PATH_MACHINERY:
         frame = frame.f_back
     if frame is None:
         return "other"
+    if frame.f_code is _run_handed_task.__code__ or frame.f_globals.get("__name__") in _TASK_RUNNERS:
+        return "user"
     filename = frame.f_code.co_filename
     if filename.startswith(_NOTEBOOK_STATEMENT_PREFIX):
         return "user"
@@ -1116,7 +1183,7 @@ class _ReadsInWorker:
         _hold_for_worker_life()
         tracker = self.tracker_type()
         with tracker:
-            value = self.fn(*args, **kwargs)
+            value = _run_handed_task(self.fn, args, kwargs)
         return _WorkerReads(
             value,
             sorted(tracker.get_accessed_files()),
