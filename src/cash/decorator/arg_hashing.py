@@ -393,7 +393,8 @@ def frame_signature(obj: Any) -> tuple:
     exact change signal. The
     axis NAMES are compared by value, because ``df.index.name = ...``
     renames the same Index object and the content hash includes them; so
-    are the index ``freq`` and ``attrs``, which the hash also holds.
+    are the axes' ``freq``, ``attrs`` and the duplicate-labels flag, which
+    the hash also holds and which are set on the same objects.
 
     Two ways around copy-on-write are closed separately. An Arrow-backed
     array (pandas 3's strings, in a column or an axis) is written by
@@ -407,7 +408,7 @@ def frame_signature(obj: Any) -> tuple:
     blocks = tuple(_array_signature(block.values) for block in mgr.blocks)
     attrs = pickle.dumps(stable_key_repr(obj.attrs, BUILTIN_CONTENT), protocol=4) if obj.attrs else None
     index = (id(obj.index), _axis_arrays_signature(obj.index), tuple(obj.index.names))
-    index += (repr(getattr(obj.index, "freq", None)), attrs)
+    index += (repr(getattr(obj.index, "freq", None)), attrs, obj.flags.allows_duplicate_labels)
     if hasattr(obj, "columns"):
         columns = (id(obj.columns), _axis_arrays_signature(obj.columns), tuple(obj.columns.names))
         columns += (repr(getattr(obj.columns, "freq", None)),)

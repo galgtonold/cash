@@ -1199,6 +1199,15 @@ default argument or base class does. **Fix:** move the binding above this cell.
 
 ## Others
 
+- **A NumPy array's read-only flag is not part of its key.** An array and a
+  read-only array of the same values, dtype, shape and memory order share an
+  entry, so a function that returns `a.flags.writeable`, or that writes into
+  its argument where plain Python would raise, can be served the other
+  array's result. The flag belongs to the view, not to the values: a copy or
+  a pickle of a read-only array is writable, and under pandas' copy-on-write
+  the array taken out of a table is read-only or not depending on how the
+  table keeps its columns. Keyed, equal data would miss on it. A result that
+  is a read-only array is stored and handed back read-only.
 - **An empty cached value** (an empty list or frame) may be computed again
   instead of restored.
 - **A pandas table served from memory is read-only past pandas.** Under

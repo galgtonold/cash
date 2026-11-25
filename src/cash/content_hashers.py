@@ -184,6 +184,11 @@ def hash_pandas(value: Any) -> str | None:
             labels = (value.name, *index.names)
             schema = f"{value.name!r}:{_pandas_dtype_key(value.dtype)!r}:{axes}"
         h = hashlib.sha256(schema.encode("utf-8"))
+        if not value.flags.allows_duplicate_labels:
+            # ``set_flags(allows_duplicate_labels=False)``: code reads the
+            # flag, and pandas raises where such a frame would get a
+            # duplicate label.
+            h.update(b"|no-duplicate-labels|")
         if not _PLAIN_NAMES.issuperset(map(type, labels)):
             # A name is any hashable object, and two of them may print
             # alike: keyed as a value is, not by its ``repr``.
