@@ -58,9 +58,14 @@ def _put_last(entries: dict, key: str, value: Any) -> None:
     entries[key] = value
 
 
-def _trim(entries: dict, most: int) -> None:
+def _trim(entries: dict, most: int) -> list:
+    """Drop the oldest of *entries* past *most*; the keys dropped."""
+    dropped = []
     while len(entries) > most:
-        entries.pop(next(iter(entries)))
+        key = next(iter(entries))
+        entries.pop(key)
+        dropped.append(key)
+    return dropped
 
 
 @dataclass
@@ -196,6 +201,22 @@ class _View:
         self._drop("ram_only" if kind == "keys" else "keys", key)
         self._drop(kind, key)
         self._put(kind, key, value)
+
+    def forget(self, key: str) -> None:
+        """*key* left the record: out of both kinds."""
+        self._drop("keys", key)
+        self._drop("ram_only", key)
+
+    def rebase(self, disk: Doc, pending: _Changes | None) -> None:
+        """This process wrote the record: *disk* is the file now, which
+        is what this view held when the write took its changes, less the
+        oldest keys the write let go. Those leave, unless a note not
+        written yet (*pending*) holds them."""
+        self.disk = disk
+        for kind in ("keys", "ram_only"):
+            noted = getattr(pending, kind) if pending is not None else {}
+            for key in [key for key in self._entries(kind) if key not in disk[kind] and key not in noted]:
+                self._drop(kind, key)
 
     def _entries(self, kind: str) -> dict[str, Any]:
         return self.keys if kind == "keys" else self.ram_only
@@ -528,13 +549,21 @@ class StoredKeyRecord:
             other.pop(cache_key, None)
             mine = getattr(changes, kind)
             _put_last(mine, cache_key, value)
-            trimmed = len(mine) > self.KEYS_MAX
-            _trim(mine, self.KEYS_MAX)
+            trimmed = _trim(mine, self.KEYS_MAX)
             view = self._views.get(path)
             if view is not None:
-                if trimmed:  # an older note left the record: built again on the next miss
+                if trimmed and not self._only_noted(path, view, trimmed):
+                    # An older note left the record, and the file or the
+                    # write under way says something else about its key:
+                    # built again on the next miss.
                     del self._views[path]
                 else:
+                    # A note that left and that nothing else knows is gone
+                    # from the record: a loop of quick misses notes more
+                    # than `KEYS_MAX` between two writes, and built the
+                    # view again on every one of them.
+                    for gone in trimmed:
+                        view.forget(gone)
                     view.put(kind, cache_key, value)
             if state in changes.states:
                 _put_last(changes.states, state, changes.states[state])
@@ -544,6 +573,16 @@ class StoredKeyRecord:
                 changes.states[state] = None if on_disk else flat_ledger(state)
                 _trim(changes.states, self.STATES_MAX)
         return path
+
+    def _only_noted(self, path: str, view: _View, keys: list) -> bool:
+        """Are *keys* known to the record of *path* only by notes not
+        written yet -- in neither the file *view* was built on nor the
+        write under way? Called with the lock held."""
+        sources = [view.disk] if view.disk is not None else []
+        writing = self._writing.get(path)
+        if writing is not None:
+            sources.append({"keys": writing.keys, "ram_only": writing.ram_only})
+        return not any(key in source[kind] for source in sources for kind in ("keys", "ram_only") for key in keys)
 
     # -- writing ---------------------------------------------------------
 
@@ -636,7 +675,8 @@ class StoredKeyRecord:
             self._writing[path] = changes
         try:
             with self._io_lock:
-                doc = self._read_disk(path)
+                base = self._disk_doc(path, 0.0)
+                doc = _empty() if base is None else {kind: dict(value) for kind, value in base.items()}
                 changes.apply(doc)
                 for kind, most in (
                     ("keys", self.KEYS_MAX),
@@ -655,7 +695,18 @@ class StoredKeyRecord:
                         json.dump({"func": changes.func, **doc}, fh)
                     replace_with_retry(tmp, path)
                     # What this process just wrote is what its next miss reads.
-                    self._remember(path, os.stat(path), doc)
+                    written = self._remember(path, os.stat(path), doc)
+                with self._lock:
+                    # The view of the file as it was, with these changes,
+                    # is the view of the file as it is, but for the keys
+                    # the write let go: a write a second made every miss
+                    # after it build the view again.
+                    view = self._views.get(path)
+                    if view is not None:
+                        if view.disk is base:
+                            view.rebase(written, self._pending.get(path))
+                        else:
+                            del self._views[path]
         except (OSError, TypeError, ValueError):
             logger.debug("could not write the stored-key record %s", path, exc_info=True)
         finally:
