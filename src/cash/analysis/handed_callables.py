@@ -1596,20 +1596,21 @@ def _calls_by_name(source: str, fn: Any) -> bool:
     (``isinstance``, ``len``): a builtin changes nothing a statement's key
     leaves out, and nor does a class handed to one (``isinstance(o, A)``)."""
     from .ast_util import called_names, handed_names
-    from .callee_effects import scope_locals
+    from .callee_effects import called_function, scope_locals
 
     node = parse_function_source(source)
     if node is None:
         return bool(source_called_names(source))
     globals_ = plain_getattr(fn, "__globals__", None) or {}
     own = scope_locals(node)
+    run = called_function(node)
 
     def counts(name: str) -> bool:
         return name in globals_ or not hasattr(builtins, name)
 
-    if any(counts(name) for name in called_names(node) - own):
+    if any(counts(name) for name in called_names(run) - own):
         return True
-    return any(counts(name) and not instance_of(globals_.get(name), type) for name in handed_names(node) - own)
+    return any(counts(name) and not instance_of(globals_.get(name), type) for name in handed_names(run) - own)
 
 
 def dataclass_made(fn: Any, cls: type) -> bool:

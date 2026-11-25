@@ -130,3 +130,34 @@ def test_assume_safe_keeps_the_call_cached_without_a_warning(results):
 def test_strict_raises(results):
     assert results["strict"].startswith("raised: "), results["strict"]
     assert "strict=True" in results["strict"], results["strict"]
+
+
+REGISTERED = {}
+
+
+def _registered(fn):
+    REGISTERED[fn.__name__] = fn
+    return fn
+
+
+@_registered
+def _double(v):
+    return v * 2
+
+
+def _through_a_registered_one(v):
+    return _double(v)
+
+
+def _apply(f, v):
+    return f(v)
+
+
+@pytest.mark.parametrize("handed", [_double, _through_a_registered_one], ids=lambda f: f.__name__)
+def test_a_decorator_that_registered_a_function_is_not_run_by_calling_it(handed):
+    """``@register`` above a ``def`` changed the registry once, when the
+    ``def`` ran. A call of the function changes nothing, so handing it to a
+    cached function leaves the call cached."""
+    from cash.analysis.handed_callables import hands_a_state_changing_callable
+
+    assert not hands_a_state_changing_callable(_apply, (handed, 3), {}, through_globals=False, objects=False)
