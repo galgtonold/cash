@@ -211,6 +211,36 @@ def test_a_flag_bound_again_under_its_name_is_the_same_flag(which, monkeypatch):
     assert which.cache_info()["hits"] == 1
 
 
+def test_a_flag_made_after_many_unnamed_objects_were_met_is_still_found(monkeypatch):
+    """Objects keep private ``object()`` tokens, and each one met inside a
+    value is searched for. After a few such searches found nothing, a flag
+    of the user's bound since must still be told from another."""
+    module = sys.modules[__name__]
+    for _ in range(20):
+        assert bare_instances.name_of(object(), patient=False) is None
+    monkeypatch.setattr(module, "LATE", object(), raising=False)
+    monkeypatch.setattr(module, "LATER", object(), raising=False)
+    assert bare_instances.name_of(module.LATE, patient=False) == f"{__name__}:LATE"
+    assert bare_instances.name_of(module.LATER, patient=False) == f"{__name__}:LATER"
+
+
+def test_an_unnamed_object_a_module_s_data_holds_does_not_stop_the_key(disk_cash, monkeypatch):
+    """Only an argument is refused: ``REG.entry = Entry()`` read by the
+    function is found through ``REG``."""
+    holder = Config(Missing())
+    monkeypatch.setattr(sys.modules[__name__], "HOLDER", holder, raising=False)
+
+    @disk_cash.cache
+    def read(x):
+        return (x, HOLDER.fill is not None)  # noqa: F821 - set above
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert read(1) == (1, True)
+        assert read(1) == (1, True)
+    assert read.cache_info()["hits"] == 1
+
+
 def test_the_name_is_the_same_whichever_module_was_loaded_first():
     assert bare_instances.name_of(DROP) == f"{__name__}:DROP"
     assert bare_instances.name_of(Options.OFF) == f"{__name__}:Options.OFF"

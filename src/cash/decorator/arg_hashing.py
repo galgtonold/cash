@@ -2675,9 +2675,17 @@ class ArgHasher:
             (self.override_hashers or self.type_hashers) and self.keys_by_registration_only(arg)
         ):
             return self.cash_key_hash(arg, method), _NOT_CONTENT
-        if _hook_kind(type(arg)) is _BARE and is_bare(arg) and not self.keys_by_registration(arg):
+        if (
+            _CALL_ARGUMENTS.get()
+            and _hook_kind(type(arg)) is _BARE
+            and is_bare(arg)
+            and not self.keys_by_registration(arg)
+        ):
             # An ``object()`` handed over that no name holds: nothing tells
-            # it from the next one, so no key (`bare_instances`).
+            # it from the next one, so no key (`bare_instances`). Only as
+            # an argument of the call: one a module's data or a closure
+            # holds (``REG.entry = Entry()``) is found through its holder,
+            # and is keyed as it was.
             if name_of(arg) is None:
                 raise NamelessInstanceError(arg)
         lineage = self._trusted_lineage(arg)
