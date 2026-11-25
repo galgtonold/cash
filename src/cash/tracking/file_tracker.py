@@ -118,6 +118,9 @@ _FAILURES_KEPT = 8
 _READS_KEPT = 65536
 #: A `track_path` without a key from its caller: it makes its own.
 _NO_KEY: Any = object()
+# The `read_key` handed to the next `track_path` on this thread
+# (`FileAccessTracker.track_path_asked`).
+_asked = threading.local()
 #: code filename -> `frame_kind`, for the walk `read_key` makes at every
 #: read: a plain dictionary, started over when it has grown past any
 #: program's files.
@@ -728,15 +731,28 @@ class FileAccessTracker:
             return  # a link, or changed since the block first read it
         self._reads_recorded[key] = (abs_path, then, holders)
 
-    def track_path(self, path, read: Any = _NO_KEY) -> bool:
+    def track_path_asked(self, path, read: tuple | None) -> bool:
+        """`track_path`, for a caller that has made the `read_key` of this
+        read and asked `recorded_unchanged` already: neither is done again.
+
+        The key is handed over beside the call, not as an argument:
+        `track_path` is the one way a read reaches the tracker, and takes a
+        path and nothing else."""
+        _asked.read = read
+        try:
+            return self.track_path(path)
+        finally:
+            _asked.read = _NO_KEY
+
+    def track_path(self, path) -> bool:
         """Record a read of *path*, unless it is not a user dependency.
         True when resolving it just found a regular file there (its
-        ``lstat``), so the caller need not stat it to know it is there.
-
-        *read* is the caller's `read_key` of this read, when it has asked
-        `recorded_unchanged` already."""
+        ``lstat``), so the caller need not stat it to know it is there."""
         global _tracking_seconds
-        if read is _NO_KEY:
+        read = getattr(_asked, "read", _NO_KEY)
+        if read is not _NO_KEY:
+            _asked.read = _NO_KEY  # this call's, not one made while recording it
+        else:
             read = self.read_key(path, sys._getframe(1))
             if read is not None and self.recorded_unchanged(read):
                 return True
@@ -1311,8 +1327,15 @@ class FileAccessTracker:
             return
         if token is None:
             # Cash's own request: not a file or a connection of the block's.
-            with untracked():
-                token = file_dep_snapshot.remote_token_now(url)
+            try:
+                with untracked():
+                    token = file_dep_snapshot.remote_token_now(url, warn=False)
+            except Exception:  # noqa: BLE001 - recording a read never fails the read
+                # The store cannot be asked at all (no filesystem package
+                # for the scheme): the snapshot says so when the entry is
+                # stored, as it did before a token was taken here.
+                logger.debug("[TRACKER] No token before the read of %r", url, exc_info=True)
+                return
         for tracker in self._self_and_parents():
             tracker.remote_as_read.setdefault(url, token)
 

@@ -60,14 +60,13 @@ def test_every_function_replaced_while_a_call_is_tracked_pickles_as_the_original
     names = {f"{m}.{n}" for m, n in replaced}
     # Positive control: the scan saw the wrappers this is about.
     for expected in (
-        "genericpath.getsize",
         "posixpath.getsize" if os.name == "posix" else "ntpath.getsize",
         "os.stat",
         "os.lstat",
         "os.access",
         "os.scandir",
-        "genericpath.exists",
-        "genericpath.isfile",
+        "posixpath.exists" if os.name == "posix" else "ntpath.exists",
+        "posixpath.isfile" if os.name == "posix" else "ntpath.isfile",
         "sqlite3.connect",
         "linecache.getline",
         "pandas.read_csv",
@@ -76,15 +75,54 @@ def test_every_function_replaced_while_a_call_is_tracked_pickles_as_the_original
     for where, (original, _wrapper, data) in replaced.items():
         assert getattr(sys.modules[where[0]], where[1]) is original, where
         assert pickle.loads(data) is original, where
-        assert data == pickle.dumps(original), where  # the bytes plain Python writes
 
 
 def test_one_original_has_one_replacement_wherever_it_is_exposed():
-    import genericpath
+    import sqlite3
+    import sqlite3.dbapi2
 
     with FileAccessTracker():
-        assert os.path.getsize is genericpath.getsize
-        assert os.path.exists is genericpath.exists
+        assert sqlite3.connect is sqlite3.dbapi2.connect
+        assert os.path.getsize is sys.modules[os.path.__name__].getsize
+
+
+def test_only_the_names_cash_watches_are_replaced_not_where_the_original_says_it_lives():
+    """``os.stat`` calls itself ``posix.stat``, and the import system and
+    the standard library call it there: set there too, every ``import`` in
+    a tracked block went through cash's wrapper, and a statement served
+    after a restart was keyed apart from the run that stored it."""
+    low_level = sys.modules[os.stat.__module__]
+    originals = (low_level.stat, low_level.listdir, low_level.scandir, low_level.access)
+    with FileAccessTracker():
+        assert os.stat is not originals[0], "the watched name is replaced"
+        assert (low_level.stat, low_level.listdir, low_level.scandir, low_level.access) == originals
+        assert pickle.loads(pickle.dumps(os.stat)) is os.stat
+    assert pickle.loads(pickle.dumps(os.stat)) is originals[0]
+
+
+def test_a_probe_keys_the_same_inside_another_cached_call(disk_cash, tmp_path):
+    """While a tracker is open ``os.stat`` is cash's wrapper, under another
+    name than the original's own: a call nested in another cached call
+    still finds the entry a top-level call stored."""
+    import sqlite3
+
+    path = tmp_path / "d.txt"
+    path.write_text("abc", encoding="utf-8")
+    runs: list[str] = []
+
+    @disk_cash.cache(assume_safe=True)
+    def inner(p):
+        runs.append("inner")
+        return os.stat(p).st_size + os.path.getsize(p) + int(os.access(p, os.R_OK)) + len(sqlite3.connect.__name__)
+
+    @disk_cash.cache(assume_safe=True)
+    def outer(p):
+        runs.append("outer")
+        return inner(p) + 1
+
+    assert inner(str(path)) == 14
+    assert outer(str(path)) == 15
+    assert runs == ["inner", "outer"]
 
 
 def _sizes(files):

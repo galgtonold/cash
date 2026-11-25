@@ -294,3 +294,20 @@ class TestTheCheckItself:
         from cash.tracking.file_dep_snapshot import remote_moved
 
         assert not remote_moved('etag:"v1"', "unresolved:u:2")
+
+
+def test_a_store_that_cannot_be_asked_does_not_fail_the_recording(monkeypatch):
+    """No filesystem package for the scheme: the read is recorded, and the
+    snapshot reports the missing package when the entry is stored."""
+    from cash.exceptions import DependencyNotFoundError
+    from cash.tracking import file_dep_snapshot
+
+    def no_package(url, warn=True):
+        raise DependencyNotFoundError("no filesystem for gs://")
+
+    monkeypatch.setattr(file_dep_snapshot, "remote_token_now", no_package)
+    tracker = FileAccessTracker()
+    tracker.track_path("gs://bucket/key.parquet")
+    assert tracker.get_accessed_remote_urls() == {"gs://bucket/key.parquet"}
+    assert tracker.remote_as_read == {}
+    assert tracker.inputs_changed_since_read() == []

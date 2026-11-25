@@ -39,7 +39,7 @@ from typing import Any, NamedTuple
 from cash._memo import FILE_DIGESTS, LruMemo
 from cash._paths import MAIN_MODULE_NAMES, main_namespace_name, normalize_path, resolve_file_dep_path
 from cash.bulk_digest import BulkHasher
-from cash.remote_source import RemoteFileDataSource, addressing_options, read_options
+from cash.remote_source import RemoteFileDataSource, addressing_options, read_options, token_before_read
 from cash.tracking import file_watch as _fw
 from cash.tracking.digest_table import current_table
 from cash.tracking.file_versions import note_same_content
@@ -910,11 +910,14 @@ def probe_state_parts(probes: Mapping[str, str] | None) -> list[str]:
     return parts
 
 
-def remote_token_now(url: str) -> str:
+def remote_token_now(url: str, warn: bool = True) -> str:
     """The token the store of *url* gives for it now, asked with the options
     the read of it was made with (`read_options`). ``unresolved:...`` when
-    it could not be asked."""
-    return RemoteFileDataSource(url, storage_options=read_options(url)).state_token()
+    it could not be asked, with a warning unless *warn* is off."""
+    options = read_options(url)
+    if not warn:
+        return token_before_read(url, options)
+    return RemoteFileDataSource(url, storage_options=options).state_token()
 
 
 def remote_moved(before: str, now: str) -> bool:

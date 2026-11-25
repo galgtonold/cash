@@ -102,7 +102,7 @@ def _dispatch_track(path: Any) -> None:
 #: (module id, pattern) -> (namespace size, matched names); `_find_patch_targets`.
 _patch_targets: LruMemo[tuple[int, str], tuple[int, list]] = LruMemo(PATCH_SITES)
 #: (owner id, name, kind) -> (original, wrapper); `_install_wrapper`.
-_wrappers: LruMemo[tuple[int, str, Any], tuple[Any, Any]] = LruMemo(PATCH_SITES)
+_wrappers: LruMemo[tuple[int, str, Any], tuple[Any, Any, Any]] = LruMemo(PATCH_SITES)
 #: What the last full install was computed from; `install_patches`.
 _installed_for: Any = None
 
@@ -150,9 +150,8 @@ def _install_wrapper(owner: Any, name: str, original: Any, kind: Any, make: Call
     Trackers open and close around every cached call, so a wrapper is built
     once per original and only set again after that.
 
-    A module-level function gets ONE wrapper however many modules expose it
-    (``os.path.getsize`` is ``genericpath.getsize``), named as the original
-    and also set where that name points (``posix.stat`` for ``os.stat``):
+    A module-level function gets ONE wrapper however many of the watched
+    modules expose it, named after a place it is set at (`_name_as`):
     pickle stores a function by module and name and checks that the name
     still gives the same object, and a program may hand
     ``os.path.getsize`` to a process pool while a cached call runs. Two
@@ -163,33 +162,57 @@ def _install_wrapper(owner: Any, name: str, original: Any, kind: Any, make: Call
     key = (id(original), "", kind) if in_module else (id(owner), name, kind)
     cached = _wrappers.get(key)
     if cached is not None and cached[0] is original:
-        wrapper = cached[1]
+        wrapper, home = cached[1], cached[2]
     else:
         wrapper = make(original)
         _mark_patch(wrapper, original)
-        if in_module:
-            _name_as(wrapper, original)
-        _wrappers[key] = (original, wrapper)
+        home = _name_as(wrapper, original, owner, name) if in_module else None
+        _wrappers[key] = (original, wrapper, home)
     if not _patches.replace(owner, name, wrapper):
         logger.debug("[FILE_TRACKER] Failed to patch %r.%s", owner, name)
-    elif in_module:
-        home = _named_home(original)
-        if home is not None and home[0] is not owner:
-            _patches.replace(home[0], home[1], wrapper)
+    elif home is not None and home[0] is not owner:
+        _patches.replace(home[0], home[1], wrapper)
 
 
-def _name_as(wrapper: Any, original: Any) -> None:
-    """Give *wrapper* the module and name of *original*, as
-    ``functools.wraps`` does; a handler registered without it is named too."""
+def _name_as(wrapper: Any, original: Any, owner: Any, name: str) -> tuple[Any, str] | None:
+    """Name *wrapper*, about to be set as ``owner.name``, so that pickle
+    finds it under its name; returns the other ``(module, name)`` it has to
+    be set at for that, if any.
+
+    A Python function keeps the original's module and name -- cash's keys
+    read them -- and is also set where they point
+    (``pyarrow.parquet.core.read_table`` for ``pyarrow.parquet.read_table``),
+    unless that is a module of the user's.
+
+    A function written in C is named ``owner.name`` instead and set nowhere
+    else: ``os.stat`` calls itself ``posix.stat``, and the import system and
+    the rest of the standard library call it there. Replaced there, every
+    ``import`` in a tracked block went through cash's wrapper. Stored as
+    ``os.stat``, it loads as whatever stands there: the original once the
+    tracker has closed.
+    """
     if type(wrapper) is not types.FunctionType:
-        return
-    for attribute in ("__module__", "__name__", "__qualname__"):
-        value = plain_getattr(original, attribute, None)
+        return None
+    named = {
+        attribute: plain_getattr(original, attribute, None) for attribute in ("__module__", "__name__", "__qualname__")
+    }
+    home = None
+    if type(original) is types.FunctionType:
+        home = _named_home(original)
+        if home is not None and home[0] is owner:
+            home = None
+    else:
+        module = sys.modules.get(named["__module__"]) if isinstance(named["__module__"], str) else None
+        if module is not owner or named["__qualname__"] != name:
+            named["__module__"] = plain_getattr(owner, "__name__", None)
+            named["__qualname__"] = name
+    for attribute, value in named.items():
         if isinstance(value, str) and plain_getattr(wrapper, attribute, None) != value:
             try:
                 setattr(wrapper, attribute, value)
             except (AttributeError, TypeError):
                 pass
+    return home
 
 
 def _named_home(original: Any) -> tuple[Any, str] | None:
