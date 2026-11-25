@@ -361,7 +361,8 @@ class FileEvictor:
 
         The ranking is a queue consumed across many passes; entries written
         after it was taken join `fresh`. The index is compacted here once it
-        has grown past twice the directory.
+        has grown past twice the directory (and, between rankings, by
+        whoever appends to it: `RankIndex.flush`).
         """
         ranks: dict[str, tuple[float, int]] = {}
         try:
@@ -379,7 +380,8 @@ class FileEvictor:
         except OSError:
             logger.debug("Could not scan %s to rank evictions", self.cache_dir, exc_info=True)
 
-        indexed, index_clock, index_lines = self.rank_index.load()
+        # Compacted below, to exactly this ranking, rather than by the load.
+        indexed, index_clock, index_lines = self.rank_index.load(compact=False)
 
         prio: dict[str, float] = {}
         recency: dict[str, float] = {}

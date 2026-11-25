@@ -1312,7 +1312,9 @@ class FileBackend(CacheBackend):
             self._flush_lock.release()
         if self._initialized:
             self._flush_metadata()
-            self.evictor.rank_index.flush()
+            # Also leaves the index near one line per entry: a run that only
+            # reads appends a line per entry it read.
+            self.evictor.rank_index.close()
 
     def list_entries(self) -> list[dict[str, Any]]:
         self._ensure_initialized()
