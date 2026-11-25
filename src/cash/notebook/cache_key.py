@@ -48,7 +48,7 @@ from .lineage_formula import (
     unread_routine_in,
 )
 from .recorded_reads import ReadRecord, choose, read_parts, watch
-from .string_lookups import (
+from ..string_lookups import (
     code_looks_up_by_string,
     code_lookups_traceable,
     statement_looks_up_by_string,

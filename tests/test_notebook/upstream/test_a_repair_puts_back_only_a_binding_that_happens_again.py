@@ -127,7 +127,7 @@ def test_the_partner_rule_sees_each_read_as_unseen(magics, case):
     """The rule that keeps a name a cell below bound out of a repair
     (``MismatchClassifier._made_below``) asks the same question: each of
     these cells may read a name it does not show."""
-    from cash.notebook.string_lookups import cell_reads_names_unseen
+    from cash.notebook.unnamed_reads import cell_reads_names_unseen
 
     pre, cur = UNSEEN[case]
     cells = [pre, "n, m = [1], [7]"]

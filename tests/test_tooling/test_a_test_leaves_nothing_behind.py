@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 from cash import Cash, install_paths, source_norm
-from cash.notebook import string_lookups
+from cash import string_lookups
 from tests import _between_tests
 
 

@@ -664,7 +664,7 @@ it.
 
 ### A function reached by a name spelled at run time
 
-<!-- claim: cash/notebook/string_lookups.py:code_looks_up_by_string @bb240f70, cash/notebook/cache_key.py:unkeyed_reach @7c907b65 -->
+<!-- claim: cash/string_lookups.py:code_looks_up_by_string @bb240f70, cash/notebook/cache_key.py:unkeyed_reach @7c907b65 -->
 A statement's key holds the functions its code names and the globals they
 read. Code that finds a function through a string instead
 (`globals()["make"](3)`, `eval("make(3)")`, `vars()[name]`,
@@ -675,7 +675,7 @@ statement does it itself, and when a function of yours it calls does, at any
 depth, in a cell or in a module of your own. `getattr(obj, name)` on an
 object, `vars(self)` and a library's own lookups (`namedtuple`) do not count.
 
-<!-- claim: cash/notebook/cache_key.py:lookups_followed @f277d3b1, cash/notebook/string_lookups.py:tree_lookups_traceable @ac8f00df -->
+<!-- claim: cash/notebook/cache_key.py:lookups_followed @f277d3b1, cash/string_lookups.py:tree_lookups_traceable @ac8f00df -->
 On Python 3.12 and newer, a lookup whose value is called at once
 (`globals()[name](3)`, `NS[name](3)` with `NS = globals()`,
 `getattr(__main__, name)(3)`) is cached all the same: what it ran is

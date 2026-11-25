@@ -27,7 +27,7 @@ from ..cache_status import CacheStatus
 from ..lineage_formula import bound_names
 from ..lineage_store import statement_tag
 from ..statement.derivation_edges import shared_object_partners
-from ..string_lookups import cell_reads_names_unseen
+from ..unnamed_reads import cell_reads_names_unseen
 from ..tracking_state import TrackingState
 from ._types import (
     CellCheck,

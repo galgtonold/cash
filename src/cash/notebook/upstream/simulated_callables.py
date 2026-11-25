@@ -28,7 +28,7 @@ from ..cache_key import (
     virtual_namespace,
 )
 from ..lineage_formula import forward_helper
-from ..string_lookups import code_looks_up_by_string, statement_looks_up_by_string
+from ...string_lookups import code_looks_up_by_string, statement_looks_up_by_string
 from ..tracking_state import TrackingState
 from .cache_probe import CacheProbe
 

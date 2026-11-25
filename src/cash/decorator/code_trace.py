@@ -1216,7 +1216,7 @@ def _recorder_class() -> type:
                 get = g.get
                 if not any(_namespace_like(get(n), g) for n in names if n in g):
                     return False
-            from ..notebook.string_lookups import code_looks_up_by_string
+            from ..string_lookups import code_looks_up_by_string
 
             try:
                 return code_looks_up_by_string(code, g)

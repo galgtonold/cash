@@ -49,7 +49,7 @@ def _statement_codes(recorder):
 def _clear_bounded_caches():
     """Empty cash's caches keyed by code, each bounded on its own (a few
     thousand entries): what is left alive is what the recorder keeps."""
-    from cash.notebook import string_lookups
+    from cash import string_lookups
     from cash.tracking import trace_items
 
     for memo in (string_lookups._FACTS, string_lookups._STATEMENT_CODES, string_lookups._TRACEABLE):
