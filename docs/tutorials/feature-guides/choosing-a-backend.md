@@ -116,7 +116,18 @@ at once. Eviction is least recently used, once the total passes
 `max_size_bytes`. It is the simpler of the two disk backends: unlike the file
 backend it does not rank entries by what they save per byte, gives no notice
 when its cap evicts an entry, and a running process does not notice `cash
-clear` emptying the database under it. Which of the two disk backends is faster depends on value
+clear` emptying the database under it.
+
+<!-- claim: cash/backends/sqlite_backend.py:SQLiteBackend._note_hit @b4d67d4e, cash/backends/sqlite_backend.py:SQLiteBackend._do_set_sync @44a7225a, cash/backends/sqlite_backend.py:SQLiteBackend.BUSY_TIMEOUT_S == 5.0 -->
+Several processes can share the database, but only one writes at a time. A
+store waits its turn, up to 5 seconds per attempt; one that still cannot be
+written is reported as a failed store
+([STORE-FAILED](../../warnings.md#store-failed)) and the result is computed
+again next time. A hit does not queue behind another process's store, and a read
+the database refuses is a miss. A busy database therefore costs time or a
+recompute, never an exception in your code.
+
+Which of the two disk backends is faster depends on value
 size (measured at 100,000 entries):
 
 | Value size | Faster write | Faster read |

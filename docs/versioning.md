@@ -36,7 +36,7 @@ disk for that run, so two environments on different versions do not delete
 each other's results. Give each its own `cache_dir`, or upgrade every
 environment that shares a folder together.
 
-<!-- claim: cash/backends/sqlite_backend.py:SQLiteBackend._create_tables @80bffd55, cash/backends/redis_backend.py:RedisBackend._entry_prefix @a96d9ffd, cash/backends/s3_backend.py:S3Backend._entry_prefix @6fbcba0f -->
+<!-- claim: cash/backends/sqlite_backend.py:SQLiteBackend._create_tables @d3a9a0c1, cash/backends/redis_backend.py:RedisBackend._entry_prefix @a96d9ffd, cash/backends/s3_backend.py:S3Backend._entry_prefix @6fbcba0f -->
 The other backends follow the same rule. A SQLite cache is stamped like a
 folder: a database in an older format is emptied when cash opens it, and one
 written by a newer cash is left alone with the same warning. On Redis and S3,
