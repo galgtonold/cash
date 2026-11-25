@@ -277,6 +277,17 @@ def _snapshot(value: Any) -> _Pickled | None:
     return _pickled(value, part)
 
 
+def _read_bytes_premade(value: Any, metadata: MetadataDict) -> _Pickled | None:
+    """The pickle stream `InMemoryBackend.keep_read` just read *value* out
+    of, for the store of a ``frozen=True`` entry (`_keeps_frozen`) to keep
+    as it is; None for any other store. Taken once."""
+    premade = getattr(_PREMADE, "entry", None)
+    if premade is None or premade[0] is not value or not _keeps_frozen(metadata):
+        return None
+    _PREMADE.entry = None
+    return premade[1]
+
+
 def _pickled(value: Any, part: stored_pickle.Part) -> _Pickled:
     kind = type(value)
     top_class = None if kind is dict or _copied_as_data(kind) else class_key(kind)
@@ -2102,10 +2113,17 @@ class InMemoryBackend(CacheBackend):
         if set_order.FIELD not in metadata:
             set_order.record(value, metadata)
 
+        # A ``frozen=True`` value a slower tier just read out of a pickle
+        # stream (`keep_read`) is kept as that stream: the bytes are a copy
+        # nothing else holds, and their length is what the tier holds. Not
+        # walked for its size nor copied: a frozenset of 60,000 words took
+        # 130-370 ms so on the first hit of each process, to keep a second
+        # copy beside the object the hits hand back (`_keep_frozen`).
+        read_bytes = _read_bytes_premade(value, metadata)
         # Plain data is sized, checked and copied from ONE look at it: three
         # separate walks were most of promoting two million parsed rows here.
-        plain = _plain_data.profile(value)
-        dict_rows_size = None if plain is not None else _plain_data.dict_rows_profile(value)
+        plain = _plain_data.profile(value) if read_bytes is None else None
+        dict_rows_size = None if plain is not None or read_bytes is not None else _plain_data.dict_rows_profile(value)
         # JSON-like data -- a notebook entry's payload -- is walked once
         # (`tree_facts`, which a notebook's checks may have made already),
         # for its size and how to copy it: big and of marshal's types alone,
@@ -2121,7 +2139,7 @@ class InMemoryBackend(CacheBackend):
         # them on the store and the first hit's plan gives each a new list
         # (`copy_plan`); in any other, they are kept beside the rest.
         shared: dict[int, list | tuple] = {}
-        if plain is None and dict_rows_size is None:
+        if plain is None and dict_rows_size is None and read_bytes is None:
             if type(value) is dict:
                 shared = _shared_parts(value)
             if _plain_data.in_a_look():
@@ -2140,13 +2158,14 @@ class InMemoryBackend(CacheBackend):
         # bytes, so they are its size. Walking the object for its footprint
         # took four times its pickling (1.35 s against 0.35 s for a graph of
         # 350,000 edges), on every store, for a number the bytes give.
-        pickled = None
+        pickled = read_bytes
         # An entry holding a value whose pickle its digest made a moment ago
         # (`stored_pickle.nested`) is kept as bytes too: that pickle is made,
         # or, when the digest ran out of its budget, is made for this store.
-        nested = type(value) is dict and stored_pickle.nesting(value)
+        nested = read_bytes is None and type(value) is dict and stored_pickle.nesting(value)
         if (
-            plain is None
+            read_bytes is None
+            and plain is None
             and dict_rows_size is None
             and facts is None
             and not parts
@@ -2174,7 +2193,7 @@ class InMemoryBackend(CacheBackend):
                     with self._lock:
                         self._drop(key)
                     return False
-        if pickled is not None and pickled.nbytes >= _ROUND_TRIP_MIN_BYTES:
+        if pickled is not None and (read_bytes is not None or pickled.nbytes >= _ROUND_TRIP_MIN_BYTES):
             size = pickled.nbytes
         elif dict_rows_size is not None:
             size = dict_rows_size
@@ -2189,7 +2208,7 @@ class InMemoryBackend(CacheBackend):
             size = memory_footprint(value)
         else:
             size = plain[0]
-        if pickled is not None and size < _ROUND_TRIP_MIN_BYTES:
+        if pickled is not None and read_bytes is None and size < _ROUND_TRIP_MIN_BYTES:
             pickled = None  # small: copied as any other value (`_safe_deep_copy`)
 
         # A value above the eviction target can never stay: the byte cap evicts

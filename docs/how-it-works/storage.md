@@ -107,7 +107,8 @@ found on disk is kept in memory for the next read without a copy (see below). An
 copied into memory on its second read from disk in the same process, so a
 value read once after a restart costs no extra copy. A `frozen=True`
 function's result is kept on its first read, as the object every later hit
-hands back ([`frozen=`](../decorator.md#frozen-and-large-arguments)). A decorated function's
+hands back ([`frozen=`](../decorator.md#frozen-and-large-arguments)); its
+entry is kept as the bytes it was read out of, not copied again. A decorated function's
 result that holds 1 MiB or more of arrays goes to disk alone when it is
 stored, and into memory on its first hit. Neither is kept when it
 would take more than 90% of the memory cap. A value of which the memory tier
