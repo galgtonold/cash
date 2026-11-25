@@ -329,7 +329,7 @@ last use; `cash inspect --function NAME` lists one function's entries. See the
 With a bare `@cash.cache`, a call recomputes when anything in the first list
 changed. The second list is what cash does not see, and what to do about it.
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @1738c84b, cash/decorator/runtime.py:CallRunner._analyze_dependencies @6f5bcbac, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @cb57665a, cash/decorator/code_args.py:CodeArgs.fold_code_args @58904680, cash/decorator/runtime.py:KeyBuilder.held_by_name_for @f5d8cae7, cash/decorator/environment_fold.py:EnvironmentFold._fold_library_versions @9c6400f4, cash/decorator/library_reads.py:changed @e14c794d -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @1738c84b, cash/decorator/runtime.py:CallRunner._analyze_dependencies @6f5bcbac, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @cb57665a, cash/decorator/code_args.py:CodeArgs.fold_code_args @28d2e865, cash/decorator/runtime.py:KeyBuilder.held_by_name_for @f5d8cae7, cash/decorator/environment_fold.py:EnvironmentFold._fold_library_versions @9c6400f4, cash/decorator/library_reads.py:changed @e14c794d -->
 <div class="grid cards" markdown>
 
 -   **Tracked for you: a change recomputes**
@@ -387,7 +387,8 @@ changed. The second list is what cash does not see, and what to do about it.
       it: `sys.argv`, and an `argparse` parser's `parse_args()` called
       without a list of its own. Flags your `main()` parses and passes on
       count only as those arguments.
-    - The **installed version** of each library the code calls, and of the
+    - The **installed version** of each library the code calls or an
+      argument comes from (a pandas frame, a fitted model), and of the
       packages that library requires: an upgrade recomputes
       ([Code in installed packages](decorator-limitations.md#code-in-installed-packages)).
     - **Library settings** the code read, on Python 3.12 and newer:
@@ -530,7 +531,7 @@ the last step.
 
 ### Split parameter objects { #split-parameter-objects }
 
-<!-- claim: cash/decorator/code_args.py:CodeArgs.fold_code_args @58904680, cash/decorator/runtime.py:KeyBuilder.build @89847a2a -->
+<!-- claim: cash/decorator/code_args.py:CodeArgs.fold_code_args @28d2e865, cash/decorator/runtime.py:KeyBuilder.build @89847a2a -->
 An object passed in is keyed by all of its content and by the code of its
 class. With one `Params` holding both the signal settings and the trading
 costs, a new fee value, or a new cost field, reruns every signal search,

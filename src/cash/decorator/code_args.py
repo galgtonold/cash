@@ -4,6 +4,7 @@ is part of the key, not their pickled bytes."""
 from __future__ import annotations
 
 import ast
+import contextvars
 import functools
 import hashlib
 import inspect
@@ -37,8 +38,9 @@ from .arg_hashing import is_opaque, is_plain_data
 from .call_state import CARRIER_LOOKUPS, KeyBuildFailed, held_by_name
 from .class_data import class_surface_functions, implicit_access_functions
 from .closure_fold import CLASS_BODY_CELLS
+from .library_versions import held_library_versions
 from .module_identity import namespace_module
-from .user_code import cached_function_in, is_user_code_object
+from .user_code import cached_function_in, is_user_code_object, own_package
 
 if TYPE_CHECKING:
     from .arg_hashing import ArgHasher
@@ -55,6 +57,15 @@ logger = logging.getLogger(__name__)
 #: searched from there once the stretch is done (`CodeArgs.iter_code_carriers`),
 #: so the search reaches everything, however deep, without running out of stack.
 CODE_SEARCH_DEPTH = 100
+
+
+#: While a call's arguments are folded (`CodeArgs.fold_code_args`): the
+#: classes and functions the carrier walk met that are not the user's code,
+#: by ``id``. Their libraries' installed versions go into the key
+#: (`held_library_versions`).
+_LIBRARY_CODE_MET: contextvars.ContextVar[dict[int, Any] | None] = contextvars.ContextVar(
+    "cash_library_code_met", default=None
+)
 
 
 class _Deeper:
@@ -437,6 +448,9 @@ class CodeArgs:
         if isinstance(value, type):
             if id(value) not in _seen:
                 _seen.add(id(value))
+                met = _LIBRARY_CODE_MET.get()
+                if met is not None:
+                    met[id(value)] = value
                 yield value
             return
         if callable(value):
@@ -467,6 +481,12 @@ class CodeArgs:
                 return
             if id(value) not in _seen:
                 _seen.add(id(value))
+                met = _LIBRARY_CODE_MET.get()
+                if met is not None:
+                    # ``np.mean`` handed over, or ``frame.describe``: the
+                    # library whose code it runs.
+                    code = unwrap_partials(value)
+                    met[id(code)] = plain_getattr(code, "__func__", code)
                 yield value
             return
         # The primitive test is repeated INLINE in each loop below rather than
@@ -661,6 +681,7 @@ class CodeArgs:
         if _depth > CODE_SEARCH_DEPTH:
             yield _Deeper(list(values), True)
             return
+        met = _LIBRARY_CODE_MET.get()
         for v in values:
             if type(v) in CODELESS_PRIMS or id(v) in _seen or issubclass(type(v), types.ModuleType):
                 continue
@@ -674,6 +695,8 @@ class CodeArgs:
             elif issubclass(type(v), (types.FunctionType, type)):
                 if defined_in_user_code(v):
                     yield from self._walk_carriers(v, _depth, _seen)
+                elif met is not None:
+                    met[id(v)] = v
             elif jit_python_function(v) is not None:
                 if defined_in_user_code(jit_python_function(v)):
                     yield from self._walk_carriers(v, _depth, _seen)
@@ -688,6 +711,10 @@ class CodeArgs:
             elif self._keyed_by_registration(v):
                 continue
             else:
+                if met is not None:
+                    # What a library's object holds of another library's
+                    # (a scikit-learn pipeline's xgboost step).
+                    met[id(type(v))] = type(v)
                 attrs = plain_getattr(v, "__dict__", None)
                 if isinstance(attrs, dict) and attrs:
                     _seen.add(id(v))
@@ -720,7 +747,12 @@ class CodeArgs:
         if id(cls) in _seen:
             return None
         _seen.add(id(cls))
-        return cls if is_user_code_object(cls) else None
+        if is_user_code_object(cls):
+            return cls
+        met = _LIBRARY_CODE_MET.get()
+        if met is not None:
+            met[id(cls)] = cls
+        return None
 
     def fold_code_args(
         self,
@@ -743,6 +775,27 @@ class CodeArgs:
         code, and ``state_hash`` is already where code lives: function source,
         ``depends_on``, transitive helpers, module globals read.
         """
+        met: dict[int, Any] = {}
+        met_token = _LIBRARY_CODE_MET.set(met)
+        try:
+            parts = self._code_arg_parts(args, kwargs, func_name, owner_code, func, report)
+        finally:
+            _LIBRARY_CODE_MET.reset(met_token)
+        if met:
+            # The arguments' own libraries: ``def summarise(df): return
+            # df.describe()`` names none, and runs pandas' code.
+            for dist, version in held_library_versions(met.values(), own_package(func) if func is not None else None):
+                ledger_note(("installed library", dist), version)
+                parts.append(f"library:{dist}=={version}")
+        if not parts:
+            return state_hash
+        payload = ":".join(sorted(set(parts)))
+        return hashlib.sha256(f"{state_hash}:codeargs:{payload}".encode("utf-8")).hexdigest()
+
+    def _code_arg_parts(
+        self, args: tuple, kwargs: dict, func_name: str, owner_code: Any, func: Any, report: Any
+    ) -> list[str]:
+        """`fold_code_args`'s parts for the user code the arguments carry."""
         parts: list[str] = []
         seen_carriers: set[int] = set()
         names: frozenset[str] | None = None
@@ -771,10 +824,7 @@ class CodeArgs:
                     for name, carrier in self._family_installed_code(family, names):
                         for part in self.carrier_parts(carrier, func_name, None, seen_carriers, owner_code):
                             parts.append(f"installed:{name}:{part}")
-        if not parts:
-            return state_hash
-        payload = ":".join(sorted(set(parts)))
-        return hashlib.sha256(f"{state_hash}:codeargs:{payload}".encode("utf-8")).hexdigest()
+        return parts
 
     def _attribute_names(self, func: Any, report: Any) -> frozenset[str]:
         """The attribute names *func* and the helpers its purity *report*

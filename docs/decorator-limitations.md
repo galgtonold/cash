@@ -247,12 +247,27 @@ the script you run. A folder of source on `PYTHONPATH` with no such record,
 say a checkout of a shared module, stays your code, and so does a package
 installed into a folder inside your project. Its edits recompute.
 
-What counts is a library the function, its helpers or the cached functions it
-calls name in their code (`np` in `np.mean(x)`, `Ridge` imported from
-scikit-learn, `read_csv` imported from pandas), and every package that library
-requires, as its install metadata lists them: a numpy upgrade under pandas
-recomputes a `pd.read_csv(...)` result too. A library's optional extras are
-left out.
+Two kinds of library count:
+
+- a library the function, its helpers or the cached functions it calls name
+  in their code (`np` in `np.mean(x)`, `Ridge` imported from scikit-learn,
+  `read_csv` imported from pandas), or whose object a module-level name they
+  read holds (`MODEL = joblib.load(...)`);
+- the library an argument comes from. `def summarise(df): return
+  df.describe()` names no library, and runs pandas' code. The library that
+  defines the class of each argument, of `self`, and of the objects they hold
+  (a frame in a list, a model in your own object) counts, and so does the
+  library of a function or class you pass as a value (`np.mean`).
+
+<!-- claim: cash/decorator/library_versions.py:held_library_versions @9106d491 -->
+With each goes every package that library requires, as its install metadata
+lists them: a numpy upgrade under pandas recomputes a `pd.read_csv(...)`
+result and a call that took a frame. A library's optional extras are left out.
+
+A library the call reaches in neither way is not seen: one held deeper in
+module-level data (a dict of models the function reads), or inside a list or
+dict that a `frozen=True` function returned. Name a function of it in
+`depends_on`, or pass the object as an argument.
 
 <!-- claim: cash/decorator/library_versions.py:_files_digest @87224897 -->
 With the version goes a digest of the files the install lists, from the hash

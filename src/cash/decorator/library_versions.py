@@ -38,7 +38,7 @@ from typing import Any
 
 from .._lazy_module import LazyModule
 from .._location import per_user_cache_root
-from .._type_memo import class_module, class_qualname
+from .._type_memo import TypeMemo, class_module, class_qualname, type_key
 from .._user_attrs import importable_attr, plain_getattr
 from ..analysis.bytecode import instructions
 from ..backends.cache_dir import LIBRARY_MAP_FILENAME, LIBRARY_RECORDS_FILENAME
@@ -51,7 +51,7 @@ from ..tracking.tracker_context import untracked
 # cached function reaches an installed library.
 importlib_metadata = LazyModule("importlib.metadata")
 
-__all__ = ["library_versions"]
+__all__ = ["held_library_versions", "library_versions"]
 
 #: top-level module name -> ``(distribution, how to check it is there)`` for
 #: each distribution that may provide it, filled once: None when its
@@ -927,7 +927,8 @@ def _imported_modules(code: types.CodeType) -> tuple[str, ...]:
 
 
 def library_tops(functions: Iterable[Callable], own_pkg: str | None) -> set[str]:
-    """The library packages *functions* name in their global lookups, and
+    """The library packages *functions* name in their global lookups (a
+    module, a function, a class, or an object of a library's class), and
     those their bodies import (``from sklearn.linear_model import X`` inside
     a function: the same whether the import has run yet or not)."""
     tops: set[str] = set()
@@ -951,6 +952,11 @@ def library_tops(functions: Iterable[Callable], own_pkg: str | None) -> set[str]
                 continue
             module = _defining_module(g[name])
             if module is None:
+                # ``MODEL = joblib.load(...)``: an object of a library's
+                # class, whose methods are that library's code.
+                defined_in, top = _class_library(type(g[name]))
+                if top is not None and not in_own_package(defined_in, own_pkg):
+                    tops.add(top)
                 continue
             top = _library_top(module, own_pkg)
             if top is not None:
@@ -975,9 +981,15 @@ def library_versions(functions: Iterable[Callable], own_pkg: str | None) -> list
 
 
 def _library_versions(functions: Iterable[Callable], own_pkg: str | None) -> list[tuple[str, str]]:
+    return _versions_of(library_tops(functions, own_pkg))
+
+
+def _versions_of(tops: Iterable[str]) -> list[tuple[str, str]]:
+    """``(distribution, version)``, sorted, for the distributions that
+    provide the packages *tops* and what those require."""
     found: set[tuple[str, str]] = set()
     saved: dict | None = None
-    for top in library_tops(functions, own_pkg):
+    for top in tops:
         for dist in _dists_for(top):
             for name in _closure(dist):
                 version = _version(name)
@@ -993,6 +1005,61 @@ def _library_versions(functions: Iterable[Callable], own_pkg: str | None) -> lis
         _save_records(saved)
     _keep_closures()
     return sorted(found)
+
+
+#: class -> the module that defines it and that module's top-level package
+#: when it is a library's, ``(None, None)`` when it is not (`_class_library`).
+_CLASS_LIBRARIES: TypeMemo[tuple[str | None, str | None]] = TypeMemo()
+#: The packages some arguments' classes come from -> their versions
+#: (`held_library_versions`), until `forget`.
+_HELD_VERSIONS: dict[frozenset[str], list[tuple[str, str]]] = {}
+
+
+def _class_library(cls: type) -> tuple[str | None, str | None]:
+    known = _CLASS_LIBRARIES.get(type_key(cls))
+    if known is not None:
+        return known
+    name = class_module(cls)
+    module = sys.modules.get(name) if isinstance(name, str) else None
+    top = _library_top(module, None) if module is not None else None
+    return _CLASS_LIBRARIES.put(cls, (name, top) if top is not None else (None, None))
+
+
+def held_library_versions(code_met: Iterable[Any], own_pkg: str | None) -> list[tuple[str, str]]:
+    """``(distribution, version)`` for each installed library the values a
+    call was given come from, sorted. *code_met* are the classes of the
+    arguments, of ``self`` and of the objects they hold, and the functions
+    and classes handed over as values (``np.mean``, ``frame.describe``):
+    the libraries that define them count, with what those require.
+
+    ``def summarise(df): return df.describe()`` names no library: the code
+    that runs is the one the argument brings, and after ``pip install -U
+    pandas`` the old version's result was served. Which library a class
+    comes from is decided once per class, and the versions of a set of
+    libraries are read once (`forget` reads them again).
+    """
+    tops: set[str] = set()
+    for met in code_met:
+        if isinstance(met, type):
+            name, top = _class_library(met)
+            if top is not None and not in_own_package(name, own_pkg):
+                tops.add(top)
+            continue
+        module = _defining_module(met)
+        top = _library_top(module, own_pkg) if module is not None else None
+        if top is not None:
+            tops.add(top)
+    if not tops:
+        return []
+    slot = frozenset(tops)
+    versions = _HELD_VERSIONS.get(slot)
+    if versions is None:
+        with untracked():
+            versions = _versions_of(tops)
+        if len(_HELD_VERSIONS) > 1024:
+            _HELD_VERSIONS.clear()
+        _HELD_VERSIONS[slot] = versions
+    return versions
 
 
 def _keep_closures() -> None:
@@ -1013,6 +1080,7 @@ def forget() -> None:
     _SHARED_FINGERPRINT = None
     _SAVED_CLOSURES = {}
     _CLOSURES_ADDED = False
+    _HELD_VERSIONS.clear()
     _PROVIDERS.clear()
     _VERSIONS.clear()
     _RECORD_PATHS.clear()
