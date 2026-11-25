@@ -10,6 +10,7 @@ from typing import Any
 
 from cash.exceptions import CacheBackendError, DependencyNotFoundError
 
+from . import cache_dir as _cache_dir
 from ._base import CacheBackend, MetadataDict
 from ._writes import PendingWrites
 from .serialization import RESTORE_ERRORS, PickleSerializer, Serializer, restore_value
@@ -27,6 +28,11 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["RedisBackend", "HAS_REDIS"]
 
+#: What ends the two keys of an entry. `RedisBackend.clear` removes keys by
+#: these, so it takes nothing cash did not write.
+_META_SUFFIX = ":meta"
+_DATA_SUFFIX = ":data"
+
 
 class RedisBackend(CacheBackend):
     """Entries in a Redis server, shared by every machine that reaches it.
@@ -40,7 +46,10 @@ class RedisBackend(CacheBackend):
         port: Server port.
         db: Redis database number.
         password: Server password, if any.
-        prefix: Prepended to every key cash writes.
+        prefix: Prepended to every key cash writes. An entry's keys are
+            ``<prefix>f<N>:<key>:meta`` and ``...:data``, N being the cache
+            format, so cash versions with different formats share a server
+            without reading each other's entries.
         socket_keepalive: Keep idle connections open.
         health_check_interval: Seconds between connection health checks.
         retry_on_timeout: Retry a command that timed out.
@@ -97,8 +106,19 @@ class RedisBackend(CacheBackend):
         # thread, the actual Redis pipeline runs in this executor.
         self._writes = PendingWrites()
 
+    def _entry_prefix(self) -> str:
+        """The prefix of this cache format's entries (`cache_dir.format_tag`).
+
+        The format is part of every key, so a server shared by machines on
+        different cash versions holds each format's entries side by side: an
+        entry written in another format is never read, and never removed by
+        a build that cannot judge it.
+        """
+        return f"{self.prefix}{_cache_dir.format_tag()}:"
+
     def _get_keys(self, key: str) -> tuple[str, str]:
-        return f"{self.prefix}{key}:meta", f"{self.prefix}{key}:data"
+        base = f"{self._entry_prefix()}{key}"
+        return f"{base}{_META_SUFFIX}", f"{base}{_DATA_SUFFIX}"
 
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         # Wait for any pending write for this key.
@@ -236,7 +256,7 @@ class RedisBackend(CacheBackend):
         self._writes.wait_all()
         entries = []
         # Scan for meta keys
-        match_pattern = f"{self.prefix}*:meta"
+        match_pattern = f"{_glob_escape(self._entry_prefix())}*{_META_SUFFIX}"
         cursor = 0
         while True:
             cursor, keys = self.client.scan(cursor=cursor, match=match_pattern, count=100)
@@ -266,3 +286,8 @@ class RedisBackend(CacheBackend):
         own lock (``SET NX PX``), as a context manager. Its name is in a
         ``lock:`` namespace under the prefix, apart from the entries' keys."""
         return self.client.lock(f"{self.prefix}lock:{key}", timeout=60, blocking_timeout=10)
+
+
+def _glob_escape(text: str) -> str:
+    """*text* as a literal in a Redis ``MATCH`` pattern."""
+    return "".join(f"\\{c}" if c in "*?[]\\" else c for c in text)

@@ -7,6 +7,7 @@ from typing import Any
 
 from cash.exceptions import CacheBackendError, DependencyNotFoundError
 
+from . import cache_dir as _cache_dir
 from ._base import CacheBackend, MetadataDict
 from ._writes import PendingWrites
 from .entry_format import (
@@ -39,7 +40,10 @@ class S3Backend(CacheBackend):
 
     Args:
         bucket: Bucket name.
-        prefix: Prepended to every object key cash writes.
+        prefix: Prepended to every object key cash writes. An entry is the
+            object ``<prefix>f<N>/<key>.entry``, N being the cache format, so
+            cash versions with different formats share a bucket without
+            reading each other's entries.
         max_pool_connections: Most open HTTP connections.
         retries: Most attempts per request, in botocore's standard retry
             mode.
@@ -80,12 +84,22 @@ class S3Backend(CacheBackend):
     #: wrong answer.
     METADATA_PREFETCH_BYTES = 8192
 
+    def _entry_prefix(self) -> str:
+        """The prefix of this cache format's entries (`cache_dir.format_tag`).
+
+        The format is a folder under the prefix, so a bucket shared by
+        machines on different cash versions holds each format's entries side
+        by side: an entry written in another format is never read, and never
+        removed by a build that cannot judge it.
+        """
+        return f"{self.prefix}{_cache_dir.format_tag()}/"
+
     def _get_key(self, key: str) -> str:
         """One object per entry, metadata and value together: one request per
         read, write and delete. The entry format's length-prefixed header and
         S3's ranged GETs make a metadata read one small request
         (`get_metadata`)."""
-        return f"{self.prefix}{key}{ENTRY_SUFFIX}"
+        return f"{self._entry_prefix()}{key}{ENTRY_SUFFIX}"
 
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         # Wait for any pending write for this key.
@@ -253,7 +267,7 @@ class S3Backend(CacheBackend):
         entries = []
         try:
             paginator = self.s3.get_paginator("list_objects_v2")
-            pages = paginator.paginate(Bucket=self.bucket, Prefix=self.prefix)
+            pages = paginator.paginate(Bucket=self.bucket, Prefix=self._entry_prefix())
 
             for page in pages:
                 if "Contents" in page:

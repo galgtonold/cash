@@ -36,10 +36,17 @@ disk for that run, so two environments on different versions do not delete
 each other's results. Give each its own `cache_dir`, or upgrade every
 environment that shares a folder together.
 
-SQLite, Redis and S3 caches carry no format stamp and are not cleared. Clear
-them yourself after a minor upgrade: a SQLite cache with `cash clear <dir>`,
-a Redis database or an S3 prefix with its own tools, or `f.cache_clear()` for
-each function. The release's CHANGELOG entry says when the format changed.
+<!-- claim: cash/backends/sqlite_backend.py:SQLiteBackend._create_tables @80bffd55, cash/backends/redis_backend.py:RedisBackend._entry_prefix @a96d9ffd, cash/backends/s3_backend.py:S3Backend._entry_prefix @6fbcba0f -->
+The other backends follow the same rule. A SQLite cache is stamped like a
+folder: a database in an older format is emptied when cash opens it, and one
+written by a newer cash is left alone with the same warning. On Redis and S3,
+which several machines share, every entry carries the format in its name, so
+each cash version reads and writes only entries of its own format and versions
+with different formats share a server or bucket without touching each other's
+entries. Entries of a format nobody uses any more stay there until you remove
+them: clear the cache from the old version before upgrading, or delete them
+with the store's own tools. The release's CHANGELOG entry says when the format
+changed.
 
 There is no tool to migrate a cache between versions. The cache is a
 performance layer, not a store of record: write anything you cannot afford to

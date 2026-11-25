@@ -11,9 +11,10 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from . import cache_dir as _cache_dir
 from ._base import CacheBackend, MetadataDict, entry_expired
 from ._writes import PendingWrites
-from .cache_dir import warn_unusable
+from .cache_dir import NewerCacheFormat, warn_newer_format, warn_unusable
 from .serialization import RESTORE_ERRORS, PickleSerializer, Serializer, restore_value
 
 logger = logging.getLogger(__name__)
@@ -31,7 +32,9 @@ class SQLiteBackend(CacheBackend):
     The simpler of the two disk backends: it evicts the least recently used
     entries rather than ranking them by value per byte, gives no notice when
     its cap evicts something, and a running process does not notice the
-    database being cleared under it.
+    database being cleared under it. The database is stamped with the cache
+    format like a cache folder: one written in an older format is emptied on
+    open, one written by a newer cash is left alone and the tier is off.
 
     Args:
         db_path: The database file; its directory is created if missing.
@@ -93,6 +96,11 @@ class SQLiteBackend(CacheBackend):
                     conn.execute("PRAGMA synchronous=NORMAL")
                     self._create_tables(conn)
                     self._connection = conn
+                except NewerCacheFormat as newer:
+                    # A newer cash's database: off for this run, left as it is.
+                    self._unusable = True
+                    conn.close()
+                    warn_newer_format(self.db_path, newer.stored)
                 except (OSError, sqlite3.Error) as exc:
                     self._unusable = True
                     warn_unusable(self.db_path, exc)
@@ -121,18 +129,37 @@ class SQLiteBackend(CacheBackend):
         )
     """
 
-    #: Version of `_SCHEMA`, kept in the database's ``user_version``. A
-    #: database stamped with any other version has its table dropped: this is
-    #: a cache, so every entry can be recomputed, and copying a table of
-    #: large values forward would cost more than recomputing them.
+    #: Version of `_SCHEMA`. Changing the table means bumping it.
     SCHEMA_VERSION = 2
 
+    #: The database's ``user_version`` is ``SCHEMA_VERSION * _STAMP_STRIDE +
+    #: CACHE_FORMAT_VERSION``: the table layout and the format of what the
+    #: rows hold, in one number that grows with either.
+    _STAMP_STRIDE = 1000
+
+    @classmethod
+    def _stamp(cls) -> int:
+        return cls.SCHEMA_VERSION * cls._STAMP_STRIDE + _cache_dir.CACHE_FORMAT_VERSION
+
     def _create_tables(self, conn: sqlite3.Connection) -> None:
-        """Create the cache table, dropping one written in another schema."""
+        """Create the cache table, dropping one written in an older schema
+        or cache format.
+
+        The same rule as the file tier's stamp (`CacheDirStamp.check`). A
+        lower stamp (one from before the stamp carried the cache format
+        included) has its table dropped: this is a cache, so every entry can
+        be recomputed, entries of an older format would be served wrongly,
+        and copying a table of large values forward would cost more than
+        recomputing them. A higher stamp is a newer cash's database, which
+        is left as it is (`NewerCacheFormat`).
+        """
         (stored,) = conn.execute("PRAGMA user_version").fetchone()
-        if stored != self.SCHEMA_VERSION:
+        current = self._stamp()
+        if stored > current:
+            raise NewerCacheFormat(stored % self._STAMP_STRIDE)
+        if stored != current:
             conn.execute("DROP TABLE IF EXISTS cache_entries")
-            conn.execute(f"PRAGMA user_version = {int(self.SCHEMA_VERSION)}")
+            conn.execute(f"PRAGMA user_version = {int(current)}")
         conn.execute(self._SCHEMA)
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_last_access ON cache_entries(last_access)

@@ -51,8 +51,9 @@ link to the page that has the details.
 ??? question "Is my cache still valid after I upgrade cash?"
     cash clears a cache folder written in an older, incompatible format by
     itself, and treats any entry it cannot read as a miss, so the upgrade
-    costs a recompute. A SQLite, Redis or S3 cache is not cleared: clear it
-    yourself after a minor upgrade. See [Versioning](versioning.md#the-cache-format).
+    costs a recompute. A SQLite cache is emptied the same way. On Redis and
+    S3, entries of the old format are no longer read but stay in the store.
+    See [Versioning](versioning.md#the-cache-format).
 
 ??? question "Is a 0.x release safe for real work?"
     The decorator is the simpler problem. The notebook path reasons about what

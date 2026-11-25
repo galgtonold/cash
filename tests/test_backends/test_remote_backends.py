@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from cash.backends.cache_dir import format_tag
 from cash.backends.redis_backend import RedisBackend
 from cash.backends.s3_backend import S3Backend
 
@@ -49,8 +50,8 @@ def test_redis_get(redis_backend):
     assert m["source"] == "REDIS"
     assert d == original_data
 
-    pipe.get.assert_any_call("test:k:meta")
-    pipe.get.assert_any_call("test:k:data")
+    pipe.get.assert_any_call(f"test:{format_tag()}:k:meta")
+    pipe.get.assert_any_call(f"test:{format_tag()}:k:data")
 
 
 def test_redis_set(redis_backend):
@@ -66,7 +67,7 @@ def test_redis_set(redis_backend):
     pipe.execute.assert_called_once()
 
     args, _ = pipe.set.call_args_list[1]
-    assert args[0] == "test:k:data"
+    assert args[0] == f"test:{format_tag()}:k:data"
     assert pickle.loads(args[1]) == "data"
 
 
@@ -115,7 +116,7 @@ def test_s3_set(s3_backend):
 
     assert s3_backend.s3.put_object.call_count == 1
     call = s3_backend.s3.put_object.call_args
-    assert call[1]["Key"] == "cash/k.entry"
+    assert call[1]["Key"] == f"cash/{format_tag()}/k.entry"
     meta, payload = unpack_entry(call[1]["Body"], with_payload=True)
     assert meta["key"] == "k"
     assert pickle.loads(payload) == "data"

@@ -60,6 +60,7 @@ __all__ = [
     "warn_newer_format",
     "create_temp_file",
     "entry_totals",
+    "format_tag",
     "is_cash_file",
     "owned_temp_prefix",
     "recreate_cache_dir",
@@ -117,6 +118,19 @@ __all__ = [
 #: older build reads such an entry as one that depends on none of those
 #: files, and would serve it after they changed; they are cleared.
 CACHE_FORMAT_VERSION = 11
+
+
+
+def format_tag() -> str:
+    """``f<N>``: the format's name inside a shared store's key or object names.
+
+    A Redis server or an S3 prefix is one store for every machine that reaches
+    it, on whatever cash each runs. Entries carry the format in their name, so
+    a build reads and writes only its own format's, and two versions sharing
+    the store neither serve nor delete each other's.
+    """
+    return f"f{CACHE_FORMAT_VERSION}"
+
 
 #: The per-directory format stamp. No entry suffix, so entry globs skip it.
 VERSION_FILENAME = "CACHE_VERSION"
