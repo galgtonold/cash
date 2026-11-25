@@ -3120,7 +3120,9 @@ reproducible, seed with a fixed number instead.
 bring it up to date, draws from a seeded global stream (`np.random`,
 `random`, `torch`). Cash puts such a stream where a run from the top has it
 before the draw: by a position it recorded, by the position a restored
-result left, or by running a bare `seed(...)` call again. Here it had none
+result left, or by running a bare `seed(...)` call again (a call of a
+function of yours that only seeds counts as one, see
+[Randomness](known-limitations.md#randomness)). Here it had none
 of these: the statement above that moved the stream last also does other
 work, and cash does not run it again for the stream alone. The draw starts
 from where the stream stands now.
@@ -3156,7 +3158,7 @@ The message for a generator draw says both.
 for a stable, reproducible value. Or accept the frozen value and silence the
 warning, as below.
 
-<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._opts_out_of_rng_rewind @494a3663, cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @0a570907 -->
+<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._opts_out_of_rng_rewind @494a3663, cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @3c947b08 -->
 In a notebook: for a fresh draw every run, put `# @cash:no-cache` on the
 statement, on the line above it or at the end of its line. It turns off the
 rewind as well as caching, and the statement no longer raises this warning.

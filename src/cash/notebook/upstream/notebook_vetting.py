@@ -302,6 +302,7 @@ class NotebookVetter:
             "variable_sources",
             "executed_cell_codes",
             "executed_cell_hashes",
+            "rebuilt_by_check",
             "executed_file_deps",
             "granular_preserved_vars",
             "module_attribute_deps",

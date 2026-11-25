@@ -110,7 +110,11 @@ isolated re-run:
 <!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._warn_not_restored @b1e4daf3 -->
 A global stream (`np.random`, `random`, `torch`) is put where a run from the
 top has it before a cell draws: by a position cash recorded, by the position
-a restored result left, or by running a bare `seed(...)` call again. When the
+a restored result left, or by running a bare `seed(...)` call again. A call
+of a function of yours that only seeds (`set_seed(5)`) counts as a bare seed:
+its body may hold seed calls, calls of other such functions, imports,
+settings written onto a module (`os.environ["PYTHONHASHSEED"] = str(s)`) and
+`if` around these, and it has no decorator. When the
 statement above that last moved the stream also does other work, cash does
 not run it again for the stream alone. The draw then starts from where the
 stream stands, and cash warns

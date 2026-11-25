@@ -85,6 +85,14 @@ class TrackingState:
     # R: UpstreamChecker, the RNG lineage helpers.
     executed_cell_hashes: dict[str, set[str]] = field(default_factory=dict)
 
+    # Variable -> the lineage the upstream check last left it with, by
+    # running a statement of the notebook again or restoring it. While the
+    # variable holds that lineage, its value is one the notebook's own text
+    # gave it, as the notebook was then: never an edit the user ran and did
+    # not save, whatever the notebook holds now.
+    # W: UpstreamChecker. R: MismatchClassifier.
+    rebuilt_by_check: dict[str, str] = field(default_factory=dict)
+
     # Every variable's lineage hash; read it as ``variable_lineage``.
     # W: StatementProcessor, StatementLineageBuilder, the control-structure
     # handlers, both restorers, ModuleInvalidator, the upstream simulation
