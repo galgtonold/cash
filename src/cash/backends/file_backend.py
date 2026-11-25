@@ -693,7 +693,7 @@ class FileBackend(CacheBackend):
             else:
                 value = restore_value(metadata, payload)
                 if (
-                    wanted
+                    (wanted or metadata.get("frozen"))
                     and type(payload) is bytes
                     and metadata.get("serializer_cls", PickleSerializer) is PickleSerializer
                 ):

@@ -361,7 +361,17 @@ class TieredBackend(CacheBackend):
                 except Exception:  # an expired copy is not served either way
                     logger.debug("Could not drop expired %r from %s", key, class_name(type(backend)), exc_info=True)
                 continue
-            stream = backend.take_read_stream(key, value) if want_stream is not None else None
+            # A ``frozen=True`` entry is kept by the RAM tier on its first
+            # read, as the object every later hit hands back
+            # (`frozen_handback`): read once per process.
+            frozen = i > 0 and metadata is not None and bool(metadata.get("frozen"))
+            take_stream = getattr(backend, "take_read_stream", None) if frozen else None
+            if want_stream is not None:
+                stream = backend.take_read_stream(key, value)
+            elif take_stream is not None:
+                stream = take_stream(key, value)
+            else:
+                stream = None
             if metadata is not None and i > 0:
                 restore_s = time.perf_counter() - started
                 # A read during which modules were imported is not what the
@@ -404,9 +414,9 @@ class TieredBackend(CacheBackend):
                     # (`InMemoryBackend.promote`): the value just read is the
                     # caller's own, and most are read once per process.
                     promote = getattr(self.backends[j], "promote", None)
-                    keep_read = getattr(self.backends[j], "keep_read", None) if stream is not None else None
+                    keep_read = getattr(self.backends[j], "keep_read", None) if stream is not None or frozen else None
                     try:
-                        if promote is not None and not read_before:
+                        if promote is not None and not read_before and not frozen:
                             if not promote(key, value, metadata):
                                 self._remember_read(key)
                             continue

@@ -131,10 +131,23 @@ class EntryMetadata(TypedDict, total=False):
     code: str
     #: The function a call entry holds the result of, to name it by otherwise.
     function: str
+    #: The decorated function a decorator entry holds the result of, to
+    #: name it by (KEY-FROZEN-MUTATED).
+    func_name: str
     #: The RAM tier must store a real copy, or refuse the value.
     copy_required: bool
     #: The RAM tier could not copy the value and keeps the object itself.
     by_reference: bool
+    #: Written for a ``frozen=True`` function: the RAM tier hands every hit
+    #: the object a hit handed out before, while it is proved unchanged
+    #: (`frozen_handback`).
+    frozen: bool
+    #: Objects a hit puts back into the value (`identity_refs`), the global
+    #: or closure variable a hit hands back instead of it, and the arguments
+    #: a hit writes into: the RAM tier keeps no object for such an entry.
+    held_refs: list
+    result_ref: list
+    args_left: list[str]
     #: A ``frozen=True`` function's result's `builtin_hash`: the RAM tier
     #: takes it as the digest its clone of a polars frame is checked by.
     content_digest: str

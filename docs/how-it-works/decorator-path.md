@@ -360,14 +360,16 @@ The [decorator guide](../decorator.md#side-effects) covers
 
 ## Storing and returning
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @9ae74e54 -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @68588b08 -->
 A result is written to the RAM tier and to disk, however cheap it was (a big
 one to disk alone, and one holding 1 MiB or more of arrays to disk first and
 to the RAM tier on its first hit), unless a tier's size cap refuses it or a source it depends on cannot be pickled or
 recorded; see
 [where results are stored](../decorator.md#where-results-are-stored). A hit returns a copy rebuilt from the
 stored bytes, not the object the first call returned, and it does not replay
-the body's `print` output.
+the body's `print` output. A `frozen=True` function's hit hands back the
+object the last hit returned while it is proved unchanged
+([`frozen=`](../decorator.md#frozen-and-large-arguments)).
 
 In a notebook, a statement that calls a decorated function shows that call's
 hits and misses on the statement's badge; see

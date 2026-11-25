@@ -6,12 +6,14 @@ from __future__ import annotations
 import hashlib
 import os
 import sys
+import weakref
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any
 
 from .. import _weak, kept_state
 from .._memo import FROZEN_RESULTS, LruMemo
 from .._type_memo import class_name
+from ..backends.frozen_handback import mutated_text, on_changed
 from ..content_hashers import builtin_hash
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning, CashImpurityWarning
@@ -26,6 +28,23 @@ if TYPE_CHECKING:
 #: after that (every use under CASH_DEBUG), and compared with the first audit.
 FROZEN_AUDIT_FIRST = 8
 FROZEN_AUDIT_EVERY = 64
+
+
+#: What KEY-FROZEN-MUTATED says follows, said by the argument hasher.
+_KEYED_BY_CONTENT = "from now on it is keyed by its contents."
+
+#: Every `FrozenResults`, for `_untrust_everywhere`.
+_ALL: weakref.WeakSet = weakref.WeakSet()
+
+
+def _untrust_everywhere(obj: Any) -> None:
+    """Key *obj*, an object a frozen entry handed out and the RAM tier saw
+    changed (`backends.frozen_handback`), by its content from now on."""
+    for results in list(_ALL):
+        results.untrust(obj)
+
+
+on_changed(_untrust_everywhere)
 
 
 #: Frozen list/tuple/dict results held at once. Past it the oldest goes.
@@ -103,6 +122,23 @@ class FrozenResults:
         # id(obj) -> (weakref, lineage, content digest): the digests
         # `carry_digest` brought in with a stored or restored result.
         self._carried: LruMemo[int, tuple] = LruMemo(FROZEN_RESULTS)
+        _ALL.add(self)
+
+    def untrust(self, obj: Any) -> None:
+        """Stop keying *obj*, a frozen result seen changed, by its producer."""
+        key = id(obj)
+        entry = self.arrays.get(key)
+        if entry is not None and entry[0]() is obj:
+            self.arrays.pop(key, None)
+        entry = self.containers.get(key)
+        if entry is not None and entry[0] is obj:
+            self.containers.pop(key, None)
+        for memo in (self._uses, self._carried):
+            entry = memo.get(key)
+            if entry is not None and entry[0]() is obj:
+                memo.pop(key, None)
+        if own_tag(obj, "_cash_lineage_src") == LINEAGE_SRC_FROZEN:
+            set_tags(obj, _cash_lineage_src=LINEAGE_SRC_DECORATOR)
 
     def arg_names(self, normalized_args: tuple[tuple, dict]) -> list[str]:
         """`explain()`'s list of arguments keyed by a frozen=True producer."""
@@ -188,6 +224,9 @@ class FrozenResults:
         numpy raises when the flag cannot be set.
         """
         arr.flags.writeable = False
+        entry = self.arrays.get(id(arr))
+        if entry is not None and entry[0]() is arr:
+            return  # the same array handed back by a hit: its hash stands
         self.arrays[id(arr)] = [
             _weak.ref(arr, lambda _r, k=id(arr), m=self.arrays: m.pop(k, None)),
             producer,
@@ -252,14 +291,7 @@ class FrozenResults:
                     warn_diagnostic(
                         CashImpurityWarning,
                         "KEY-FROZEN-MUTATED",
-                        f"a {class_name(type(obj))} returned by {entry[1]}, which is "
-                        f"declared @cash.cache(frozen=True), has been modified since "
-                        f"it was returned. Calls that received it before the change "
-                        f"may have been served results for the unmodified object; "
-                        f"from now on it is keyed by its contents.",
-                        f"take frozen=True off {entry[1]} if its result is meant to "
-                        f"be modified, or modify a copy (`obj = copy.deepcopy(obj)`) "
-                        f"instead.",
+                        *mutated_text(class_name(type(obj)), entry[1], _KEYED_BY_CONTENT),
                     )
                     return None
         return entry[2]
@@ -288,13 +320,7 @@ class FrozenResults:
         warn_diagnostic(
             CashImpurityWarning,
             "KEY-FROZEN-MUTATED",
-            f"a {class_name(type(obj))} returned by {producer}, which is declared "
-            f"@cash.cache(frozen=True), has been modified since it was returned. "
-            f"Calls that received it before the change may have been served "
-            f"results for the unmodified object; from now on it is keyed by its "
-            f"contents.",
-            f"take frozen=True off {producer} if its result is meant to be "
-            f"modified, or modify a copy (`obj = copy.deepcopy(obj)`) instead.",
+            *mutated_text(class_name(type(obj)), producer, _KEYED_BY_CONTENT),
         )
 
     def audit(self, obj: Any) -> bool:
@@ -349,13 +375,7 @@ class FrozenResults:
         warn_diagnostic(
             CashImpurityWarning,
             "KEY-FROZEN-MUTATED",
-            f"a {class_name(type(obj))} returned by {producer}, which is declared "
-            f"@cash.cache(frozen=True), has been modified since it was returned. "
-            f"Calls that received it before the change may have been served "
-            f"results for the unmodified object; from now on it is keyed by its "
-            f"contents.",
-            f"take frozen=True off {producer} if its result is meant to be "
-            f"modified, or modify a copy (`obj = copy.deepcopy(obj)`) instead.",
+            *mutated_text(class_name(type(obj)), producer, _KEYED_BY_CONTENT),
         )
         return False
 

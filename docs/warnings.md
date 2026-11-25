@@ -1394,14 +1394,17 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @f104039f -->
+<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @e4b3659d, cash/backends/memory_backend.py:InMemoryBackend._frozen_hit @8f3c79dc -->
 **What happened.** A function marked `@cash.cache(frozen=True)` promised its
 result is not modified, and a later check found one of its results modified.
 
 **Why it matters.** Until the check, cached functions receiving that object
 could be served results computed for the unmodified object. From the check on,
 it is keyed by content, so later calls are correct. Checks run at the 8th use
-and every 64th after that, or every use under `CASH_DEBUG=1`.
+and every 64th after that, or every use under `CASH_DEBUG=1`. A hit of the
+frozen function checks the object it handed out before, whenever it would
+hand it back again: once changed, that object is not handed out again, and
+the hit gets a new copy of the stored result.
 
 **What to do.** Find what modifies it (often `model.fit(...)`), then either
 remove `frozen=True` or modify a copy.
@@ -3393,7 +3396,7 @@ memo nothing else reads.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @9ae74e54 -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @68588b08 -->
 **What happened.** The result was computed, but writing it to the cache
 failed. The message names the backend and the exception. Whatever the
 exception, the call returns its result; a failed write never fails the call.

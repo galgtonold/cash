@@ -34,7 +34,7 @@ slow_square(1_000_000)   # cache hit: returns the stored result
 
 That is all the setup there is. A few rules hold for every cached function:
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @a4c15474, cash/decorator/store.py:ResultStore.store @9ae74e54, cash/decorator/store.py:ResultStore.restore_identity @255cf26e -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @a4c15474, cash/decorator/store.py:ResultStore.store @68588b08, cash/decorator/store.py:ResultStore.restore_identity @255cf26e -->
 - **Exceptions are never cached.** If the body raises, nothing is stored and the
   exception reaches you as usual. The next call runs the body again.
 - **A hit does not replay output.** Anything the body printed or logged appears
@@ -586,7 +586,7 @@ All parameters are keyword-only and optional:
 | `depends_on=` | `None` | A callable or `DataSource` object, or a list of them, to add to the key. Anything else (a path: use `file_depends_on=`) raises `TypeError` |
 | `file_depends_on=` | `None` | A path or list of paths, tracked by content as if the body read them. A directory covers every file under it (through linked sub-folders too), a glob pattern its matches |
 | `dynamic_depends_on=` | `None` | A callable (or list) that gets the call's arguments and returns `DataSource` objects |
-| `frozen=` | `False` | Promise that nothing modifies the result after it is returned, so a cached function receiving it skips hashing it |
+| `frozen=` | `False` | Promise that nothing modifies the result after it is returned, so a cached function receiving it skips hashing it, and a hit hands back the object an earlier hit returned, as `functools.lru_cache` does |
 | `strict=` | `False` | Raise `CashImpureFunctionError` on any purity finding. For CI |
 | `assume_safe=` | `False` | Silence purity findings and cache anyway. For some lines only, see [Side effects](#side-effects) |
 | `allow_random=` | `False` | Silence the unseeded-randomness warning |
@@ -864,7 +864,7 @@ a miss.
 
 ### `frozen=` and large arguments
 
-<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @f104039f, cash/decorator/frozen.py:FrozenResults.warn_has_no_effect @9cd1e97c -->
+<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @e4b3659d, cash/decorator/frozen.py:FrozenResults.warn_has_no_effect @9cd1e97c -->
 An argument is keyed by its content at the time of the call, so a big array or
 frame is hashed on every call it is passed to. When a result comes from another
 cached function and nothing changes it afterwards, say so on the producer:
@@ -891,7 +891,7 @@ back read-only, and
 frozen result was changed after all. [`CACHE-NET-LOSS`](warnings.md#cache-net-loss)
 warns when hashing an argument costs more than the cache saves.
 
-<!-- claim: cash/decorator/store.py:ResultStore.attach_lineage @bc0d7926, cash/decorator/frozen.py:FrozenResults.container_hash @2fe95b0e -->
+<!-- claim: cash/decorator/store.py:ResultStore.attach_lineage @bc0d7926, cash/decorator/frozen.py:FrozenResults.container_hash @d37ce30e -->
 `frozen=True` covers the very object the function returns, in the process
 that called it:
 
@@ -908,7 +908,7 @@ function, and build a container you pass on inside a frozen function of its
 own. `frozen=` has no effect together with `ttl=`: such a result is keyed by
 its content.
 
-<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @f104039f, cash/decorator/frozen.py:FrozenResults.remember_array @3bb58fef -->
+<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @e4b3659d, cash/decorator/frozen.py:FrozenResults.remember_array @f16fdc8c -->
 A frozen numpy array comes back read-only, so a write raises. A frozen pandas
 frame or any other object stays writable, and writing into it breaks the
 promise: the calls after the write can be served results computed for its
@@ -917,6 +917,30 @@ or dict's length) on every use, but a value overwritten in place only when it
 checks the content, now and then;
 [`KEY-FROZEN-MUTATED`](warnings.md#key-frozen-mutated) names the producer
 when a check finds a change. Modify a copy (`df = df.copy()`).
+
+<!-- claim: cash/backends/frozen_handback.py:keep @9a23e2ec, cash/backends/frozen_handback.py:check @0f37fbd7, cash/backends/memory_backend.py:InMemoryBackend._frozen_hit @8f3c79dc -->
+**A hit hands back the same object.** Without `frozen=`, a hit hands back a
+new copy of the stored result whenever anything outside still holds the last
+one, so a library that keeps what it is given (a tokenizer keeping each
+dictionary trie by its id) makes every hit copy it again. With
+`frozen=True`, a hit hands back the object the last hit returned, whoever
+else holds it, as `functools.lru_cache` does: the first hit in a process
+reads the result out of the cache, and every later one hands back that
+object. Only while cash can prove it unchanged since:
+
+| The result | Proved unchanged by |
+|---|---|
+| A numpy array (not of objects) | it is handed out read-only, over a read-only base, so `a.flags.writeable = True` raises; its shape, dtype and strides are checked |
+| A pandas frame or series (copy-on-write pandas) | cash keeps a reference to its blocks, so any write through pandas copies a block first; its blocks, index, columns, their names and `attrs` are checked to be the same objects. Object columns must hold only strings and numbers |
+| Dicts, lists, sets and instances of plain classes, of 64 KiB or more | the C extension's watchers (Python 3.12+), as for any [watched argument](how-it-works/cache-keys-and-lineage.md#hashing-values) |
+| Anything else (a small value, a value holding an array inside a dict, a class with its own pickled state) | nothing: each hit gets a new copy, as without `frozen=` |
+
+If the object was changed after all, it is never handed out again:
+[`KEY-FROZEN-MUTATED`](warnings.md#key-frozen-mutated) names the producer
+once, the changed object is keyed by its content from then on, and the next
+hit reads a new copy out of the stored entry, which it hands back from then
+on. The first call, the one that runs the function, returns the object it
+built; the hits hand back a copy of their own (an array a read-only view).
 
 In a notebook too: `model = train(data)` in one cell and `score(model, batch)`
 in the next key `model` by the call that made it, as a script does, so the

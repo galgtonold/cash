@@ -88,6 +88,10 @@ class CacheMetadata:
     #: rode on one flag, so ``frozen=True`` silently lost disk persistence
     #: when the rate ceiling started reading it as "not a decorated entry".
     copy_required: bool | None = None
+    #: Written for a ``frozen=True`` function: a hit hands back the object a
+    #: hit handed out before while it is unchanged, whoever holds it, as
+    #: ``functools.lru_cache`` does (`backends.frozen_handback`).
+    frozen: bool | None = None
 
     #: Where the global RNG stood before and after the call that computed this
     #: entry, so a hit can leave it where the body did (``RngWatch.replay_parts``).

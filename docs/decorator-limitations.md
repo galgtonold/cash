@@ -563,6 +563,11 @@ So a `weakref.finalize` callback, a weak reference's callback, or a
 it go, not at the moment you drop your last reference as in plain Python.
 Classes with `__del__` are never kept this way.
 
+A [`frozen=True`](decorator.md#frozen-and-large-arguments) function's hit
+hands back the object an earlier hit returned even while you still hold it,
+as long as cash can prove it unchanged; cash keeps it until it evicts the
+entry or the object changes.
+
 ## Related
 
 - [The `@cash.cache` guide](decorator.md): where results go, what invalidates
