@@ -74,7 +74,7 @@
 
 #include "cwalk.h"
 
-#define CWATCH_API_VERSION 10
+#define CWATCH_API_VERSION 11
 #define CWATCH_VERSION "0.1.0"
 
 #if PY_VERSION_HEX < 0x030C0000
@@ -3950,6 +3950,29 @@ static int find_set_dummy(void) {
 }
 
 PyObject *cwatch_set_dummy(void) { return set_dummy; }
+
+/* Is `token` the digest peek(value, kind) would hand back: the value armed,
+   and proved unchanged since `token` was committed for `kind`? For a caller
+   in C that acts on the answer in the same call, with no bytecode between
+   the proof and the act for another thread to change the value in
+   (cprivate.c). Never raises. */
+int cwatch_holds_token(PyObject *o, long kind, PyObject *token) {
+    if (kind < 0 || kind >= NKINDS || !enabled || busy) return 0;
+    long r = rht_find((uintptr_t)o);
+    if (r < 0) return 0;
+    busy = 1;
+    Root *R = &roots[r];
+    int ok = 0;
+    if (!R->dirty && same_object(R, o) && R->dg[kind] && R->dgver[kind] == R->version) {
+        int v = verify(R);
+        R = &roots[r];
+        if (v < 0) PyErr_Clear();
+        else if (v == 1) ok = R->dg[kind] == token;
+        else { mark_dirty((uint32_t)r); c_verify_fail++; }
+    }
+    busy = 0;
+    return ok;
+}
 
 /* the datetime classes `dt_index` knows, and the names pickle finds them by;
    without the datetime module they are not atoms */
