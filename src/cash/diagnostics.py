@@ -355,6 +355,9 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # every time
         "KEY-READ-UNRECORDED",  # cash failed to record a read the body made, so
         # the call runs again every time (a statement is not stored)
+        "KEY-READS-NOT-KEPT",  # a helper read more files outside cached calls
+        # than cash remembers; a call that reaches it without reading is
+        # not stored
         "KEY-SOURCE-CHANGED",  # a cached function's or helper's file was edited
         # after import; keyed by the code actually running
         "KEY-UNHASHABLE-ARG",  # an argument could not be hashed; not cached

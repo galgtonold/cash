@@ -939,7 +939,9 @@ cash watches file reads from `import cash` on. A memoised loader that first
 ran before that (it was imported, and called, ahead of `cash`) read the file
 where cash could not see it, so later calls get the memo and record no file.
 A loader first called after `import cash` is recorded, even when that call
-came from outside any cached function.
+came from outside any cached function. A function that reads thousands of
+files outside cached calls is remembered only up to a limit; past it, see
+[KEY-READS-NOT-KEPT](warnings.md#key-reads-not-kept).
 
 <!-- claim: cash/tracking/memos_before_import.py:find_memos_filled_before_import @e09c920f -->
 At `import cash`, cash names each memo of yours (`lru_cache`, `cache`)

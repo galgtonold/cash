@@ -13,7 +13,6 @@ import logging
 import os
 import sys
 import time
-import weakref
 from typing import TYPE_CHECKING, Any
 
 from cash._memo import READ_PATHS, SOURCE_FILES, LruMemo
@@ -26,7 +25,14 @@ from .. import _weak
 if TYPE_CHECKING:
     from cash.tracking.file_tracker import FileAccessTracker
 
-__all__ = ["credit_read_to_stack", "credit_read_again", "credited_reads", "note_untracked_read"]
+__all__ = [
+    "IDLE_READS_PER_CODE",
+    "credit_read_to_stack",
+    "credit_read_again",
+    "credited_reads",
+    "note_untracked_read",
+    "reads_not_kept",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -200,13 +206,101 @@ def frame_kind(filename: str) -> str:
 _untracked_realpaths: LruMemo[str, str] = LruMemo(READ_PATHS)
 #: absolute path -> (monotonic time, stat); `note_untracked_read`.
 _untracked_stats: LruMemo[str, tuple[float, Any]] = LruMemo(READ_PATHS)
-#: ``code -> {absolute path: stat when read}``: reads outside a cached call
-#: whose paths are not resolved yet, the latest last. `realpath` is ~60 us
-#: on Windows and was most of what every ``open`` in a process that imported
-#: cash cost; a path is resolved once something asks what the code read
-#: (`credited_reads`), or before the code's next read inside a cached call
-#: is recorded, so the latest read of a file still wins.
-_unresolved_by_code: weakref.WeakKeyDictionary[Any, dict[str, Any]] = _weak.WeakKeyDictionary()
+
+#: How many files read outside every cached call are remembered for one
+#: code. A memoised loader reads a handful; a program that walks a folder
+#: of images with cash merely imported reads without end, and each read is
+#: on the stack of the same few functions. A code that reaches this stops
+#: being recorded and is marked (`reads_not_kept`): what it read after that
+#: is unknown, so a cached call that later reaches it without reading
+#: through it is not stored, with a warning, where a silent cap would let
+#: it depend on nothing. Once every function on a read's stack is so
+#: marked, the read costs a walk of the stack and nothing else.
+IDLE_READS_PER_CODE = READ_PATHS
+#: The same, over all codes: past it the code remembering the most gives up
+#: its older half, and is marked too.
+IDLE_READS_TOTAL = 4 * READ_PATHS
+
+
+class _IdleReads(dict):
+    """``{absolute path: stat when read}`` for one code's reads outside every
+    cached call, the latest last, not resolved yet.
+
+    Kept by the code's ``id`` with a weak reference to it, not in a
+    dictionary keyed by the code: looking a code up hashes its constants and
+    names, ~1.5 us for each function on the stack of every ``open`` in a
+    process that imported cash."""
+
+    __slots__ = ("code", "lost", "moved")
+
+    def __init__(self, code: Any) -> None:
+        super().__init__()
+        key = id(code)
+        twins = _idle_twins.setdefault(hash(code), [])  # hashed once per code, not per read
+        twins.append(key)
+
+        def gone(ref: Any) -> None:
+            found = _unresolved_by_code.get(key)
+            if found is not None and found.code is ref:
+                _idle_total[0] -= len(found)
+                del _unresolved_by_code[key]
+            try:
+                twins.remove(key)
+            except ValueError:
+                pass
+            if not twins and _idle_twins.get(hash_of_code) is twins:
+                del _idle_twins[hash_of_code]
+
+        hash_of_code = hash(code)
+        self.code = _weak.ref(code, gone)
+        #: Reads of this code went unremembered (`IDLE_READS_PER_CODE`).
+        self.lost = False
+        #: How many of its reads `_resolve_untracked` has moved on.
+        self.moved = 0
+
+
+#: ``id(code) -> its reads outside a cached call`` (`_IdleReads`). `realpath`
+#: is ~60 us on Windows and was most of what every ``open`` in a process
+#: that imported cash cost; a path is resolved once something asks what the
+#: code read (`credited_reads`), or before the code's next read inside a
+#: cached call is recorded, so the latest read of a file still wins.
+_unresolved_by_code: dict[int, _IdleReads] = {}
+#: How many paths `_unresolved_by_code` holds, over all codes.
+_idle_total = [0]
+#: ``hash(code) -> ids of the codes with a record``: two equal codes (one
+#: source compiled twice) share what they read, as in `_reads_by_code`.
+_idle_twins: dict[int, list[int]] = {}
+
+
+def _idle_reads(code: Any) -> _IdleReads | None:
+    """*code*'s own record in `_unresolved_by_code`, or None."""
+    found = _unresolved_by_code.get(id(code))
+    if found is not None and found.code() is code:
+        return found
+    return None
+
+
+def _idle_records(code: Any) -> list[_IdleReads]:
+    """The records of *code* and of every live code equal to it."""
+    found = []
+    for key in _idle_twins.get(hash(code), ()):
+        record = _unresolved_by_code.get(key)
+        twin = record.code() if record is not None else None
+        if twin is not None and (twin is code or twin == code):
+            found.append(record)
+    return found
+
+
+def _trim_idle() -> None:
+    """Take the older half of the largest record away (`IDLE_READS_TOTAL`)."""
+    largest = max(_unresolved_by_code.values(), key=len, default=None)
+    if largest is None or not largest:
+        return
+    drop = (len(largest) + 1) // 2
+    for absolute in list(largest)[:drop]:
+        largest.pop(absolute, None)
+    largest.lost = True
+    _idle_total[0] -= drop
 
 
 def _resolve(absolute: str) -> str:
@@ -217,24 +311,41 @@ def _resolve(absolute: str) -> str:
     return resolved
 
 
-def _resolve_untracked(code: Any) -> None:
-    """Move *code*'s unresolved reads into `_reads_by_code`, in the order they were made."""
-    pending = _unresolved_by_code.pop(code, None)
+def _resolve_untracked(code: Any, pending: _IdleReads | None = None) -> None:
+    """Move *code*'s unresolved reads into `_reads_by_code`, in the order
+    they were made, counting the files that are new there
+    (`_IdleReads.moved`): a code asked about between its reads would
+    otherwise keep every file after all."""
+    if pending is None:
+        pending = _idle_reads(code)
     if not pending:
         return
+    items = list(pending.items())
+    _idle_total[0] -= len(items)
+    pending.clear()
     memo = _reads_by_code
     reads = memo.get(code)
     if reads is None:
         reads = {}
         memo[code] = reads
-    for absolute, stat in list(pending.items()):
+    for absolute, stat in items:
         try:
             abs_path = _resolve(absolute)
         except (OSError, ValueError):
             continue
         if is_pseudo_fs(abs_path) or is_cash_internal(abs_path):
             continue
+        if abs_path not in reads:
+            pending.moved += 1
         reads[abs_path] = stat
+
+
+def reads_not_kept(code: Any) -> bool:
+    """Did *code* read more files outside every cached call than cash
+    remembers for it? Then `credited_reads` is not all it read."""
+    if not _unresolved_by_code:
+        return False
+    return any(record.lost for record in _idle_records(code))
 
 
 def note_untracked_read(path: Any, frame: Any) -> None:
@@ -247,17 +358,23 @@ def note_untracked_read(path: Any, frame: Any) -> None:
     """
     try:
         codes = []
+        unresolved = _unresolved_by_code
+        open_records = False  # is any code on the stack still recorded?
         while frame is not None:
-            kind = frame_kind(frame.f_code.co_filename)
+            code = frame.f_code
+            kind = frame_kind(code.co_filename)
             if kind == "wrapper":
                 break
             if kind == "cash" and not codes:
                 return  # cash reading its own files
             if kind == "user":
-                codes.append(frame.f_code)
+                codes.append(code)
+                if not open_records:
+                    pending = unresolved.get(id(code))
+                    open_records = pending is None or not pending.lost or pending.code() is not code
             frame = frame.f_back
-        if not codes:
-            return
+        if not open_records:
+            return  # nobody's, or every reader past what cash remembers
         raw = os.fsdecode(path) if isinstance(path, bytes) else os.fspath(path)
         if not isinstance(raw, str) or is_pseudo_fs(raw) or is_remote_url(raw):
             return
@@ -277,14 +394,25 @@ def note_untracked_read(path: Any, frame: Any) -> None:
             _untracked_stats[absolute] = (now, stat)
         if stat is None:
             return
-        unresolved = _unresolved_by_code
+        total = _idle_total
         for code in codes:
-            pending = unresolved.get(code)
-            if pending is None:
-                unresolved[code] = {absolute: stat}
-            else:
-                pending.pop(absolute, None)  # the latest read last
-                pending[absolute] = stat
+            pending = unresolved.get(id(code))
+            if pending is None or pending.code() is not code:
+                if pending is not None:
+                    total[0] -= len(pending)  # a code gone, its id used again
+                pending = unresolved[id(code)] = _IdleReads(code)
+            elif pending.lost:
+                continue
+            elif absolute in pending:
+                del pending[absolute]  # the latest read last
+                total[0] -= 1
+            elif len(pending) + pending.moved >= IDLE_READS_PER_CODE:
+                pending.lost = True
+                continue
+            pending[absolute] = stat
+            total[0] += 1
+        if total[0] > IDLE_READS_TOTAL:
+            _trim_idle()
     except Exception:  # attribution is an aid, never a failure
         logger.debug("[TRACKER] could not note an untracked read of %r", path, exc_info=True)
 
@@ -292,5 +420,6 @@ def note_untracked_read(path: Any, frame: Any) -> None:
 def credited_reads(code: Any) -> dict[str, Any]:
     """``{file: stat when read}`` for files read while *code* was on the stack."""
     if _unresolved_by_code:
-        _resolve_untracked(code)
+        for record in _idle_records(code):
+            _resolve_untracked(code, record)
     return dict(_reads_by_code.get(code) or {})

@@ -38,7 +38,7 @@ from ..tracking.file_dep_snapshot import (
     walk_dataset_dir,
 )
 from ..tracking.file_tracker import unrecorded_reads, unseen_native_reads
-from ..tracking.read_credit import credited_reads
+from ..tracking.read_credit import IDLE_READS_PER_CODE, credited_reads, reads_not_kept
 from ..tracking.tracker_context import active_tracker
 from .cache_metadata import CacheMetadata
 from .function_identity import CODE_KEYED_STATS, file_stamp
@@ -334,6 +334,12 @@ def _code_of(fn: Any) -> types.CodeType | None:
     return code if isinstance(code, types.CodeType) else None
 
 
+def _reader_name(fn: Any) -> str:
+    """How a warning names the helper *fn*."""
+    name = plain_getattr(fn, "__qualname__", None) or plain_getattr(fn, "__name__", None)
+    return name if isinstance(name, str) else "a helper"
+
+
 class FileDeps:
     """The files a cached call depends on: declared with ``file_depends_on=``,
     and read by the body or its helpers."""
@@ -578,19 +584,54 @@ class FileDeps:
             if code is None or code is own or code in live:
                 continue
             remembered = credited_reads(code)
-            if not remembered or remembered.keys() <= have:
+            # Not all it read is remembered (`read_credit.IDLE_READS_PER_CODE`):
+            # only a path the call was given can still say which file a
+            # memo handed over.
+            partial = reads_not_kept(code)
+            if not partial and (not remembered or remembered.keys() <= have):
                 continue
             if arg_paths is None:
                 arg_paths = argument_paths(args, kwargs)
             # Chosen BEFORE what is already tracked is taken away: `have` grows
             # as files are added, and a remainder that misses the arguments
             # would read as a memo of a fixed file.
-            chosen = (remembered.keys() & arg_paths) or set(remembered)
+            named = remembered.keys() & arg_paths
+            if partial and not named:
+                tracker.unknown_memo_readers.add(_reader_name(fn))
+                continue
+            chosen = named or set(remembered)
             for path in sorted(chosen - have):
                 tracker.add_tracked(path)
                 then = remembered[path]
                 if then is not None and tracker.read_stats.get(path, then) != then:
-                    tracker.stale_memo_reads.add(path)
+                    if partial:
+                        # Read again since, perhaps: past the bound, a later
+                        # read of the file was not recorded.
+                        tracker.unknown_memo_readers.add(_reader_name(fn))
+                    else:
+                        tracker.stale_memo_reads.add(path)
+        self._warn_reads_not_kept(func_name, tracker)
+
+    def _warn_reads_not_kept(self, func_name: str, tracker: Any) -> None:
+        """KEY-READS-NOT-KEPT when a helper the call reaches read more files
+        outside cached calls than cash remembers, and did not read in this
+        call: the call is not stored (`ResultStore` refuses it)."""
+        readers = getattr(tracker, "unknown_memo_readers", None)
+        if not readers:
+            return
+        reader = sorted(readers)[0]
+        self._notices.warn_once(
+            CashCacheIneffectiveWarning,
+            func_name,
+            "reads_not_kept",
+            f"@cash.cache on {func_name}: its helper {reader} read more than {IDLE_READS_PER_CODE} files "
+            f"outside every cached call, more than cash remembers for one function. If {reader} keeps "
+            f"what it read (a memo), this call may have been handed data from a file cash can no longer "
+            f"name, so the result was returned but not cached.",
+            code="KEY-READS-NOT-KEPT",
+            fix=f"pass the path {reader} reads to {func_name} as an argument, or call {reader} only "
+            f"inside cached functions, so each read is recorded with the call that used it.",
+        )
 
     def code_moved_since_keyed(self, func: Callable, func_name: str) -> bool:
         """Did a file this call's code came from change after its key was read?

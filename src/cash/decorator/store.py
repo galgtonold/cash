@@ -351,6 +351,12 @@ class ResultStore:
                 f"a memoised helper handed it data read from an earlier version of "
                 f"{sorted(stale_memo)[0]}; a fresh process reads the file as it is now"
             )
+        unknown_memo = getattr(tracker, "unknown_memo_readers", None)
+        if refusal is None and unknown_memo:
+            refusal = (
+                f"its helper {sorted(unknown_memo)[0]} read more files outside cached calls than cash "
+                f"remembers, so the files a memo of it may have handed over cannot be named"
+            )
         unresolved = getattr(tracker, "unresolved_dynamic", None)
         if refusal is None and unresolved:
             refusal = (

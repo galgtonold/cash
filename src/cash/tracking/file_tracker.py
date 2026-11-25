@@ -306,6 +306,10 @@ class FileAccessTracker:
         # Files a memo handed this block data from that was read from an
         # EARLIER version of the file (see `FileDeps.credit_remembered_reads`).
         self.stale_memo_reads: set[str] = set()
+        # Helpers this block reached that read more files outside cached
+        # calls than cash remembers, with nothing to say which of them this
+        # block was handed (see `FileDeps.credit_remembered_reads`).
+        self.unknown_memo_readers: set[str] = set()
         # Sources a cached call in this block depends on through
         # ``dynamic_depends_on=`` that are not files: (id, token, object id)
         # -> (source, its token when that call keyed on it). An entry of this
