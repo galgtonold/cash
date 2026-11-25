@@ -13,6 +13,80 @@ config reload) makes that call's result go uncached, with
 [STORE-STATE-CHANGED](../../warnings.md#store-state-changed): it cannot be told
 which value it was computed from.
 
+## What threads share, and what each call keeps
+
+A cached function runs in a process whose settings, random streams and
+imports belong to every thread. This is what cash guarantees when several
+threads call cached functions, and what it does not.
+
+**Guaranteed:**
+
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._keep_handed @8705e6ef, cash/handed_copies.py:reuse @7f13b0dc -->
+- **Each caller gets its own object.** Two threads that hit the same entry at
+  the same moment each receive their own copy of the result. Changing one
+  never changes the other, and a copy one thread is still changing is never
+  handed to another. The exception is `frozen=True`, where you promise not to
+  change the result and every hit hands back
+  [the same object](../../decorator.md#frozen-and-large-arguments).
+<!-- claim: cash/loaded_modules.py:loaded_module @efa9f227 -->
+- **A call works while another thread imports a library.** While one thread
+  is in the middle of `import numpy`, `import pandas` or `import torch`, a
+  cached call on another thread treats that library as not loaded yet and
+  runs normally.
+<!-- claim: cash/tracking/trace_recorder.py:Unit.detached @c3bd08a0 -->
+- **A call is judged by its own record.** cash records the code a call ran in
+  order to check its entry later. Code that other threads run while the call
+  finishes does not get into that record and does not make the call fail.
+<!-- claim: cash/tracking/process_registries.py:changed_by @cee9eb08 -->
+- **A setting another thread writes is not blamed on your function** when the
+  write can be traced to its thread. That holds for the environment
+  (`os.environ`, `os.putenv`), `atexit.register`, `codecs.register` and
+  `sys.addaudithook`: a heartbeat thread that writes `os.environ` while your
+  function runs leaves the function cached. A write the function makes itself
+  still makes its calls run uncached
+  ([IMPURE-OBSERVED-EFFECTS](../../warnings.md#impure-observed-effects)), and
+  so does a write by a thread the function started.
+- **A result is not stored when state its key read changed mid-call.** That
+  is the [STORE-STATE-CHANGED](../../warnings.md#store-state-changed) rule
+  above. It does not depend on who is blamed for the change.
+
+**Decided on the second look:**
+
+<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @631605a3 -->
+- **Other process settings.** A logger's level, the warnings filters,
+  `sys.path`, the working directory, an interpreter hook and matplotlib's
+  `rcParams` carry no record of which thread changed them. If one changes
+  while a call runs and other threads are running too, that call is not
+  stored and cash warns once with
+  [STORE-STATE-CHANGED](../../warnings.md#store-state-changed). If it changes
+  again during the next call that runs the function, cash takes the change as
+  the function's and its calls run uncached. With no other thread running,
+  the first change already counts as the function's.
+<!-- claim: cash/decorator/rng.py:RngWatch.maybe_another_threads @20f7bae2 -->
+- **The global random streams.** `random`, `np.random` and torch's default
+  generator are shared by all threads, so a stream that moved during a call
+  may have been moved by another thread. The first time this happens to a
+  function that is not known to draw, the call is not stored and nothing else
+  changes. If a stream moves again during the next call that runs the
+  function, in this process or the next, cash treats the function as drawing
+  random numbers: its key follows the seed, and an unseeded draw warns with
+  [RANDOM-UNSEEDED](../../warnings.md#random-unseeded).
+
+**Not guaranteed:**
+
+- **Telling a thread that keeps changing shared state from your
+  function.** A background thread that draws from the global streams all the
+  time, or resets a logger's level again and again, changes them during two
+  calls in a row, and the function is then treated as if it did so itself.
+  Give such a thread its own generator (`random.Random()`,
+  `np.random.default_rng()`), or cache a function that takes the generator as
+  an argument.
+- **Telling tasks on one thread apart.** What another `asyncio` task does
+  between two awaits of a cached coroutine happens on the same thread, so
+  cash counts it as the call's.
+- **One computation per key.** Without locking, two threads that miss the
+  same key both run the body. The next section turns that off.
+
 ## `use_locking=True`: compute once
 
 <!-- claim: cash/decorator/runtime.py:CallRunner.compute_with_lock @b4c5c8c2, cash/core.py:Cash.__init__ @d6897bc2 -->
@@ -90,7 +164,7 @@ does its own share of cash's work in parallel.
 
 ## Across processes: Pool, ProcessPoolExecutor, joblib { #across-processes-pool-processpoolexecutor-joblib }
 
-<!-- claim: cash/_paths.py:main_namespace_name @d870998d, cash/backends/_writes.py:in_multiprocessing_child @9bd4615e, cash/decorator/run_summary.py:RunSummary.print_at_exit @63645a47 -->
+<!-- claim: cash/_paths.py:main_namespace_name @d870998d, cash/backends/_writes.py:in_multiprocessing_child @8a8d5f6a, cash/decorator/run_summary.py:RunSummary.print_at_exit @63645a47 -->
 Worker processes use the cache folder of the process that started them, so what
 one worker computes is a hit for the other workers, for the parent, and for the
 next run. That holds whether you map the cached function itself or a plain
@@ -132,7 +206,7 @@ if __name__ == "__main__":
   `with cash.disabled():` around the second call does not reach them. Create
   the pool inside the block, or set `CASH_DISABLE=1` for the whole run.
 
-<!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @9fac5b09 -->
+<!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @e9ba11bf -->
 A file a worker reads for a cached call in the parent is a dependency of that
 call, as if the parent had read it: editing it recomputes the call. This holds
 for `ProcessPoolExecutor`, `multiprocessing.Pool` and joblib's workers. So
