@@ -24,7 +24,6 @@ import enum
 import fractions
 import functools
 import pathlib
-import sys
 import uuid
 import weakref
 from collections.abc import Mapping
@@ -32,6 +31,7 @@ from typing import Any
 
 from ._type_memo import class_dict, class_mro, class_qualname, module_of_class, mro_of
 from ._user_attrs import attribute_or, instance_of
+from .loaded_modules import loaded_module
 
 #: Exact types that carry no user code and hold nothing else.
 CODELESS_PRIMS = (str, int, float, bool, type(None), bytes, complex, bytearray)
@@ -89,7 +89,7 @@ def writable_types() -> tuple[type, ...]:
 
     Built once per set of those modules loaded, not on every call: the
     modules are looked up, never imported here."""
-    return _writable_types(sys.modules.get("numpy"), sys.modules.get("pandas"))
+    return _writable_types(loaded_module("numpy"), loaded_module("pandas"))
 
 
 @functools.lru_cache(maxsize=4)
@@ -117,14 +117,14 @@ def library_scalar_types() -> tuple[type, ...]:
     """The exact types of numpy's scalars and of pandas' ``Timestamp``,
     ``Timedelta``, ``NaT`` and ``NA``, of the modules loaded (never imported
     here): small values a parsed record holds, ``{'time': pd.Timestamp(...)}``."""
-    return _library_scalar_types(sys.modules.get("numpy"), sys.modules.get("pandas"))
+    return _library_scalar_types(loaded_module("numpy"), loaded_module("pandas"))
 
 
 @functools.lru_cache(maxsize=4)
 def _shapely_geometry_types(shapely: Any) -> frozenset:
     if shapely is None:
         return frozenset()
-    geometry = sys.modules.get("shapely.geometry")
+    geometry = loaded_module("shapely.geometry")
     names = (
         "Point",
         "LineString",
@@ -151,7 +151,7 @@ def shapely_geometry_types() -> frozenset:
     module loaded (never imported here): immutable, no attribute of their
     own, pickled as their WKB, so a geometry holds no object and keys,
     copies and restores as its value alone."""
-    return _shapely_geometry_types(sys.modules.get("shapely"))
+    return _shapely_geometry_types(loaded_module("shapely"))
 
 
 #: Every name a statement can use without binding it: the builtins, and the

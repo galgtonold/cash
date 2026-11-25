@@ -26,6 +26,7 @@ __all__ = [
     "coerce",
     "config_provenance",
     "declared_type",
+    "disabled_by_environment",
     "validate_value",
 ]
 
@@ -90,7 +91,14 @@ def check_choice(name: str, value: Any) -> None:
     # `not (x >= low)` also refuses NaN.
     if not (value >= low) or (high is not None and value > high):
         span = f"between {low} and {high}" if high is not None else f"{low} or more"
-        unset = " (leave it unset for no cap)" if low == 1 else ""
+        # Unset is not "no cap" for a size: cash then sizes the cap itself.
+        unset = ""
+        if low == 1:
+            unset = (
+                " (leave it unset for the automatic cap)"
+                if name in ("max_cache_size", "max_size_bytes")
+                else " (leave it unset for no limit)"
+            )
         raise ValueError(f"{name}={value!r}: must be {span}{unset}")
 
 
@@ -527,3 +535,15 @@ def _typed_value(name: str, value: Any, dataclass_type: type) -> Any:
     expected = plain_getattr(base, "__name__", str(base))
     hint = " (or a size string such as '2GB')" if name in SIZE_FIELDS else ""
     raise ValueError(f"{name}={value!r} is a {class_name(type(value))}; expected {expected}{hint}")
+
+
+def disabled_by_environment() -> bool:
+    """Was this process started with caching switched off (``CASH_DISABLE``)?
+    Then cash watches and replaces nothing until a setting turns it on. A
+    value that is no boolean counts as not set: the config load reports it."""
+    import os
+
+    try:
+        return bool(validate_value("disable", os.environ.get("CASH_DISABLE", "").strip() or "0"))
+    except ValueError:
+        return False

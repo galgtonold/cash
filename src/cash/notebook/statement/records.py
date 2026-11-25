@@ -30,14 +30,15 @@ from cash.notebook.cache_key import (
     module_state_key,
     mutation_verdict_key,
     note_read_provenance_written,
-    process_state_key,
     pyplot_draws_key,
     read_provenance_key,
     row_blocks_key,
     share_edges_key,
+    statement_effects_key,
     statement_source_hash,
     write_provenance_key,
 )
+from cash.notebook.effects_record import EffectsRecord, inputs_digest
 from cash.notebook.carrier_history import FIGURE_KINDS, carrier_history_fingerprint
 from cash.notebook.stateful_carriers import stateful_carrier_kind
 from cash.notebook.statement.derivation_edges import read_share_edges
@@ -82,7 +83,6 @@ class StatementRecords:
         self._mutation_verdicts_written: dict[str, list[str]] = {}
         self._carrier_advances_written: dict[str, list[str]] = {}
         self._module_state_written: dict[str, tuple[list[str], list[str]]] = {}
-        self._process_state_written: dict[str, list[str]] = {}
         self._read_provenance_written: dict[str, list[str]] = {}
         self._share_edges_written: dict[str, list[list[str]]] = {}
         self._pyplot_draws_written: dict[str, list[str]] = {}
@@ -280,26 +280,69 @@ class StatementRecords:
         """Record that the statement *code* changed *kinds* of the process
         (the environment, the working directory) when it ran now, in this
         kernel (``TrackingState.process_state_ran``), and keep it for a
-        later kernel (``process_state_key``). Best-effort: without the record
+        later kernel in the statement's effects record
+        (``statement_effects_key``). Best-effort: without the record
         a restart's rebuild runs only the ones its text says."""
         source_hash = statement_source_hash(code)
         kinds = frozenset(kinds)
         state = self.tracking_state
         state.process_state_ran.add(source_hash)
         state.process_state_writers[source_hash] = kinds
-        persisted = sorted(kinds)
-        if self._process_state_written.get(source_hash) == persisted:
+        record = self._effects_record(source_hash)
+        if record.process != kinds:
+            self._keep_effects(source_hash, record.with_process(kinds))
+
+    def note_changed_names(self, source_hash: str, entry: Mapping[str, str], names: Iterable[str]) -> None:
+        """Record the variables the statement with *source_hash* changed
+        when it ran now, reading its inputs at the lineages *entry*, that
+        its text does not bind (*names*): for the session and for a later
+        kernel (``statement_effects_key``).
+
+        A run that changed none writes nothing, unless this session holds a
+        record of the statement: the run is then kept as one that changed
+        none with these inputs. Best-effort: without the record the
+        simulation reads what the statement's text and the functions it
+        names say."""
+        names = frozenset(names)
+        if not names and source_hash not in self.tracking_state.effects_records:
             return
+        record = self._effects_record(source_hash)
+        at = inputs_digest(entry)
+        if record.runs and record.runs[-1] == (at, names):
+            return
+        self._keep_effects(source_hash, record.with_run(at, names))
+
+    def _effects_record(self, source_hash: str) -> EffectsRecord:
+        """The effects record of the statement with *source_hash*: this
+        session's, else an earlier kernel's, else an empty one."""
+        record = self.tracking_state.effects_records.get(source_hash)
+        if record is None:
+            record = self._earlier_effects(source_hash) or EffectsRecord()
+        return record
+
+    def _earlier_effects(self, source_hash: str) -> EffectsRecord | None:
+        backend = self.cash_instance.backend if self.cash_instance else None
+        if backend is None:
+            return None
+        try:
+            return EffectsRecord.from_dict(backend.get_metadata(statement_effects_key(source_hash)))
+        except (OSError, TypeError, ValueError, AttributeError):
+            return None
+
+    def _keep_effects(self, source_hash: str, record: EffectsRecord) -> None:
+        """Keep *record* for the session and on disk, and tell the
+        simulation's snapshots of the cells holding the statement that what
+        they read of it changed (``TrackingState.note_share_edge_change``)."""
+        state = self.tracking_state
+        state.effects_records[source_hash] = record
+        state.note_share_edge_change(source_hash)
         backend = self.cash_instance.backend if self.cash_instance else None
         if backend is None:
             return
         try:
-            backend.set_metadata_only(
-                process_state_key(source_hash), {"process_state": True, "kinds": persisted, "ttl": None}
-            )
-            self._process_state_written[source_hash] = persisted
+            backend.set_metadata_only(statement_effects_key(source_hash), record.to_dict())
         except (OSError, TypeError, ValueError, AttributeError):
-            logger.debug("%s process-state persistence failed", _LOG_PROCESSOR)
+            logger.debug("%s effects-record persistence failed", _LOG_PROCESSOR)
 
     def recorded_row_blocks(self, source_hash: str) -> dict | None:
         """The input fingerprints an earlier run of the statement with

@@ -67,6 +67,7 @@ from typing import Any
 from .analysis.annotations import line_assumes_safe
 from .effects import EffectKind
 from .install_paths import is_user_code_file, is_user_path, norm_dir, normcase_path
+from .loaded_modules import loaded_module
 from .tracking import io_watch, process_registries
 from .tracking.read_classification import is_runtime_cache_path
 
@@ -439,7 +440,7 @@ def _hook_mock_calls() -> None:
     itself -- a program that has not imported it has no mocks. Installed
     while an observer is open, like the rest of cash's I/O watch.
     """
-    module = sys.modules.get("unittest.mock")
+    module = loaded_module("unittest.mock")
     real = getattr(getattr(module, "CallableMixin", None), "_increment_mock_call", None)
     if real is None or getattr(real, "_cash_effect_patch", False):
         return

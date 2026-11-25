@@ -39,7 +39,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NamedTuple, TypeVar
 
-from .. import _weak
+from .. import _verify, _weak
 from . import scan_store
 
 __all__ = ["STATS", "StoredFactMismatch", "flush", "kept", "register", "status"]
@@ -55,7 +55,7 @@ _MAX_TEXTS = 2048
 STATS = {"loaded": 0, "computed": 0, "stored": 0, "refused": 0, "verified": 0}
 
 
-class StoredFactMismatch(AssertionError):
+class StoredFactMismatch(_verify.Mismatch):
     """``CASH_ANALYSIS_MEMO_VERIFY=1``: a stored tree fact is not what working
     it out again gives."""
 

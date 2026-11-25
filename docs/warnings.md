@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @3b2080e7 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @97ebd651 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -152,6 +152,7 @@ Caching happened, or refused to, and it is worth saying. Every code here starts 
 | [CACHE-DIR-NEW](#cache-dir-new) | decorator | cash created its default cache folder, and says where |
 | [CACHE-DIR-UNWRITABLE](#cache-dir-unwritable) | both | the cache directory cannot be written |
 | [CACHE-EVICTED-RECOMPUTE](#cache-evicted-recompute) | both | the size cap had evicted a costly result, so it was computed again |
+| [CACHE-FORMAT-NEWER](#cache-format-newer) | both | the cache was written by a newer cash, so it is left alone |
 | [CACHE-FRESHNESS-COST](#cache-freshness-cost) | decorator | checking tracked files costs much of what a hit saves |
 | [CACHE-IDENTITY-COUPLED](#cache-identity-coupled) | decorator | a live matplotlib figure is never stored |
 | [CACHE-IDENTITY-UNCHECKED](#cache-identity-unchecked) | decorator | a result was stored without being checked for a live object's `id()` |
@@ -293,6 +294,31 @@ use a shorter path or enable long paths (`LongPathsEnabled`).
 
 **When it is safe to ignore.** When the directory is read-only on purpose: a
 shared cache you only read from.
+
+### CACHE-FORMAT-NEWER {#cache-format-newer}
+
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
+
+<!-- claim: cash/backends/cache_dir.py:CacheDirStamp.check @5ae84fb2, cash/backends/cache_dir.py:warn_newer_format @b94ee668 -->
+**What happened.** The cache was written by a newer cash than the one running:
+its format number is higher than the one this version reads and writes. The
+message names the cache and both numbers. It appears when two environments
+with different cash versions share one cache, or after going back to an older
+release.
+
+**Why it matters.** This version cannot trust entries in a format it does not
+know, and deleting them would throw away the newer version's results. So it
+leaves the cache as it is and stores nothing on disk for the rest of the run:
+every new process recomputes. Results are still correct, and in-process
+repeats still hit the RAM tier.
+
+**What to do.** Upgrade cash in this environment to the version that wrote the
+cache. To keep both versions, give this environment a cache of its own with
+`CASH_CACHE_DIR` or `cache_dir` under `[tool.cash]`. To start over with this
+version, delete the cache named in the message.
+
+**When it is safe to ignore.** For a one-off run in the older environment,
+when computing everything once is acceptable.
 
 ### CACHE-EVICTED-RECOMPUTE {#cache-evicted-recompute}
 
@@ -658,7 +684,7 @@ large frame of text columns hashes at about 0.2 s per million rows.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @692eb80f, cash/decorator/purity_checks.py:PurityChecks.warn_shared_on_hit @cdd6af30, cash/decorator/purity_checks.py:PurityChecks._shared_with @7b72550c -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @af1e5f6d, cash/decorator/purity_checks.py:PurityChecks.warn_shared_on_hit @cdd6af30, cash/decorator/purity_checks.py:PurityChecks._shared_with @c1fd42b0, cash/decorator/purity_checks.py:_shared_argument_item @670d7aaa, cash/decorator/purity_checks.py:SHARED_ARGUMENT_ITEMS == 500000 -->
 **What happened.** The result shares state with an object outside the
 call: an argument, or something the function reaches by name. On the first
 run, a write through one shows in the other. A cache hit returns a separate
@@ -673,13 +699,16 @@ attributes and object array, for:
 - an argument, an attribute of an argument that is an object of your class
   (`return self.rows`, `{"rows": t.rows}`), or memory shared with an array
   argument;
+- an item of a list, tuple, dict, set or deque argument, at any depth of
+  such containers (`[r for r in records if r["k"] == k]`, `cfg["section"]`,
+  `rows[0]`, `cfg["a"]["b"]`); the warning names it (`records[0]`);
 - a closure variable, a module global the body names, a default argument,
   or an attribute of the function itself;
 - an attribute of a class or a module of yours the body names
   (`Holder.ROWS`), or of an object of your class it names
   (`REGISTRY.entries`);
-- one of the first 256 items of any of those containers (`CONFIG["sub"]`,
-  `Holder.CFG["sub"]`, a list inside a global tuple);
+- one of the first 256 items of a container among the last two groups
+  (`CONFIG["sub"]`, `Holder.CFG["sub"]`, a list inside a global tuple);
 - memory shared with any of those arrays, at the top of the result or
   inside it (`return ARR[1:4]`, `{"train": X[:8], "test": X[8:]}`), or,
   without pandas copy-on-write (pandas 2 by default), with most columns of
@@ -692,6 +721,15 @@ attributes and object array, for:
   `.values` of an `Int64`, time-zone or category column), with
   copy-on-write too: it is the frame's own, or one over its memory, and a
   write through it reaches the frame.
+
+The items of the arguments are searched only for an object that something
+besides the result holds when the call returns, so a result built of new
+objects costs no look at the arguments, however long they are. For such an
+object cash compares up to 500,000 items of the arguments' containers, all
+levels together. When that is not enough to search them to the end, the
+warning says the result "holds an object something else holds too, possibly
+an item of the argument" and names the argument: it may be a false alarm
+there, and `assume_safe=True` waives it.
 
 Not reported: a result that IS an argument the call changed in place and
 a hit writes back (`stft(y, out=buf)` filling and returning `buf`, where
@@ -900,10 +938,10 @@ the line.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/config/resolve.py:_validated_layer @ea2b7c73, cash/config/resolve.py:_unknown_key @6098acf3 -->
-**What happened.** A `[tool.cash]` table, a `[cash]` table or a
-`CASH_TIER_<N>_*` variable sets a key that is not a cash setting. The message
-names the closest real setting:
+<!-- claim: cash/config/resolve.py:_validated_layer @ea2b7c73, cash/config/resolve.py:_unknown_key @6098acf3, cash/config/sources.py:_notice_if_misspelt @5685ec88 -->
+**What happened.** A `[tool.cash]` table, a `[cash]` table, a
+`CASH_TIER_<N>_*` variable or a misspelt `CASH_*` variable sets a key that is
+not a cash setting. The message names the closest real setting:
 
 ```text title="Output"
 [CONFIG-UNKNOWN-KEY] …/pyproject.toml sets `max_cache_siz`,
@@ -911,9 +949,11 @@ which is not a cash setting, so it does nothing. Did you mean
 `max_cache_size`?
 ```
 
-Plain `CASH_*` variables that are not settings are not reported, because
-other tools use that prefix. The same key given in code, to `Cash(...)` or
-`cash.configure(...)`, raises `ValueError` instead.
+A plain `CASH_*` variable is reported when its name is nearly that of a
+setting, as `CASH_DISABLED` is of `CASH_DISABLE`. One that resembles no
+setting is not reported, because other tools use that prefix. The same key
+given in code, to `Cash(...)` or `cash.configure(...)`, raises `ValueError`
+instead.
 
 **Why it matters.** The setting you meant is not in effect.
 
@@ -1026,7 +1066,7 @@ mutation, return a modified copy instead. If the effect is incidental (a log
 file, a temp file), put `# @cash:assume-safe` on the line the message names, or
 run the code in `with cash.assume_safe():`.
 
-<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @1938b99d -->
+<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @631605a3 -->
 A call that changes a process setting (`np.seterr`, a logger's level,
 `atexit.register`, `os.environ`) is not stored, and runs every time. Make
 the setting outside the cached function if you can. If a hit may skip it,
@@ -1035,7 +1075,9 @@ line or on the `def` line, or `with cash.assume_safe():` around it. A
 waiver around the call of the cached function does not reach into it
 ([details](how-it-works/decorator-path.md#side-effects)). In a notebook,
 `# @cash:assume-safe` on the statement that changes a process setting
-caches it.
+caches it. While other threads are running, a setting another thread
+changed is not blamed on the function
+([Threads and processes](tutorials/feature-guides/thread-safety.md#what-threads-share-and-what-each-call-keeps)).
 
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @987ecb33 -->
 **When it is safe to ignore.** When everything listed is bookkeeping nobody
@@ -1195,6 +1237,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-NETWORK-READ](#key-network-read) | decorator | the body reads from a server or database |
 | [KEY-OPAQUE-CALLABLE](#key-opaque-callable) | decorator | a callable's code cannot be hashed |
 | [KEY-READ-UNRECORDED](#key-read-unrecorded) | both | cash failed to record a read; the call or statement runs every time |
+| [KEY-READS-NOT-KEPT](#key-reads-not-kept) | decorator | a helper read more files outside cached calls than cash remembers; a call it may have handed data to is not stored |
 | [KEY-SOURCE-CHANGED](#key-source-changed) | decorator | a code file changed after import |
 | [KEY-STALE-CASH-KEY](#key-stale-cash-key) | decorator | one `__cash_key__` stands for two different contents |
 | [KEY-UNHASHABLE-ARG](#key-unhashable-arg) | decorator | an argument cannot be hashed; not cached |
@@ -1208,7 +1251,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/effects.py:MODULE_CALLS @91df07f5, cash/analysis/purity_visitor.py:PurityVisitor.visit_Subscript @3b13759e -->
+<!-- claim: cash/effects.py:MODULE_CALLS @635ceceb, cash/analysis/purity_visitor.py:PurityVisitor.visit_Subscript @3b13759e -->
 <!-- claim: cash/analysis/ambient_reads.py:ambient_call @00d7cd08, cash/effects.py:_canonical_names @afe31e4b -->
 <!-- claim: cash/effects.py:CLOCK_WHEN_ARGS_OMITTED @3c78d511, cash/effects.py:_reads_clock_when_omitted @b543a896 -->
 **What happened.** The function reads the clock, a fresh UUID or random
@@ -1224,7 +1267,7 @@ passed as an argument, and a property or dunder method (`settings.stamp`,
 `settings["KEY"]`, `with settings as mode:`) of an object the function reads
 or is given.
 
-<!-- claim: cash/effects.py:environment_input @cc5c0e0f, cash/decorator/environment_fold.py:EnvironmentFold.fold_environment @db1c6b07 -->
+<!-- claim: cash/effects.py:environment_input @3b23d3f4, cash/decorator/environment_fold.py:EnvironmentFold.fold_environment @db1c6b07 -->
 <!-- claim: cash/analysis/purity_flow.py:is_log_helper @6bf250bd, cash/analysis/ambient_reads.py:log_helper_names @8960a844 -->
 <!-- claim: cash/analysis/ambient_reads.py:clock_helper_read @a0285688 -->
 An environment read with the name written out (`os.getenv("TENANT")`,
@@ -1233,8 +1276,10 @@ An environment read with the name written out (`os.getenv("TENANT")`,
 (`os.path.expandvars("$DATA_DIR/x")`, `os.path.expanduser`, `Path.home()`,
 `tempfile.gettempdir()`, `shutil.which`), a read of the working directory
 (`os.getcwd()`, `Path.cwd()`, `os.path.abspath(p)` or `Path(p).resolve()` on
-a path that may be relative) and a read of the command line (`sys.argv`, or
-`parser.parse_args()` with no list of its own) are not reported: their values are folded into
+a path that may be relative), a read of the command line (`sys.argv`, or
+`parser.parse_args()` with no list of its own) and a read of the process
+itself (`os.getpid()`, `threading.get_ident()`, `hash()` of text, which
+depends on `PYTHONHASHSEED`) are not reported: their values are folded into
 the key. A
 reading that only goes into a log line is not reported either.
 
@@ -1296,7 +1341,7 @@ program runs.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @4ced0037 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @8554213c -->
 **What happened.** Something raised while cash built the cache key. The
 message names the exception and, when it can, the argument type. The call ran
 and returned its real result, uncached.
@@ -1733,7 +1778,7 @@ it: the statement's result is right.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @045afef4, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @91df07f5 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @045afef4, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @635ceceb -->
 <!-- claim: cash/analysis/purity_visitor.py:_opens_tracked_database @1205d3ff -->
 **What happened.** The function fetches from a server (`requests.get`,
 `httpx.get`, `urlopen(url)`) or queries a database (`cur.execute("SELECT
@@ -1742,8 +1787,8 @@ is not reported: that file is tracked. Writes (`requests.post`, `INSERT`) are
 [IMPURE-SIDE-EFFECTS](#impure-side-effects) instead.
 
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks._report_observed_network @23e868ea -->
-A fetch the source does not name (`requests.Session().get(url)`, `from
-requests import get`, a client library) is caught when the first call runs:
+A fetch the source does not name (`requests.Session().get(url)`, a client
+library) is caught when the first call runs:
 the message then lists the `socket connect` and the line of yours that led to
 it. A remote file a reader opened by URL (`pd.read_csv("s3://...")`) is not
 reported: it is tracked by its ETag.
@@ -1822,6 +1867,33 @@ message, so cash can record that read.
 
 **When it is safe to ignore.** When the call or statement is cheap.
 
+### KEY-READS-NOT-KEPT {#key-reads-not-kept}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/tracking/read_credit.py:IDLE_READS_PER_CODE @8c252123, cash/tracking/read_credit.py:note_untracked_read @60d31a03, cash/decorator/file_deps.py:FileDeps.credit_remembered_reads @f7e24bfa -->
+**What happened.** A helper of the cached function read files while no
+cached function was running, more of them than cash remembers for one
+function (4,096), and this call reached the helper without the helper
+reading a file. The message names the helper. The result was returned but
+not cached, and the next call's miss says so.
+
+**Why it matters.** A helper that keeps what it read (`functools.lru_cache`,
+a module dict) hands a later call its data without reading again. cash
+credits the cached call with the files the helper read earlier, so an edit
+to one of them recomputes. Past the number it remembers, cash can no longer
+say which file the helper handed over, and an entry stored with no file
+would be served after the file changed. So the call runs every time
+instead.
+
+**What to do.** Pass the path the helper reads to the cached function as an
+argument: a path the call was given is still matched against the files cash
+remembers. Or call the helper only from inside cached functions, where each
+read is recorded with the call that made it.
+
+**When it is safe to ignore.** When the call is cheap, or the helper keeps
+nothing between calls and the cached function did not call it this time.
+
 ### KEY-SOURCE-CHANGED {#key-source-changed}
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
@@ -1894,7 +1966,7 @@ first cached call differs between runs. Turn the check off with
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @4ced0037 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @8554213c -->
 **What happened.** An argument could not be hashed, so no key could be built.
 The message names the type, says the value is nested in a container, or says
 it is nested too deeply to key: deeper than pickle follows, such as a long
@@ -2215,7 +2287,7 @@ cell, that cell is never cached.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_callable_unread @647d181d, cash/analysis/mutation_effects.py:statement_effects @c7ee3388 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_callable_unread @647d181d, cash/analysis/mutation_effects.py:statement_effects @6f205115 -->
 **What happened.** The statement calls or hands over a function whose
 source cash cannot read (one made by `exec`, or a lambda from a library),
 or one it can tell only by running code: what a call of yours returns
@@ -2986,7 +3058,7 @@ functools.partial(setattr, points[7])` made in a cell above. Cash cannot
 tell which variable changes before the statement runs, so it takes every
 variable as changed: what reads any of them after it runs again.
 
-<!-- claim: cash/tracking/process_registries.py:snapshot @bdd98c66, cash/notebook/statement/processor.py:StatementProcessor._refuse_process_registries @69800c34, cash/tracking/process_registries.py:registering_imports @f4d937d7, cash/decorator/runtime.py:CallRunner._refuse_registries @1938b99d -->
+<!-- claim: cash/tracking/process_registries.py:snapshot @4475426d, cash/notebook/statement/processor.py:StatementProcessor._refuse_process_registries @69800c34, cash/tracking/process_registries.py:registering_imports @f4d937d7, cash/decorator/runtime.py:CallRunner._refuse_registries @631605a3 -->
 It names, too, a statement that registers something with the process, in
 its own text or in a function or library it calls: `atexit.register(flush)`,
 `signal.signal(...)`, `sys.excepthook = hook`, `sys.setprofile(...)`,
@@ -3132,7 +3204,9 @@ reproducible, seed with a fixed number instead.
 bring it up to date, draws from a seeded global stream (`np.random`,
 `random`, `torch`). Cash puts such a stream where a run from the top has it
 before the draw: by a position it recorded, by the position a restored
-result left, or by running a bare `seed(...)` call again. Here it had none
+result left, or by running a bare `seed(...)` call again (a call of a
+function of yours that only seeds counts as one, see
+[Randomness](known-limitations.md#randomness)). Here it had none
 of these: the statement above that moved the stream last also does other
 work, and cash does not run it again for the stream alone. The draw starts
 from where the stream stands now.
@@ -3157,7 +3231,7 @@ random source.
 first result is returned from then on, and clearing the cache or running on
 another machine gives a different frozen value.
 
-<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @6e1e1f8a, cash/tracking/randomness/detect.py:RandomnessDetector.analyze_code @4890c3ec -->
+<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @cdfa39c0, cash/tracking/randomness/detect.py:RandomnessDetector.analyze_code @4890c3ec -->
 In a notebook, a draw too cheap to cache is frozen too when it comes from the
 `random`, `numpy.random` or `torch` stream, because cash rewinds those streams
 before a re-run. A cheap draw from a generator held in a variable
@@ -3168,13 +3242,13 @@ The message for a generator draw says both.
 for a stable, reproducible value. Or accept the frozen value and silence the
 warning, as below.
 
-<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._opts_out_of_rng_rewind @494a3663, cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @0a570907 -->
+<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._opts_out_of_rng_rewind @494a3663, cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @3c947b08 -->
 In a notebook: for a fresh draw every run, put `# @cash:no-cache` on the
 statement, on the line above it or at the end of its line. It turns off the
 rewind as well as caching, and the statement no longer raises this warning.
 `# @cash:allow-random` only silences the warning.
 
-<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @923fc9d4 -->
+<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @f47b657d -->
 With `@cash.cache`: the check runs when the decorator is applied, once per
 function, and reads only that function's source. A draw from the global
 `random` or `numpy.random` stream is not reported when a seed of that stream
@@ -3332,7 +3406,7 @@ The call succeeded, but its result was not written. Every code here starts `STOR
 | [STORE-PARTS-UNCHECKED](#store-parts-unchecked) | both | the result was too big to look through in time for a function sharing a part of it; not stored |
 | [STORE-REF-UNSUPPORTED](#store-ref-unsupported) | notebook | the value holds a variable's object in a form cash cannot keep as a reference (a bound method); not stored |
 | [STORE-RESULT-WRITTEN](#store-result-written) | both | a table kept uncopied was written past pandas after its store; entry dropped |
-| [STORE-STATE-CHANGED](#store-state-changed) | decorator | a global the key read changed during the call; not stored |
+| [STORE-STATE-CHANGED](#store-state-changed) | decorator | a global the key read, or a process setting, changed during the call beside other threads; not stored |
 | [STORE-WORK-RUNNING](#store-work-running) | both | work it handed to a thread or thread pool still ran when it returned; not stored |
 | [STORE-UNTRACKED-SOURCE](#store-untracked-source) | decorator | a cached function it calls has a dynamic source that cannot be pickled; kept in RAM only |
 
@@ -3484,24 +3558,32 @@ multiple of 8 inside the memory the process uses.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.inputs_moved_during_call @7d2264c0, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @803cd545 -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.inputs_moved_during_call @7d2264c0, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @56f98d79 -->
 <!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @4364ed7d, cash/tracking/file_dep_snapshot.py:snapshot_file_deps @c3b72772 -->
-<!-- claim: cash/notebook/statement/store.py:StatementStore.inputs_moved @0669c2ad, cash/notebook/statement/processor.py:StatementProcessor._post_execute @a8c3dc59 -->
+<!-- claim: cash/notebook/statement/store.py:StatementStore.inputs_moved @e60eaaeb, cash/notebook/statement/processor.py:StatementProcessor._post_execute @a8c3dc59 -->
 === "Decorator"
 
-    **What happened.** A file the function read changed before it returned.
-    The result was returned but not stored.
+    **What happened.** A file the function read changed before it returned,
+    or a remote object it read (`s3://`, `https://`) was replaced. The result
+    was returned but not stored.
 
 === "Notebook"
 
-    **What happened.** A file the statement read changed before it finished,
-    another process replacing it, say. The statement's value is kept for this
+    **What happened.** A file or a remote object the statement read changed
+    before it finished, another process replacing it, say. The statement's value is kept for this
     run but not stored, and the statements below it that use the value are
     not served from what they stored for it; the next run reads the settled
     file. The warning comes once per statement.
 
 **Why it matters.** Nobody can say which version of the file the result came
 from, so storing it could serve a stale result later.
+
+<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker.add_tracked_remote @d35cd256, cash/tracking/file_tracker.py:FileAccessTracker._remote_changed_since_read @005b2b15, cash/tracking/file_dep_snapshot.py:remote_moved @4e5eda40 -->
+For a remote object cash asks the store for its validator before the read and
+again when the result is stored, and compares the two: a miss costs two
+metadata requests per object. Inside a revalidation window
+(`remote_revalidate_max_age_seconds`) the store is asked once, before the
+read, and the entry keeps that answer.
 
 <!-- claim: cash/tracking/file_tracker.py:FileAccessTracker.created_by_block @edb2ba0e, cash/tracking/file_tracker.py:FileAccessTracker.get_accessed_files @5c8d904e, cash/tracking/read_events.py:_on_mkdir @309b5321 -->
 A file the function creates itself (opened for writing, in a directory it made
@@ -3577,7 +3659,7 @@ interrupted write.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/result_parts.py:split_by_a_hit @0ed503f3, cash/closure_sharing.py:closures_sharing @dd301eb1 -->
+<!-- claim: cash/decorator/result_parts.py:split_by_a_hit @9b1fd97b, cash/closure_sharing.py:closures_sharing @dd301eb1 -->
 **What happened.** The result holds two parts over the same memory: two
 numpy arrays whose data overlap, such as `return a, a[2:5]`, a numpy
 array and a polars or pandas frame made over it, such as
@@ -3686,21 +3768,33 @@ reloaded a config, say. The result was returned but not stored. The check
 runs only while other threads are running, not counting cash's own (or for
 a coroutine function).
 
+<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @631605a3, cash/tracking/process_registries.py:changed_by @cee9eb08 -->
+The same code is used when a setting the process keeps (a logger's level, a
+warnings filter, `sys.path`, the working directory, an interpreter hook)
+changed while the call was running and other threads were running too: cash
+cannot tell whether the function or one of those threads changed it. That
+call is not stored. If the setting changes again during the next call that
+runs the function, cash takes the change as the function's own and reports
+[IMPURE-OBSERVED-EFFECTS](#impure-observed-effects).
+
 **Why it matters.** The key was built from the old value and the body may have
 used the new one, so storing it could serve the wrong result to every later
-call with the old value.
+call with the old value. A setting the function itself makes would be skipped
+by a hit.
 
 **What to do.** Nothing, if the state was changed on purpose: the next call
 keys on the new value and caches normally. If calls overlap a writer all the
-time, pass the value in as an argument.
+time, pass the value in as an argument. If the function makes the setting
+itself, make it outside the cached function.
 
-**When it is safe to ignore.** Once, after a reload.
+**When it is safe to ignore.** Once, after a reload, or when another thread
+made the setting.
 
 ### STORE-WORK-RUNNING {#store-work-running}
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.work_outlived_call @0f141a00, cash/tracking/reader_patches.py:_patch_thread_pool_submit @b3742318, cash/tracking/reader_patches.py:_patch_thread_start @1b59e2a1, cash/tracking/file_tracker.py:FileAccessTracker.__exit__ @690809e9 -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.work_outlived_call @0f141a00, cash/tracking/reader_patches.py:_patch_thread_pool_submit @bc00fd4f, cash/tracking/reader_patches.py:_patch_thread_start @1b59e2a1, cash/tracking/file_tracker.py:FileAccessTracker.__exit__ @2fb104a9 -->
 **What happened.** The function handed work to a `ThreadPoolExecutor`
 (`submit`, `map`) or started a `threading.Thread`, and returned while some of
 it was still running: it never waited for the future or joined the thread,

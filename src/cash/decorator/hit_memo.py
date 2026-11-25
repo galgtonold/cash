@@ -73,7 +73,7 @@ import typing
 import weakref
 from typing import TYPE_CHECKING, Any
 
-from .. import _native, _weak
+from .. import _native, _verify, _weak
 from .._clock import perf_counter as _perf_counter
 from .._memo import CODE_OBJECTS, LruMemo
 from .._type_memo import class_flags, class_mro, class_name
@@ -94,6 +94,7 @@ from .user_code import (
     own_package,
     unregistered_namespace_code,
 )
+from ..loaded_modules import loaded_module
 
 if TYPE_CHECKING:
     from .cached_function import CachedFunction
@@ -111,8 +112,9 @@ def _flag(name: str, default: str) -> bool:
 
 #: Is the fast path on? Needs the extension; ``CASH_HITPATH=0`` turns it off.
 ENABLED = _cw is not None and _flag("CASH_HITPATH", "1")
-#: ``CASH_HITPATH_VERIFY=1``: every fast hit builds the key again and compares.
-VERIFY = ENABLED and _flag("CASH_HITPATH_VERIFY", "0")
+#: ``CASH_HITPATH_VERIFY=1`` (or ``CASH_VERIFY=1``): every fast hit builds
+#: the key again and compares.
+VERIFY = ENABLED and _verify.requested("CASH_HITPATH_VERIFY")
 
 _fast_lookup = _cw.fast_lookup if ENABLED else None
 if ENABLED:
@@ -136,7 +138,7 @@ if ENABLED:
     _cw.world_scope(_SCOPED_NAMES)
 
 
-class HitMemoMismatch(AssertionError):
+class HitMemoMismatch(_verify.Mismatch):
     """``CASH_HITPATH_VERIFY=1``: the fast path served a key the ordinary
     key build no longer gives."""
 
@@ -200,7 +202,7 @@ def numpy_scalars_keyed() -> int:
     the bytes of its value (iterating an array gives such scalars). Imports
     nothing: while numpy is not loaded no argument is one. How many types
     the extension took."""
-    numpy = sys.modules.get("numpy")
+    numpy = loaded_module("numpy")
     if numpy is None or numpy is _SCALARS_OF[0] or _cw is None or not hasattr(_cw, "set_scalar_types"):
         return 0
     from .._plain_data import numpy_scalar_types
@@ -235,7 +237,7 @@ def epochs(spec: CachedFunction, args: tuple, kwargs: dict) -> tuple | None:
     # the cash epoch now, not at the next fast hit, so a hit keyed under
     # the new state is not remembered under the old (`warning_state`).
     _cw.warn_check()
-    if _SCALARS_OF[0] is not sys.modules.get("numpy"):
+    if _SCALARS_OF[0] is not loaded_module("numpy"):
         numpy_scalars_keyed()
     state = spec.hit_state
     return _world_epoch(), _cash_epoch(), state[S_ENTRIES] if state is not None else None, _cw.keyed(args, kwargs)
@@ -844,11 +846,11 @@ class _Scan:
         module = t.__module__
         if module == "pandas._libs.properties" and t.__name__ == "AxisProperty":
             return True
-        pd = sys.modules.get("pandas")
+        pd = loaded_module("pandas")
         if pd is not None and v is getattr(pd, "NaT", None):
             return True
         if module == "numpy" and not t.__flags__ & _HEAPTYPE:
-            np = sys.modules.get("numpy")
+            np = loaded_module("numpy")
             return np is not None and isinstance(v, np.generic) and not isinstance(v, (np.void, np.object_))
         return False
 
@@ -946,7 +948,7 @@ class _Scan:
     def _sklearn_config(self, v: Any) -> bool:
         """sklearn's settings (``sklearn._config._threadlocal``, read by
         ``get_config``): watched by reading them again."""
-        config = sys.modules.get("sklearn._config")
+        config = loaded_module("sklearn._config")
         if config is None or v is not getattr(config, "_threadlocal", None):
             return False
         get_config = getattr(config, "get_config", None)
@@ -1596,7 +1598,7 @@ class ContentProbe:
                 return cls(v, _array_content)
             except Exception:  # noqa: BLE001 - cannot be read whole: not probed
                 return None
-        pd = sys.modules.get("pandas")
+        pd = loaded_module("pandas")
         if pd is not None and (t is pd.DataFrame or t is pd.Series):
             try:
                 if not _plain_frame(v, pd):
@@ -1731,10 +1733,10 @@ def _global_stream(owner: Any) -> bool:
     part kept reads the method by its library's name only, never the
     stream's position, which every draw moves and no watcher sees. So the
     state memo's scan watches the stream's class, not the stream."""
-    mtrand = sys.modules.get("numpy.random.mtrand")
+    mtrand = loaded_module("numpy.random.mtrand")
     if mtrand is not None and owner is getattr(mtrand, "_rand", None):
         return type(owner) is getattr(mtrand, "RandomState", None)
-    stdlib = sys.modules.get("random")
+    stdlib = loaded_module("random")
     return stdlib is not None and owner is getattr(stdlib, "_inst", None) and type(owner) is stdlib.Random
 
 
@@ -2314,7 +2316,16 @@ class HitMemo:
         # The memo is at the core epoch, and at the epochs of the scoped
         # names its scans met (`_SCOPED_NAMES`), kept among its cells.
         core_now = _core_epoch()
-        if state[S_WORLD] != core_now or (self.scoped and not _cw.world_holds(self.scoped, ())):
+        # A write to a closure cell moves no epoch: the cells are compared.
+        # This call's key was built from what they hold NOW; remembered
+        # beside cells that held something else, it would be served again
+        # the day they hold that again -- a variable of the enclosing
+        # function going 1, 9, 1 got the answer for 9.
+        if (
+            state[S_WORLD] != core_now
+            or (self.scoped and not _cw.world_holds(self.scoped, ()))
+            or not _cw.world_holds(state[S_CELLS], state[S_TYPES])
+        ):
             if self.failed_epoch == world_now:
                 return
             self.slow_since_scan += 1

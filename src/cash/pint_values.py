@@ -39,6 +39,7 @@ from . import _weak
 from ._type_memo import class_dict, class_module, class_name, class_qualname, per_type
 from ._user_attrs import plain_getattr
 from .install_paths import is_user_code_module
+from .loaded_modules import loaded_module
 
 #: The registry's settings that change what a quantity computes or prints.
 _SCALAR_SETTINGS = (
@@ -68,7 +69,7 @@ def _pint_kind(t: type) -> str | None:
     """``"quantity"``, ``"unit"`` or ``"registry"`` for pint's own classes
     (the ones it builds per registry included), else None. A subclass of the
     user's may hold state of its own and is keyed as any other object."""
-    pint = sys.modules.get("pint")
+    pint = loaded_module("pint")
     if pint is None or (plain_getattr(t, "__module__", None) or "").partition(".")[0] != "pint":
         return None
     try:
@@ -402,7 +403,7 @@ def _context_form(ctx: Any) -> tuple:
 def _registry_form(reg: Any) -> tuple:
     """Everything *reg*'s definitions and settings say, as plain values."""
     t = type(reg)
-    pint = sys.modules.get("pint")
+    pint = loaded_module("pint")
     parts: list = [f"{t.__module__}.{t.__qualname__}", getattr(pint, "__version__", None)]
     parts.append(_value_repr([(n, _setting(reg, n)) for n in _SCALAR_SETTINGS + _TABLE_SETTINGS], "settings"))
     for name in _TABLES:

@@ -61,7 +61,7 @@ import weakref
 from collections.abc import Callable
 from typing import Any
 
-from .. import _weak, source_reads
+from .. import _verify, _weak, source_reads
 from .._memo import CODE_OBJECTS, MODULE_ANALYSES, LruMemo
 from .._paths import is_pseudo_filename
 from .._type_memo import class_dict, class_qualname, module_of_class
@@ -100,7 +100,7 @@ _MAX_STEPS = 8
 STATS = {"loaded": 0, "stored": 0, "missed": 0, "stale": 0, "refused": 0, "cheap": 0, "failed": 0, "verified": 0}
 
 
-class StoredReportMismatch(AssertionError):
+class StoredReportMismatch(_verify.Mismatch):
     """``CASH_ANALYSIS_MEMO_VERIFY=1``: a stored report is not what walking
     the function again gives."""
 
@@ -1503,7 +1503,12 @@ def save(func: Callable[..., Any], report: PurityReport, walk: Any, seconds: flo
         flush()
 
 
-def _entry(func: Any, report: PurityReport, walk: Any, text: str) -> dict:
+def _visited(func: Any, report: PurityReport, walk: Any) -> tuple[list[Any], list[list], list[list]]:
+    """``(objects, paths, owners)``: what *walk* visited from *func*, each
+    at the path the walk reached it by. A helper whose own name does not
+    lead back to it (a lambda, a def bound under another name) is found
+    again only by that path, so a report is spelled against these
+    (`_spell`) both when it is stored and when it is checked (`verify`)."""
     objects: list[Any] = [func]
     paths: list[list] = [_root_spelled(func)]
     seen = {id(func)}
@@ -1520,6 +1525,11 @@ def _entry(func: Any, report: PurityReport, walk: Any, text: str) -> dict:
         seen.add(id(base))
         objects.append(base)
         paths.append(_path_of(base, named))
+    return objects, paths, owners
+
+
+def _entry(func: Any, report: PurityReport, walk: Any, text: str) -> dict:
+    objects, paths, owners = _visited(func, report, walk)
     files: dict[str, str | None] = {}
     spelled = _spell(report, objects, paths, files)
     bindings = [resolve_binding(m, tuple(c)) for m, c in spelled["bindings"]]
@@ -1575,16 +1585,17 @@ def flush(*, at_exit: bool = False) -> None:
             STATS["stored"] += 1
 
 
-def verify(func: Any, loaded: PurityReport, walked: PurityReport) -> None:
+def verify(func: Any, loaded: PurityReport, walked: PurityReport, walk: Any) -> None:
     """``CASH_ANALYSIS_MEMO_VERIFY=1``: *loaded*, read from the store, must
-    be the report walking *func* again gave."""
+    be the report walking *func* again gave (*walked*, by *walk*). Both
+    are spelled against what that walk visited, as a report is when it is
+    stored (`_entry`): without the walk's paths a lambda helper has none,
+    and every function calling one was reported as a mismatch."""
     STATS["verified"] += 1
     try:
-        objects: list[Any] = [func]
-        paths: list[list] = [_root_spelled(func)]
+        objects, paths, _owners = _visited(func, walked, walk)
+        objects2, paths2 = list(objects), [list(path) for path in paths]
         want = _spell(walked, objects, paths, {})
-        objects2: list[Any] = [func]
-        paths2: list[list] = [_root_spelled(func)]
         got = _spell(loaded, objects2, paths2, {})
     except _Unstorable as e:
         raise StoredReportMismatch(f"stored report of {func.__qualname__}: {e}") from None

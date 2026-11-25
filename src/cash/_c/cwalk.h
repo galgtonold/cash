@@ -21,5 +21,8 @@ int cprivate_add_functions(PyObject *m);
 int cplain_add_functions(PyObject *m);
 /* The marker a set leaves where it deleted a key (cwatch.c). */
 PyObject *cwatch_set_dummy(void);
+/* Is `token` what the watchers keep for `o` under `kind`, `o` proved
+   unchanged since it was committed (cwatch.c)? Never raises. */
+int cwatch_holds_token(PyObject *o, long kind, PyObject *token);
 
 #endif

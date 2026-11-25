@@ -218,7 +218,7 @@ A categorical column is checked like any other; one you wrote through an
 array pandas handed you (`s.values`, `s.array`, `pd.Categorical(s,
 copy=False)`) is read again on the next call.
 
-<!-- claim: cash/canonical_form.py:_object_steps @f6bc3e0c, cash/canonical_form.py:SORTED_SET_MIN == 256 -->
+<!-- claim: cash/canonical_form.py:_object_steps @83b03d05, cash/canonical_form.py:SORTED_SET_MIN == 256 -->
 A frozenset of 256 or more numbers, strings and bytes is put in its sorted
 order once and recognised after that for as long as it exists, so a repeat
 call with a big frozenset costs milliseconds; a set, or a frozenset holding
@@ -264,7 +264,7 @@ the entry records that hash, so `explain()` can say when a hit was matched by
 
 ## When there is no key
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @4ced0037 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @8554213c -->
 If any part of the key cannot be built, the call runs uncached and cash warns.
 It never caches under a partial key. The usual causes:
 
@@ -318,7 +318,7 @@ side effects and still caches:
 - a clock read or a fresh UUID warns
   [`KEY-AMBIENT-READ`](../warnings.md#key-ambient-read).
 
-<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @1938b99d, cash/tracking/process_registries.py:changed @8df4390a, cash/tracking/process_registries.py:waive_since @d2426c38, cash/effect_observer.py:EffectObserver.open_waiver @e8019660 -->
+<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @631605a3, cash/tracking/process_registries.py:changed @bd470262, cash/tracking/process_registries.py:waive_since @d2426c38, cash/effect_observer.py:EffectObserver.open_waiver @e8019660 -->
 While a miss runs, cash also compares the settings the process keeps
 outside any variable, such as NumPy's error handling and print options, a logger's
 level, handlers or filters, the warnings filters and how warnings are shown,
@@ -328,6 +328,16 @@ matplotlib's `rcParams`, `decimal`'s context. A call that changed one is not
 stored, and the function runs every time from then on, with an
 [`IMPURE-OBSERVED-EFFECTS`](../warnings.md#impure-observed-effects) warning:
 a hit, or a new process, would leave the setting unmade.
+
+<!-- claim: cash/tracking/process_registries.py:changed_by @cee9eb08, cash/decorator/runtime.py:CallRunner._refuse_registries @631605a3 -->
+While other threads are running, cash first asks which thread made the
+change. A write to the environment, `atexit.register`, `codecs.register` or
+`sys.addaudithook` is counted per thread: one made by another thread is not
+the call's, and the call is stored. The other settings do not show who
+changed them, so the first such call is only left unstored
+([`STORE-STATE-CHANGED`](../warnings.md#store-state-changed)); a change
+during the next call that runs the function too counts as the function's
+([Threads and processes](../tutorials/feature-guides/thread-safety.md#what-threads-share-and-what-each-call-keeps)).
 
 <!-- claim: cash/decorator/class_writes.py:candidates @2e821727, cash/decorator/class_writes.py:changed @b243ace2 -->
 It also reads what each of your classes the call can reach binds (those

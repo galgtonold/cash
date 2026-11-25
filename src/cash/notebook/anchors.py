@@ -37,7 +37,6 @@ import abc
 import copyreg
 import io
 import pickle
-import sys
 import types
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -50,6 +49,7 @@ from cash.notebook.borrowed_memory import MemoryHome, data_arrays, memory_home, 
 from cash.notebook.shared_objects import check_walk_budget
 
 from .._type_memo import class_dict, class_flags, class_mro, class_name
+from ..loaded_modules import loaded_module
 
 __all__ = [
     "ARRAY_CONTENT",
@@ -84,7 +84,7 @@ def array_digest(obj: Any) -> str | None:
     its strides. None for anything else (a subclass such as a memmap
     included), and for an array of objects, whose bytes are addresses of
     objects that may change."""
-    ndarray = attribute_or(sys.modules.get("numpy"), "ndarray")
+    ndarray = attribute_or(loaded_module("numpy"), "ndarray")
     if ndarray is None or type(obj) is not ndarray or obj.dtype.hasobject:
         return None
     digest = hash_numpy(obj)
@@ -182,7 +182,7 @@ def _namer(anchors: Mapping[str, Any], homes: Iterable[str]) -> Callable[[Any], 
     by_id = {id(obj): name for name, obj in anchors.items()}
     homes = set(homes)
     data = {name: obj for name, obj in anchors.items() if name in homes and data_arrays(obj)}
-    ndarray = attribute_or(sys.modules.get("numpy"), "ndarray")
+    ndarray = attribute_or(loaded_module("numpy"), "ndarray")
     placed: dict[int, Any] = {}
 
     def name_of(obj: Any) -> Any:
@@ -302,7 +302,7 @@ def array_memory_held_apart(value: Any, anchors: Mapping[str, Any], homes: Itera
     ``torch.Tensor``, a ``cKDTree``, a ``functools.partial``), an error on
     the way, the share check's budget running out (`check_walk_budget`)
     -- names the first array anchor."""
-    np = sys.modules.get("numpy")
+    np = loaded_module("numpy")
     if np is None:
         return None
     arrays = {name: obj for name, obj in anchors.items() if type(obj) is np.ndarray}
@@ -453,9 +453,9 @@ def _masked_array() -> type | None:
     data and mask from them. So it comes back as a copy of its data, mask
     and fill value, holding the objects of an array of objects as they
     are: walked as an ``ndarray`` is, its mask and fill value with it."""
-    if attribute_or(sys.modules.get("numpy"), "__version__", None) != _NUMPY_READ:
+    if attribute_or(loaded_module("numpy"), "__version__", None) != _NUMPY_READ:
         return None
-    return attribute_or(sys.modules.get("numpy.ma"), "MaskedArray", None)
+    return attribute_or(loaded_module("numpy.ma"), "MaskedArray", None)
 
 
 def _sklearn_pickling() -> dict[str, Any]:
@@ -471,9 +471,9 @@ def _sklearn_pickling() -> dict[str, Any]:
     ``__dict__`` with the rest (``super().__setstate__``, which ``object``
     lacks). The attributes are saved and rebuilt as the objects they are,
     as by default."""
-    if attribute_or(sys.modules.get("sklearn"), "__version__", None) != _SKLEARN_READ:
+    if attribute_or(loaded_module("sklearn"), "__version__", None) != _SKLEARN_READ:
         return {}
-    base = attribute_or(sys.modules.get("sklearn.base"), "BaseEstimator")
+    base = attribute_or(loaded_module("sklearn.base"), "BaseEstimator")
     if base is None:
         return {}
     return {name: base.__dict__[name] for name in ("__getstate__", "__setstate__") if name in base.__dict__}

@@ -10,7 +10,6 @@ runs :class:`RunInstead`'s source instead of the cell.
 from __future__ import annotations
 
 import logging
-import sys
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -24,6 +23,7 @@ from ...exceptions import (
     ForwardReferenceError,
     UpstreamStateError,
 )
+from ...loaded_modules import loaded_module
 from ..upstream.replay import UpstreamRepairGap
 from ._types import RunInstead
 
@@ -46,7 +46,7 @@ def _pyplot_open_fignums() -> set[int]:
     Only inspects an already-imported ``matplotlib.pyplot`` — never imports it,
     so it stays a no-op for notebooks that don't plot.
     """
-    plt = sys.modules.get("matplotlib.pyplot")
+    plt = loaded_module("matplotlib.pyplot")
     if plt is None:
         return set()
     try:
@@ -68,7 +68,7 @@ def _close_pyplot_figures(nums: set[int]) -> None:
     """
     if not nums:
         return
-    plt = sys.modules.get("matplotlib.pyplot")
+    plt = loaded_module("matplotlib.pyplot")
     if plt is None:
         return
     for num in nums:

@@ -57,10 +57,12 @@ class TeeWriter:
         self._real = real_stream
         self._chunks: list[str] = chunks if chunks is not None else []
         self._last_flush = time.monotonic()
+        self._wrote = False
 
     def write(self, s: str) -> int:
         self._real.write(s)
         self._chunks.append(s)
+        self._wrote = True
         now = time.monotonic()
         if now - self._last_flush >= self._FLUSH_INTERVAL_S:
             self._real.flush()
@@ -74,6 +76,27 @@ class TeeWriter:
     def flush(self) -> None:
         self._real.flush()
         self._last_flush = time.monotonic()
+
+    def flush_written(self) -> None:
+        """Flush at the end of a capture, unless there is nothing to send.
+
+        A kernel's stream flushes by asking its IO thread and waiting for it
+        (``ipykernel.iostream.OutStream.flush``), about half a millisecond
+        each time, and a statement flushed both streams when it ended: most
+        of what a statement that prints nothing cost in output handling.
+        Skipped only when nothing was written through this writer and the
+        stream itself says it holds nothing to send (its ``_flush_pending``
+        is False: text written outside a capture would still be waiting),
+        as a badge is published (``BadgePresenter``). A stream that does not
+        say is flushed, as before."""
+        if not self._wrote:
+            stream = self._cash_wrapped_stream()
+            pending = attribute_or(stream, "_flush_pending", True) or attribute_or(
+                stream, "_subprocess_flush_pending", False
+            )
+            if pending is False:
+                return
+        self.flush()
 
     def getvalue(self) -> str:
         """Return all accumulated text."""

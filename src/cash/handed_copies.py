@@ -127,16 +127,20 @@ def reuse(handed: Handed) -> Any:
     holds the tier's lock and hands the copy out at once."""
     holder = handed.holder
     try:
-        # Watchers first: only a value proved unchanged holds the very
-        # objects `held_still` reads, and is what pickle made of the bytes.
-        if _cw.peek(holder[0], value_watch.KIND_HANDED) is not handed.token:
-            return NONE
-        refs = _HELD_STILL(holder, 0, handed.objects, handed.weakable, handed.count)
+        # Each C call asks the watchers itself and acts on their answer
+        # before it returns: only a value proved unchanged holds the very
+        # objects `held_still` reads, and is what pickle made of the
+        # bytes. A proof from a call of its own would be old by the next
+        # bytecode: the tier's lock does not stop a thread that still
+        # holds the copy from writing it, or dropping parts of it.
+        kind = value_watch.KIND_HANDED
+        refs = _HELD_STILL(holder, 0, handed.objects, handed.weakable, handed.count, kind, handed.token)
         if refs is not None and _all_cash_refs(refs):
+            # Held by cash alone, so nothing can reach it from here on.
             return holder[0], True
         if _CLONE_HELD is None:
             return NONE
-        made = _CLONE_HELD(holder, 0)
+        made = _CLONE_HELD(holder, 0, kind, handed.token)
     except Exception:  # noqa: BLE001 - not provable: a new copy
         return NONE
     return NONE if made is None else (made, False)

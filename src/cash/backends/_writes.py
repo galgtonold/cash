@@ -26,7 +26,6 @@ import concurrent.futures
 import logging
 import os
 import queue
-import sys
 import threading
 import time
 import weakref
@@ -42,6 +41,7 @@ from .. import _weak
 from .._type_memo import class_name
 from ..config.resolve import get_config
 from ..config.schema import CashConfig
+from ..loaded_modules import loaded_module
 from . import write_cost
 
 logger = logging.getLogger(__name__)
@@ -253,7 +253,7 @@ def in_multiprocessing_child() -> bool:
     pid = os.getpid()
     if _CHILD_ANSWER[0] == pid:
         return _CHILD_ANSWER[1]
-    mp = sys.modules.get("multiprocessing")
+    mp = loaded_module("multiprocessing")
     try:
         answer = mp is not None and mp.parent_process() is not None
     except Exception:  # noqa: BLE001 - an odd embedding must not break writes
@@ -385,6 +385,11 @@ class PendingWrites:
         #: future -> (bytes it writes, are they a copy it holds), for the
         #: writes `submit_sized` sized. In submission order.
         self._sizes: dict[concurrent.futures.Future, tuple[int, bool]] = {}
+        #: Bytes of the copies in `_sizes`, kept as writes are sized and
+        #: forgotten, so a submit knows what is held without listing the
+        #: queue. Never under what the unfinished writes hold: a write that
+        #: has finished stays counted until its done-callback forgets it.
+        self._copied_bytes = 0
         #: What a write costs here, measured (`_timed`).
         self._seconds_per_byte = _DEFAULT_SECONDS_PER_BYTE
         self._seconds_per_write = _DEFAULT_SECONDS_PER_WRITE
@@ -417,6 +422,7 @@ class PendingWrites:
         self._executor = _DaemonWriterPool(max_workers=self._executor._max_workers)
         self._pending = {}
         self._sizes = {}
+        self._copied_bytes = 0
         self._running = None
         self._tls = threading.local()
 
@@ -501,6 +507,8 @@ class PendingWrites:
         if not future.done():
             with self._lock:
                 self._sizes[future] = (nbytes, copied)
+                if copied:
+                    self._copied_bytes += nbytes
             future.add_done_callback(self._forget_size)
         return future
 
@@ -531,15 +539,28 @@ class PendingWrites:
 
     def _forget_size(self, future: concurrent.futures.Future) -> None:
         with self._lock:
-            self._sizes.pop(future, None)
+            sized = self._sizes.pop(future, None)
+            if sized is not None and sized[1]:
+                self._copied_bytes -= sized[0]
 
     def _unfinished_sized(self) -> list[tuple[concurrent.futures.Future, int, bool]]:
         with self._lock:
             return [(f, n, copied) for f, (n, copied) in self._sizes.items() if not f.done()]
 
     def _make_room(self, nbytes: int) -> None:
+        """Wait, oldest write first, while the queued copies and *nbytes*
+        more would pass `MAX_QUEUED_BYTES`.
+
+        The common case is one comparison against the running total. Listing
+        the unfinished writes on every submit made a burst of N small stores
+        cost N*N/2 checks under the queue's lock, which the writer needs to
+        finish each write: queued stores blocked their caller for longer
+        than writing them directly took.
+        """
         if getattr(self._tls, "current_key", None) is not None:
             return  # the worker cannot wait for the writes queued behind it
+        if self._copied_bytes + nbytes <= MAX_QUEUED_BYTES:
+            return
         while True:
             live = [(f, n) for f, n, copied in self._unfinished_sized() if copied]
             held = sum(n for _, n in live)

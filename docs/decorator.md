@@ -147,7 +147,7 @@ first: cheap to recompute, large, and rarely read. To pin the disk cap, set
 `max_cache_size` (or `CASH_MAX_CACHE_SIZE`) to a number of bytes or a size
 such as `"20GB"`.
 
-<!-- claim: cash/backends/file_eviction.py:FileEvictor.ensure_size_scanned @adb3043c, cash/backends/file_eviction.py:FileEvictor.report_eviction @0a7cf82f -->
+<!-- claim: cash/backends/file_eviction.py:FileEvictor.ensure_size_scanned @1b9288c8, cash/backends/file_eviction.py:FileEvictor.report_eviction @0a7cf82f -->
 With `CASH_VERBOSE=1` or `CASH_DEBUG=1` (or an INFO level you set on the `cash`
 logger), the first result a run writes to disk logs the folder and the cap, and
 the first time the cap makes cash remove entries it logs how much it removed:
@@ -383,6 +383,14 @@ changed. The second list is what cash does not see, and what to do about it.
       `Path.cwd()`, `os.path.abspath(p)`). Also what standard-library helpers
       read for you: `os.path.expandvars("$DATA_DIR/x")`, `expanduser`,
       `Path.home()`, `tempfile.gettempdir()`, `shutil.which` (`PATH`).
+    - What belongs to **the process itself**: `os.getpid()`, `os.getppid()`,
+      `threading.get_ident()`, and Python's hash seed when the code calls
+      `hash()` on something that is not plainly a number. `hash("alice")`
+      differs in every process unless `PYTHONHASHSEED` is fixed, so each
+      process computes its own result; with a fixed seed the result is
+      reused. `hash(42)` and `hash((row, 3))` of number literals are the
+      same everywhere and add nothing to the key, and neither does a
+      class's own `__hash__`.
     - The **command line**, when the function or a helper it calls reads
       it: `sys.argv`, and an `argparse` parser's `parse_args()` called
       without a list of its own. Flags your `main()` parses and passes on
@@ -832,7 +840,7 @@ miss costs.
 
 ### `allow_random=`
 
-<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @923fc9d4 -->
+<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @f47b657d -->
 When the body draws from an unseeded random generator, cash warns
 ([`RANDOM-UNSEEDED`](warnings.md#random-unseeded)): the first draw is stored and
 every later call gets the same "random" value. The fix is a generator seeded
@@ -850,7 +858,7 @@ entry. That holds whenever the seed was set: before the function was
 decorated, or before `import cash` in the same script. A function
 whose own body seeds the stream is not keyed by where the caller left it.
 
-<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @90ed4e94 -->
+<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @c7827cae -->
 The same holds for a generator in a module global that the body draws from
 (`rng = np.random.default_rng(42)` at module level, `rng.normal()` inside): the
 key includes where `rng` stands, and a hit moves `rng` on to where the computed
@@ -1018,7 +1026,7 @@ did (a file written, a request sent, a line printed) does not happen again. On
 the first call, cash reads the function and its helpers and reports what a hit
 would skip or get wrong:
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @045afef4, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/analysis/purity_report.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep", cash/decorator/runtime.py:CallRunner._refuse_registries @1938b99d, cash/decorator/runtime.py:CallRunner._refuse_class_writes @1376edfd -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @045afef4, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/analysis/purity_report.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep", cash/decorator/runtime.py:CallRunner._refuse_registries @631605a3, cash/decorator/runtime.py:CallRunner._refuse_class_writes @1376edfd -->
 | The body... | cash |
 |---|---|
 | Writes, posts, prints to stdout, or changes state outside the function | Warns ([`IMPURE-SIDE-EFFECTS`](warnings.md#impure-side-effects)) and caches |
@@ -1295,7 +1303,7 @@ another function in the same `.pyx` keeps the entries. When cash cannot
 match the `.pyx` to the built module (no `.pyx`, or one newer than the
 build), it keys the whole built file instead: any edit then reruns.
 
-<!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @9fac5b09 -->
+<!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @e9ba11bf -->
 **Can I use cached functions in a process pool?** Yes: map the cached
 function itself, or a plain function that calls cached ones. Workers share
 the cache folder with the parent. See

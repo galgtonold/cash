@@ -7,6 +7,7 @@ from typing import Any
 
 from cash.exceptions import CacheBackendError, DependencyNotFoundError
 
+from . import cache_dir as _cache_dir
 from ._base import CacheBackend, MetadataDict
 from ._writes import PendingWrites
 from .entry_format import (
@@ -39,7 +40,10 @@ class S3Backend(CacheBackend):
 
     Args:
         bucket: Bucket name.
-        prefix: Prepended to every object key cash writes.
+        prefix: Prepended to every object key cash writes. An entry is the
+            object ``<prefix>f<N>/<key>.entry``, N being the cache format, so
+            cash versions with different formats share a bucket without
+            reading each other's entries.
         max_pool_connections: Most open HTTP connections.
         retries: Most attempts per request, in botocore's standard retry
             mode.
@@ -80,12 +84,22 @@ class S3Backend(CacheBackend):
     #: wrong answer.
     METADATA_PREFETCH_BYTES = 8192
 
+    def _entry_prefix(self) -> str:
+        """The prefix of this cache format's entries (`cache_dir.format_tag`).
+
+        The format is a folder under the prefix, so a bucket shared by
+        machines on different cash versions holds each format's entries side
+        by side: an entry written in another format is never read, and never
+        removed by a build that cannot judge it.
+        """
+        return f"{self.prefix}{_cache_dir.format_tag()}/"
+
     def _get_key(self, key: str) -> str:
         """One object per entry, metadata and value together: one request per
         read, write and delete. The entry format's length-prefixed header and
         S3's ranged GETs make a metadata read one small request
         (`get_metadata`)."""
-        return f"{self.prefix}{key}{ENTRY_SUFFIX}"
+        return f"{self._entry_prefix()}{key}{ENTRY_SUFFIX}"
 
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         # Wait for any pending write for this key.
@@ -226,34 +240,47 @@ class S3Backend(CacheBackend):
             raise CacheBackendError(f"S3 delete failed for key '{key}': {e}") from e
 
     def clear(self) -> None:
+        """Delete this cache's entries, of every cache format, and nothing else.
+
+        The prefix is a string, not a folder: ``team`` also starts
+        ``team-reports/q3.pdf``. So only objects named as cash names an entry
+        go (`cache_dir.is_store_entry_name`), whatever else the listing
+        returns.
+        """
         self._writes.wait_all()
-        # List and delete all objects with prefix
         try:
             paginator = self.s3.get_paginator("list_objects_v2")
             pages = paginator.paginate(Bucket=self.bucket, Prefix=self.prefix)
 
             delete_keys = []
             for page in pages:
-                if "Contents" in page:
-                    for obj in page["Contents"]:
-                        delete_keys.append({"Key": obj["Key"]})
+                for obj in page.get("Contents", ()):
+                    if not self._wrote(obj["Key"]):
+                        continue
+                    delete_keys.append({"Key": obj["Key"]})
 
-                        # Batch delete (max 1000)
-                        if len(delete_keys) >= 1000:
-                            self.s3.delete_objects(Bucket=self.bucket, Delete={"Objects": delete_keys})
-                            delete_keys = []
+                    # Batch delete (max 1000)
+                    if len(delete_keys) >= 1000:
+                        self.s3.delete_objects(Bucket=self.bucket, Delete={"Objects": delete_keys})
+                        delete_keys = []
 
             if delete_keys:
                 self.s3.delete_objects(Bucket=self.bucket, Delete={"Objects": delete_keys})
         except self.botocore_exceptions.ClientError as e:
             raise CacheBackendError(f"S3 clear failed for prefix '{self.prefix}': {e}") from e
 
+    def _wrote(self, obj_key: str) -> bool:
+        """Is *obj_key* an entry of this cache, in any cache format?"""
+        return obj_key.startswith(self.prefix) and _cache_dir.is_store_entry_name(
+            obj_key[len(self.prefix) :], "/", (ENTRY_SUFFIX,), untagged=bool(self.prefix)
+        )
+
     def list_entries(self) -> list[dict]:
         self._writes.wait_all()
         entries = []
         try:
             paginator = self.s3.get_paginator("list_objects_v2")
-            pages = paginator.paginate(Bucket=self.bucket, Prefix=self.prefix)
+            pages = paginator.paginate(Bucket=self.bucket, Prefix=self._entry_prefix())
 
             for page in pages:
                 if "Contents" in page:

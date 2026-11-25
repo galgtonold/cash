@@ -43,9 +43,11 @@ from ..analysis.mutations import MUTATING_METHODS
 from ..diagnostics import warn_diagnostic
 from ..effects import ENVIRON_NAMES, dotted_name
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
+from ..loaded_modules import loaded_module
 from ..source_reading import getsource
 from ..tracking.function_tracker import is_local_module
-from ..tracking.randomness import get_seeding_rng_modules
+from ..tracking.randomness import get_drawing_rng_modules, get_seeding_rng_modules
+from ..tracking.randomness.detect import get_value_seeding_rng_modules
 from ..value_types import IMMUTABLE_PRIMS, INTERPRETER_MANAGED_GLOBALS, is_runtime_machinery
 
 __all__ = [
@@ -54,6 +56,7 @@ __all__ = [
     "Reach",
     "class_data",
     "helper_seeded_modules",
+    "seed_only_call_modules",
     "notebook_module",
     "module_globals",
     "module_holders",
@@ -950,7 +953,7 @@ def _parts_held(value: Any, kind: type) -> Iterable[Any] | None:
     if dtype is not None:
         if not attribute_or(dtype, "hasobject", False):
             return ()
-        masked = sys.modules.get("numpy.ma")
+        masked = loaded_module("numpy.ma")
         if masked is not None and isinstance(value, masked.MaskedArray):
             # Its own ``ravel`` hands back ``masked`` for a masked item: the
             # item is there all the same, in its data.
@@ -1279,6 +1282,153 @@ def helper_seeded_modules(
         found |= seeded
         pending.extend(calls)
     return frozenset(found)
+
+
+def seed_only_call_modules(
+    code: str,
+    namespace: Mapping[str, Any] | None,
+    def_source: Callable[[str], str | None] | None = None,
+    is_module: Callable[[str], bool] | None = None,
+) -> frozenset[str]:
+    """The RNG modules *code* seeds when it is one call of a notebook function
+    that does nothing but seed: ``set_seed(5)``, with ``def set_seed(s):
+    random.seed(s); np.random.seed(s)`` in a cell. Empty for anything else.
+
+    Running such a statement again changes the streams and nothing a
+    variable holds, as a bare ``np.random.seed(5)`` does, so the upstream
+    check may run it again to put a stream back. The function qualifies
+    when its body holds only (`_only_seeds`): seed calls with a value,
+    calls of notebook functions that qualify in turn, imports, settings
+    written onto a module (``os.environ["PYTHONHASHSEED"] = str(s)``,
+    ``torch.backends.cudnn.deterministic = True``), and ``if`` over these
+    whose test only reads. It has no decorator: one that keeps results
+    (``functools.cache``) would not seed again. *is_module* says whether a
+    name not bound in *namespace* names a module (imported above).
+    """
+    tree = parse_cached(code) if code else None
+    if tree is None or len(tree.body) != 1 or not isinstance(tree.body[0], ast.Expr):
+        return frozenset()
+    call = tree.body[0].value
+    if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
+        return frozenset()
+    if not all(_reads_only(arg) for arg in (*call.args, *(kw.value for kw in call.keywords))):
+        return frozenset()
+    namespace = namespace or {}
+
+    def names_module(name: str) -> bool:
+        if name in namespace:
+            return isinstance(namespace[name], types.ModuleType)
+        return bool(is_module is not None and is_module(name))
+
+    if not _only_seeds(call.func.id, namespace, def_source, names_module, set()):
+        return frozenset()
+    return helper_seeded_modules(code, namespace, def_source)
+
+
+def _reads_only(node: ast.AST) -> bool:
+    """Whether the expression *node* is a constant, a name or an attribute
+    of one, with a sign, or ``int``/``str``/``float``/``bool`` of one."""
+    if isinstance(node, (ast.Constant, ast.Name)):
+        return True
+    if isinstance(node, ast.Attribute):
+        return _reads_only(node.value)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd, ast.Not)):
+        return _reads_only(node.operand)
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in ("int", "str", "float", "bool")
+    ):
+        return not node.keywords and all(_reads_only(arg) for arg in node.args)
+    return False
+
+
+def _only_seeds(
+    name: str,
+    namespace: Mapping[str, Any],
+    def_source: Callable[[str], str | None] | None,
+    names_module: Callable[[str], bool],
+    seen: set[str],
+) -> bool:
+    """Whether the notebook function *name* does nothing but seed
+    (`seed_only_call_modules`)."""
+    if name in seen:
+        return False  # it calls itself
+    source = _notebook_function_source(name, namespace, def_source)
+    tree = parse_cached(source) if source is not None else None
+    if tree is None or len(tree.body) != 1 or not isinstance(tree.body[0], ast.FunctionDef):
+        return False
+    fn = tree.body[0]
+    if fn.decorator_list:
+        return False
+    params = {a.arg for a in (*fn.args.posonlyargs, *fn.args.args, *fn.args.kwonlyargs)}
+    imported = {
+        (alias.asname or alias.name).partition(".")[0]
+        for node in walk_tree(fn)
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+        for alias in node.names
+    }
+
+    def module_rooted(node: ast.AST) -> bool:
+        while isinstance(node, (ast.Attribute, ast.Subscript)):
+            if isinstance(node, ast.Subscript) and not _reads_only(node.slice):
+                return False
+            node = node.value
+        return isinstance(node, ast.Name) and (node.id in imported or (node.id not in params and names_module(node.id)))
+
+    def test_reads_only(node: ast.AST) -> bool:
+        if isinstance(node, ast.BoolOp):
+            return all(test_reads_only(v) for v in node.values)
+        if isinstance(node, ast.Compare):
+            return all(test_reads_only(v) for v in (node.left, *node.comparators))
+        if isinstance(node, ast.UnaryOp):
+            return test_reads_only(node.operand)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            # ``torch.cuda.is_available()``: asked of a module, drawing nothing.
+            return (
+                module_rooted(node.func)
+                and not get_seeding_rng_modules(ast.unparse(node))
+                and all(_reads_only(arg) for arg in (*node.args, *(kw.value for kw in node.keywords)))
+                and not _draws(ast.unparse(node))
+            )
+        return _reads_only(node)
+
+    def allowed(stmt: ast.stmt) -> bool:
+        if isinstance(stmt, (ast.Pass, ast.Import, ast.ImportFrom)):
+            return True
+        if isinstance(stmt, ast.Return):
+            return stmt.value is None or _reads_only(stmt.value)
+        if isinstance(stmt, ast.If):
+            return test_reads_only(stmt.test) and all(allowed(inner) for inner in (*stmt.body, *stmt.orelse))
+        if isinstance(stmt, ast.Assign):
+            return _reads_only(stmt.value) and all(
+                isinstance(target, (ast.Attribute, ast.Subscript)) and module_rooted(target) for target in stmt.targets
+            )
+        if not isinstance(stmt, ast.Expr):
+            return False
+        value = stmt.value
+        if isinstance(value, ast.Constant):
+            return True  # a docstring
+        if not isinstance(value, ast.Call):
+            return False
+        if not all(_reads_only(arg) for arg in (*value.args, *(kw.value for kw in value.keywords))):
+            return False
+        if isinstance(value.func, ast.Name):
+            return value.func.id not in params | imported and _only_seeds(
+                value.func.id, namespace, def_source, names_module, seen | {name}
+            )
+        text = ast.unparse(value)
+        seeded = get_seeding_rng_modules(text)
+        return bool(seeded) and get_value_seeding_rng_modules(text) == seeded and not _draws(text)
+
+    return all(allowed(stmt) for stmt in fn.body)
+
+
+def _draws(text: str) -> bool:
+    try:
+        return bool(get_drawing_rng_modules(text))
+    except (SyntaxError, ValueError, AttributeError, RecursionError):
+        return True
 
 
 @functools.lru_cache(maxsize=NOTEBOOK_STATEMENTS)

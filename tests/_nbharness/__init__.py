@@ -12,4 +12,6 @@ the pytest fixtures built on it.
 * ``replay_harness``, ``replay_corpus``, ``session_harness``,
   ``session_oracle``: scripted sessions checked against a plain run.
 * ``recorded_sessions``: the real user sessions ``session_harness`` replays.
+* ``click_sequences``: short click sequences (Run All, edit, restart, run one
+  cell) on small notebooks, replayed by ``session_harness`` the same way.
 """

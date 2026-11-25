@@ -17,13 +17,13 @@ import inspect
 import itertools
 import os
 import pathlib
-import sys
 import textwrap
 import types
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Container, Iterable, Iterator, Mapping
 from typing import Any
 
 from cash._user_attrs import attribute_or, instance_of, is_routine
+from cash.builtin_calls import HAND_NOTHING_ON
 
 from .. import source_reads
 from .._memo import STATEMENTS, USER_CALLEES, LruMemo
@@ -33,6 +33,7 @@ from ..diagnostics import warn_diagnostic
 from ..effects import is_open_write_mode
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..install_paths import is_user_code_file
+from ..loaded_modules import loaded_module
 from ..purity import is_pure
 from ..source_reading import own_source, wrapper_layers
 from ..tracking.randomness.state import rng_carrier_kind
@@ -431,7 +432,7 @@ def user_callee_using_pyplot(func: Any) -> str | None:
     like the call written in the statement. Followed as
     :func:`user_callee_writing_files` follows a call; ``@pure`` is taken.
     """
-    if "matplotlib.pyplot" not in sys.modules:
+    if loaded_module("matplotlib.pyplot") is None:
         # No figure exists for a helper to read before pyplot is imported;
         # one it makes itself is seen by the before-and-after check.
         return None
@@ -471,7 +472,7 @@ def statement_user_pyplot_call(
     """``(callee as spelled, function calling pyplot)`` for the first call in
     *code* into user code that calls pyplot (:func:`user_callee_using_pyplot`),
     or None."""
-    if not namespace or "(" not in code or "matplotlib.pyplot" not in sys.modules:
+    if not namespace or "(" not in code or loaded_module("matplotlib.pyplot") is None:
         return None
     calls = _calls(code) if tree is None else tuple(n for n in walk_tree(tree) if isinstance(n, ast.Call))
     bound = _bindings(code) if tree is None else iteration_bindings(tree)
@@ -530,7 +531,7 @@ def statement_calls_through_ctypes(
     reports. A call made through a ctypes library, one of its functions, a
     ctypes library class or the ctypes module itself is taken for a write.
     """
-    ctypes = sys.modules.get("ctypes")
+    ctypes = loaded_module("ctypes")
     if ctypes is None or not namespace or "(" not in code:
         return None
     calls = _calls(code) if tree is None else tuple(n for n in walk_tree(tree) if isinstance(n, ast.Call))
@@ -1391,7 +1392,7 @@ def statement_saves_current_pyplot_figure(
     return False
 
 
-def capturable_globals(names, namespace: Mapping[str, Any]) -> frozenset[str]:
+def capturable_globals(names, namespace: Mapping[str, Any], simulated: Container[str] = frozenset()) -> frozenset[str]:
     """The *names* that are real notebook variables in *namespace*.
 
     A name a callee's source mutates is only a variable of the caller's when it
@@ -1399,11 +1400,23 @@ def capturable_globals(names, namespace: Mapping[str, Any]) -> frozenset[str]:
     closure cell that never appears in any namespace, and declaring it would
     invent a variable (reconstruction then tries to produce it and re-runs the
     statement). A module is never a value to capture either.
+
+    *simulated* are the variables the upstream simulation has bound above
+    the statement that the kernel may not hold (after a restart it holds
+    none): bound there, a name is the notebook's variable as much as one the
+    kernel holds.
     """
-    return frozenset(n for n in names if n in namespace and not instance_of(namespace[n], types.ModuleType))
+    return frozenset(
+        n
+        for n in names
+        if (n in namespace and not instance_of(namespace[n], types.ModuleType))
+        or (n in simulated and n not in namespace)
+    )
 
 
-def notebook_global_rebinds(tree: ast.AST | None, resolve_source, namespace: Mapping[str, Any]) -> frozenset[str]:
+def notebook_global_rebinds(
+    tree: ast.AST | None, resolve_source, namespace: Mapping[str, Any], simulated: Container[str] = frozenset()
+) -> frozenset[str]:
     """Names a function defined in the notebook binds under ``global`` when
     *tree* calls it, directly or through other notebook functions.
 
@@ -1411,6 +1424,10 @@ def notebook_global_rebinds(tree: ast.AST | None, resolve_source, namespace: Map
     the function's globals are the namespace (*namespace* itself). The first
     run of ``def setw(): global w; w = ...`` + ``setw()`` is the one that
     creates ``w``, which :func:`capturable_globals` cannot see.
+
+    A function the kernel does not hold that the upstream simulation bound
+    above the statement (*simulated*) is the notebook's too: its ``def`` is
+    one of the notebook's statements.
     """
     out: set[str] = set()
     seen: set[str] = set()
@@ -1420,8 +1437,10 @@ def notebook_global_rebinds(tree: ast.AST | None, resolve_source, namespace: Map
         if name in seen:
             continue
         seen.add(name)
-        func = namespace.get(name)
-        if plain_getattr(func, "__globals__", None) is not namespace:
+        if name in namespace:
+            if plain_getattr(namespace[name], "__globals__", None) is not namespace:
+                continue
+        elif name not in simulated:
             continue
         try:
             source = resolve_source(name)
@@ -1637,14 +1656,10 @@ def _live_user_function_source(user_ns: Mapping[str, Any]) -> Callable[[str], st
 _USER_SOURCES: dict[types.CodeType, str | None] = {}
 
 
-#: Builtins that read what they are handed and change none of it, unshadowed.
-ARGUMENT_READING_BUILTINS = frozenset(
-    {
-        "abs", "all", "any", "bool", "dict", "divmod", "enumerate", "float", "format", "frozenset", "hash",
-        "int", "isinstance", "issubclass", "len", "list", "max", "min", "print", "range", "repr", "reversed",
-        "round", "set", "sorted", "str", "sum", "tuple", "type", "zip", "id", "callable", "chr", "ord",
-    }
-)  # fmt: skip
+#: Builtins that change nothing they are handed, hand back no part of it to
+#: change it through, and hand it to no function (``map`` and ``filter`` are
+#: read for theirs, `_maps_a_reading_lambda`), unshadowed.
+ARGUMENT_READING_BUILTINS = HAND_NOTHING_ON
 
 
 def function_handoffs(

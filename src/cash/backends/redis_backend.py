@@ -10,6 +10,7 @@ from typing import Any
 
 from cash.exceptions import CacheBackendError, DependencyNotFoundError
 
+from . import cache_dir as _cache_dir
 from ._base import CacheBackend, MetadataDict
 from ._writes import PendingWrites
 from .serialization import RESTORE_ERRORS, PickleSerializer, Serializer, restore_value
@@ -27,6 +28,11 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["RedisBackend", "HAS_REDIS"]
 
+#: What ends the two keys of an entry. `RedisBackend.clear` removes keys by
+#: these, so it takes nothing cash did not write.
+_META_SUFFIX = ":meta"
+_DATA_SUFFIX = ":data"
+
 
 class RedisBackend(CacheBackend):
     """Entries in a Redis server, shared by every machine that reaches it.
@@ -40,7 +46,10 @@ class RedisBackend(CacheBackend):
         port: Server port.
         db: Redis database number.
         password: Server password, if any.
-        prefix: Prepended to every key cash writes.
+        prefix: Prepended to every key cash writes. An entry's keys are
+            ``<prefix>f<N>:<key>:meta`` and ``...:data``, N being the cache
+            format, so cash versions with different formats share a server
+            without reading each other's entries.
         socket_keepalive: Keep idle connections open.
         health_check_interval: Seconds between connection health checks.
         retry_on_timeout: Retry a command that timed out.
@@ -97,8 +106,19 @@ class RedisBackend(CacheBackend):
         # thread, the actual Redis pipeline runs in this executor.
         self._writes = PendingWrites()
 
+    def _entry_prefix(self) -> str:
+        """The prefix of this cache format's entries (`cache_dir.format_tag`).
+
+        The format is part of every key, so a server shared by machines on
+        different cash versions holds each format's entries side by side: an
+        entry written in another format is never read, and never removed by
+        a build that cannot judge it.
+        """
+        return f"{self.prefix}{_cache_dir.format_tag()}:"
+
     def _get_keys(self, key: str) -> tuple[str, str]:
-        return f"{self.prefix}{key}:meta", f"{self.prefix}{key}:data"
+        base = f"{self._entry_prefix()}{key}"
+        return f"{base}{_META_SUFFIX}", f"{base}{_DATA_SUFFIX}"
 
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         # Wait for any pending write for this key.
@@ -220,11 +240,18 @@ class RedisBackend(CacheBackend):
             raise CacheBackendError(f"Redis delete failed for key {key!r}: {exc}") from exc
 
     def clear(self) -> None:
+        """Delete this cache's entries, of every cache format, and nothing else.
+
+        The prefix is a string: ``team`` also starts ``team-reports:...``,
+        and an empty one starts every key of the database. So only keys named
+        as cash names an entry's two keys go (`cache_dir.is_store_entry_name`).
+        """
         self._writes.wait_all()
         try:
             cursor = 0
             while True:
-                cursor, keys = self.client.scan(cursor=cursor, match=f"{self.prefix}*", count=100)
+                cursor, keys = self.client.scan(cursor=cursor, match=f"{_glob_escape(self.prefix)}*", count=100)
+                keys = [k for k in keys if self._wrote(k)]
                 if keys:
                     self.client.delete(*keys)
                 if cursor == 0:
@@ -232,11 +259,18 @@ class RedisBackend(CacheBackend):
         except (RedisError, OSError) as exc:
             raise CacheBackendError(f"Redis clear failed: {exc}") from exc
 
+    def _wrote(self, redis_key: Any) -> bool:
+        """Is *redis_key* one of an entry's keys, in any cache format?"""
+        name = redis_key.decode("utf-8", "replace") if isinstance(redis_key, bytes) else str(redis_key)
+        return name.startswith(self.prefix) and _cache_dir.is_store_entry_name(
+            name[len(self.prefix) :], ":", (_META_SUFFIX, _DATA_SUFFIX), untagged=bool(self.prefix)
+        )
+
     def list_entries(self) -> list[dict]:
         self._writes.wait_all()
         entries = []
         # Scan for meta keys
-        match_pattern = f"{self.prefix}*:meta"
+        match_pattern = f"{_glob_escape(self._entry_prefix())}*{_META_SUFFIX}"
         cursor = 0
         while True:
             cursor, keys = self.client.scan(cursor=cursor, match=match_pattern, count=100)
@@ -266,3 +300,8 @@ class RedisBackend(CacheBackend):
         own lock (``SET NX PX``), as a context manager. Its name is in a
         ``lock:`` namespace under the prefix, apart from the entries' keys."""
         return self.client.lock(f"{self.prefix}lock:{key}", timeout=60, blocking_timeout=10)
+
+
+def _glob_escape(text: str) -> str:
+    """*text* as a literal in a Redis ``MATCH`` pattern."""
+    return "".join(f"\\{c}" if c in "*?[]\\" else c for c in text)

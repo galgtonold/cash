@@ -15,12 +15,12 @@ the simulation, which runs nothing, reads that record.
 from __future__ import annotations
 
 import ast
-import sys
 from collections.abc import Mapping
 from typing import Any
 
 from cash._user_attrs import attribute_or, builtin_items, instance_of
 
+from ..loaded_modules import loaded_module
 from .shared_objects import history_names
 
 __all__ = ["current_figure_names", "draws_through_pyplot", "holds_artists", "pyplot_draw_names"]
@@ -135,7 +135,7 @@ def current_figure_names(namespace: Mapping[str, Any]) -> set[str]:
     Empty when pyplot is not imported or holds no figure (asking it then
     would make one). IPython's history (``Out``) is not the user's data
     (`history_names`)."""
-    plt = sys.modules.get("matplotlib.pyplot")
+    plt = loaded_module("matplotlib.pyplot")
     if plt is None:
         return set()
     try:
@@ -170,7 +170,7 @@ def _holds_current(value: Any, fig: Any, axes: Any) -> bool:
     elif vtype is dict:
         items = value.values()
     else:
-        np = sys.modules.get("numpy")
+        np = loaded_module("numpy")
         if axes is None or np is None or not instance_of(value, np.ndarray) or value.dtype != object:
             return False
         items = value.flat
@@ -188,13 +188,13 @@ def pyplot_draw_names(tree: ast.AST | None, namespace: Mapping[str, Any]) -> fro
 def holds_artists(value: Any) -> bool:
     """Whether *value* is a matplotlib artist (a figure, an axes) or a list,
     tuple or numpy object array of them (``plt.subplots(1, 3)``'s axes)."""
-    module = sys.modules.get("matplotlib.artist")
+    module = loaded_module("matplotlib.artist")
     artist = attribute_or(module, "Artist", None)
     if artist is None:
         return False
     if instance_of(value, artist):
         return True
-    np = sys.modules.get("numpy")
+    np = loaded_module("numpy")
     if np is not None and instance_of(value, np.ndarray):
         # Only a numpy array: a pandas Series of objects has an object dtype
         # and a size too, but no ``.flat``.

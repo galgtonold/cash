@@ -16,7 +16,7 @@ import sys
 import types
 from collections.abc import Mapping
 
-from cash._user_attrs import attribute_or
+from cash._user_attrs import attribute_or, plain_getattr
 
 from ...source_norm import source_identity_digest
 from .._protocols import ShellProtocol
@@ -28,6 +28,7 @@ from ..cache_key import (
     virtual_namespace,
 )
 from ..lineage_formula import forward_helper
+from ..string_lookups import code_looks_up_by_string, statement_looks_up_by_string
 from ..tracking_state import TrackingState
 from .cache_probe import CacheProbe
 
@@ -199,6 +200,48 @@ class SimulatedCallables:
             else None
         )
         return called_function_globals(inputs, self.shell.user_ns, virtual, keep_modules=True)
+
+    #: How many functions `reads_names_unseen` follows from one statement.
+    _CALLEES_FOLLOWED = 64
+
+    def reads_names_unseen(self, stmt_code: str, inputs: set[str], virtual_lineage: Mapping[str, str]) -> bool:
+        """Whether *stmt_code*, or a function of the notebook's it reaches
+        through *inputs* (held by the kernel, or a simulated ``def``), looks
+        a name up by a string (`string_lookups`): ``eval('K * 10')``,
+        ``globals()['K']``. Which variable it reads is then in none of its
+        inputs. Past `_CALLEES_FOLLOWED` functions it is taken to."""
+        user_ns = self.shell.user_ns
+        if statement_looks_up_by_string(stmt_code, user_ns):
+            return True
+        live = self.tracking_state.variable_lineage
+        todo = sorted(inputs)
+        seen: set[str] = set()
+        while todo:
+            name = todo.pop()
+            if name in seen:
+                continue
+            if len(seen) >= self._CALLEES_FOLLOWED:
+                return True
+            seen.add(name)
+            code = None
+            if name in user_ns:
+                value = user_ns[name]
+                if plain_getattr(value, "__globals__", None) is user_ns:
+                    code = plain_getattr(value, "__code__", None)
+            else:
+                lineage = virtual_lineage.get(name) or live.get(name) or ""
+                found = self.by_lineage.get(virtual_callable_key(lineage, name))
+                code = found.code if found is not None else None
+            if not isinstance(code, types.CodeType):
+                continue
+            if code_looks_up_by_string(code, user_ns):
+                return True
+            nested = [code]
+            while nested:
+                inner = nested.pop()
+                todo.extend(inner.co_names)
+                nested.extend(const for const in inner.co_consts if isinstance(const, types.CodeType))
+        return False
 
     def stale_callee_globals(
         self,

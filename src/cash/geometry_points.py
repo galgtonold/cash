@@ -23,6 +23,8 @@ import sys
 import threading
 from typing import Any
 
+from .loaded_modules import loaded_module
+
 #: Bytes in the WKB of a 2-d point: byte order, type, x, y.
 POINT_WKB_BYTES = 21
 
@@ -97,7 +99,7 @@ def _layout_holds() -> bool:
     """Whether shapely's points read and write as this module lays them
     out, checked once per process (per shapely module)."""
     global _CHECKED
-    shapely = sys.modules.get("shapely")
+    shapely = loaded_module("shapely")
     checked = _CHECKED
     if checked is not None and checked[0] is shapely:
         return checked[1]

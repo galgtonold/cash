@@ -31,7 +31,6 @@ this (`serialization.stored_reducers`).
 from __future__ import annotations
 
 import operator
-import sys
 import threading
 from collections import OrderedDict
 from itertools import compress, repeat
@@ -39,6 +38,7 @@ from typing import Any
 
 from .. import _weak
 from .._type_memo import class_module, class_name
+from ..loaded_modules import loaded_module
 from . import block_digests
 
 __all__ = ["Encoded", "decode", "encode", "encode_column"]
@@ -204,7 +204,7 @@ def _shared(flat: Any) -> tuple[Any, Any]:
     else ``(None, None)``."""
     import numpy as np
 
-    pd = sys.modules.get("pandas")
+    pd = loaded_module("pandas")
     count = len(flat)
     if count < _CODES_MIN_ITEMS or pd is None:
         return None, None

@@ -152,13 +152,13 @@ Patch the name where it is **used** (`primes._sieve`), as with any mocking.
 Patching `sievelib.sieve` after `primes` imported it changes nothing `count`
 runs.
 
-<!-- claim: cash/analysis/helper_code.py:is_mock @b3d4d730 -->
+<!-- claim: cash/analysis/helper_code.py:is_mock @eafa228a -->
 **A call that reaches a `unittest.mock` object runs uncached**, and nothing it
 returns is stored. That covers `mock.patch(...)`, `MagicMock`, `pytest-mock`'s
 `mocker` and `autospec=True` patches, whether the mock replaces your helper, a
 library function (`mock.patch("requests.get")`) or a whole module.
 
-<!-- claim: cash/effect_observer.py:_hook_mock_calls @fbaaf89b -->
+<!-- claim: cash/effect_observer.py:_hook_mock_calls @7d3e6958 -->
 A mock deeper down, such as `mock.patch("requests.Session.request")`, is not
 part of the key, so cash can't tell the call from a real one before it runs.
 
@@ -173,7 +173,7 @@ Libraries that intercept HTTP without replacing the function you call
 recorded response can be stored under the real key, so run those tests with the
 `no_cache` fixture.
 
-<!-- claim: cash/_clock.py:perf_counter @9808b623, cash/_plain_data.py:fake_clock @bcb59121 -->
+<!-- claim: cash/_clock.py:perf_counter @9808b623, cash/_plain_data.py:fake_clock @32eed42b -->
 **freezegun** and other clock doubles are not mocks in this sense: the call is
 cached as usual. cash measures run time with a clock `freeze_time` does not
 reach, and a frozen `date` is keyed as the date it equals. TTLs do follow the

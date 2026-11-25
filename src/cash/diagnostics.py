@@ -31,6 +31,7 @@ import warnings
 from typing import Any
 
 from ._paths import CELL_NAME_PREFIX
+from .loaded_modules import loaded_module
 
 #: The name a cell's line is shown under (``<cash>:N``), as cash's notebook
 #: warnings name it.
@@ -284,6 +285,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # (and names an existing cache nearby)
         "CACHE-DIR-UNWRITABLE",  # the cache directory cannot be written at all,
         # so nothing reaches disk this run
+        "CACHE-FORMAT-NEWER",  # the cache was written by a newer cash; it is
+        # left alone and nothing reaches disk this run
         "CACHE-PER-ITEM-RERUN",  # a costly step ran again over a whole
         # collection although most of its rows are unchanged
         "CACHE-NOT-WORTH-BYTES",  # more disk per second saved than cash will spend
@@ -355,6 +358,9 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # every time
         "KEY-READ-UNRECORDED",  # cash failed to record a read the body made, so
         # the call runs again every time (a statement is not stored)
+        "KEY-READS-NOT-KEPT",  # a helper read more files outside cached calls
+        # than cash remembers; a call that reaches it without reading is
+        # not stored
         "KEY-SOURCE-CHANGED",  # a cached function's or helper's file was edited
         # after import; keyed by the code actually running
         "KEY-UNHASHABLE-ARG",  # an argument could not be hashed; not cached
@@ -702,7 +708,7 @@ def _blames_user_code(level: int | None) -> bool:
 def _running_cell() -> tuple[str, int] | None:
     """The cell IPython runs now, as cash's notebook warnings name it
     (``<cash>:N``), or None outside IPython."""
-    ipython = sys.modules.get("IPython")
+    ipython = loaded_module("IPython")
     try:
         shell = ipython.get_ipython() if ipython is not None else None
     except Exception:  # noqa: BLE001 - a half-imported IPython: blamed as before

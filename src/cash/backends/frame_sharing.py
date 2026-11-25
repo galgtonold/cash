@@ -72,6 +72,7 @@ from typing import Any
 from .. import _weak
 from .._type_memo import class_name
 from .._user_attrs import from_family
+from ..loaded_modules import loaded_module
 from ..sizing import array_nbytes
 from . import heap_blocks
 
@@ -468,7 +469,7 @@ def enabled() -> bool:
     module expects them (a self-test, run once)."""
     if _ENABLED:
         return _ENABLED[0]
-    pd = sys.modules.get("pandas")
+    pd = loaded_module("pandas")
     if pd is None:
         return False  # not decided: pandas may be imported later
     ok = False

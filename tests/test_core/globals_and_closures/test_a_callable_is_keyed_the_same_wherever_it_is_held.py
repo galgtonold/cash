@@ -433,16 +433,16 @@ def _row(holder: str, tmp_path_factory) -> list[dict]:
         while not done.exists():
             assert time.monotonic() < deadline, f"the runs of {holder} did not finish"
             time.sleep(0.1)
-        return json.loads(done.read_text())
+        return json.loads(done.read_text(encoding="utf-8"))
     rows: list = []
     try:
-        (folder / "main.py").write_text(SCRIPT)
+        (folder / "main.py").write_text(SCRIPT, encoding="utf-8")
         for numbers in (FIRST, SECOND, FIRST):
             out = run_python("main.py", holder, json.dumps(numbers), cwd=folder).stdout
             rows.append(json.loads(out.strip().splitlines()[-1]))
     finally:
         partial = folder / "rows.json.partial"
-        partial.write_text(json.dumps(rows if len(rows) == 3 else {"failed": holder}))
+        partial.write_text(json.dumps(rows if len(rows) == 3 else {"failed": holder}), encoding="utf-8")
         partial.replace(done)
     return rows
 

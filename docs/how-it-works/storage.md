@@ -75,7 +75,7 @@ the most cash takes; the 8 GiB minimum does not fit)`. A cap you set reads
 
 === "Decorator"
 
-    <!-- claim: cash/backends/file_eviction.py:FileEvictor.ensure_size_scanned @adb3043c, cash/decorator/run_summary.py:RunSummary._budget @b7ff011b -->
+    <!-- claim: cash/backends/file_eviction.py:FileEvictor.ensure_size_scanned @1b9288c8, cash/decorator/run_summary.py:RunSummary._budget @b7ff011b -->
     The first result a process writes to disk logs the line on the
     `cash.storage` logger when you ask for it: `verbose=True`, `debug=True` (or
     `CASH_VERBOSE=1`, `CASH_DEBUG=1`), or a level of INFO you set on the `cash`
@@ -96,7 +96,7 @@ less; [the CLI page](../cli.md) has every option.
 
 ## The tiers
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @91b58e42, cash/backends/memory_backend.py:_cheap_to_keep @ef9b9285 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @e6cc8e5a, cash/backends/memory_backend.py:_cheap_to_keep @3e2c7c11 -->
 | Tier | Where | Survives a restart? |
 |------|-------|---------------------|
 | Memory | RAM | No |
@@ -116,7 +116,7 @@ would have to copy 64 MB or more goes to the disk tier alone when it is
 stored, and is not kept in memory when it is read either; when no disk tier
 takes it, memory keeps it as usual.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @4d56c7f5, cash/backends/frame_sharing.py:_freeze @d40098df, cash/backends/frame_sharing.py:own_parts @bd7577a7, cash/backends/tiered_backend.py:TieredBackend.get @91b58e42, cash/backends/memory_backend.py:_copy_polars @d34b28a6 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @4d56c7f5, cash/backends/frame_sharing.py:_freeze @d40098df, cash/backends/frame_sharing.py:own_parts @bd7577a7, cash/backends/tiered_backend.py:TieredBackend.get @e6cc8e5a, cash/backends/memory_backend.py:_copy_polars @d34b28a6 -->
 The memory tier keeps a copy of each value that only it holds, so nothing you
 do to a value you were handed reaches the stored one, or the other way round.
 Under pandas copy-on-write (pandas 3, or `pd.options.mode.copy_on_write = True`
@@ -169,7 +169,7 @@ The Python objects in an `Object` column are copied.
 tiers; see
 [choosing a backend](../tutorials/feature-guides/choosing-a-backend.md).
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @91b58e42, cash/backends/_base.py:effective_ttl @c0f1dab8 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @e6cc8e5a, cash/backends/_base.py:effective_ttl @c0f1dab8 -->
 An entry's ttl is checked on every tier's copy as it is read, so the memory
 copy expires with the disk copy, and a backend used on its own applies the
 same rule. The ttl is the decorator's `ttl=`, or else the shorter of the ttl
@@ -207,7 +207,7 @@ keeps it in memory if it fits and warns once
 
 ## Cache size limit and eviction
 
-<!-- claim: cash/backends/file_backend.py:FileBackend._do_set_sync @820897ee, cash/backends/file_eviction.py:FileEvictor.evict @697d1c43 -->
+<!-- claim: cash/backends/file_backend.py:FileBackend._do_set_sync @820897ee, cash/backends/file_eviction.py:FileEvictor.evict @9bf87692 -->
 Only a write can start eviction. After each write to disk, the background
 writer adds the entry's size to a running total. If the total is over the cap,
 it deletes entries until the cache is under 90% of the cap, so the next few
@@ -262,9 +262,16 @@ The value just written is not protected. If it is the least valuable entry, it
 goes first; when that keeps happening, the cap is too small, and
 [`CACHE-THRASH`](../warnings.md#cache-thrash) warns once per session.
 
+<!-- claim: cash/backends/file_eviction.py:FileEvictor.recount_if_stale @33da6aed, cash/backends/file_eviction.py:FileEvictor.SIZE_RESCAN_INTERVAL == 60.0 -->
 Each process enforces the cap on its own writes, so several processes sharing
 one folder can together go over it before one of them evicts. A long-running
-process re-measures the disk about once a minute while it writes. A re-run
+process re-measures the disk about once a minute while it writes. Its running
+total follows only its own writes, so before it deletes anything it checks
+that the folder agrees: it counts the folder again when the cache was cleared
+since the last count, when the count is over a minute old, and whenever it
+ranks the entries or finds one already gone. After `cash clear`, or after
+another process has made room, a running process therefore lets the folder
+fill up again instead of evicting what it has just stored. A re-run
 notebook statement also drops its older versions when the new one is written.
 
 ## When a result reaches the disk
@@ -352,7 +359,7 @@ stored as its Arrow chunks, written as they are: pandas' own pickle first
 joins a column's chunks into one copy. A short slice of a long column is
 copied down to its rows, so `df.head()` does not write the whole column.
 
-<!-- claim: cash/backends/datetime_columns.py:reduce_datetime_objects @48f2d771, cash/backends/datetime_columns.py:_encode @0be5b714, cash/backends/datetime_columns.py:_encode_timestamps @73324abc -->
+<!-- claim: cash/backends/datetime_columns.py:reduce_datetime_objects @b4beb276, cash/backends/datetime_columns.py:_encode @0be5b714, cash/backends/datetime_columns.py:_encode_timestamps @73324abc -->
 A pandas column of Python dates and times (object dtype holding
 `datetime.datetime`, `datetime.date` or `pandas.Timestamp` objects, with
 `None` or `NaT` for missing ones) is stored as columns of numbers, the
@@ -366,7 +373,7 @@ before: a subclass of `datetime`, items in two zones or in a zone other than
 item (a `NaN` for missing), Timestamps of two units, or fewer than 1,024
 items.
 
-<!-- claim: cash/backends/text_columns.py:encode @738da182, cash/backends/text_columns.py:encode_column @e0182210, cash/backends/serialization.py:_reduce_text_for_write @670ff542, cash/backends/serialization.py:reduce_text_objects @840b0ff4 -->
+<!-- claim: cash/backends/text_columns.py:encode @738da182, cash/backends/text_columns.py:encode_column @e0182210, cash/backends/serialization.py:_reduce_text_for_write @670ff542, cash/backends/serialization.py:reduce_text_objects @24bb6968 -->
 A pandas column of Python strings (pandas 3's `str` columns without
 `pyarrow`, `string[python]`, or an object column holding only strings and
 missing values) is stored as its strings joined in one UTF-8 buffer, with
@@ -453,10 +460,13 @@ stored a new result under the same entry meanwhile, the next read takes the
 new entry as it is on disk, and the counts are dropped rather than written over
 it.
 
-<!-- claim: cash/backends/cache_dir.py:CACHE_FORMAT_VERSION == 11, cash/backends/cache_dir.py:CacheDirStamp.check @7bdce11c -->
+<!-- claim: cash/backends/cache_dir.py:CACHE_FORMAT_VERSION == 12, cash/backends/cache_dir.py:CacheDirStamp.check @7bdce11c -->
 The cache folder records the storage format it was written in. When cash opens
-a folder written in a different format, by an older or newer cash, it logs a
-warning and deletes the old entries, so the first run afterwards recomputes.
+a folder written in an older format, it logs a warning and deletes the old
+entries, so the first run afterwards recomputes. A folder written in a newer
+format, by a newer cash, is left as it is: cash warns
+([CACHE-FORMAT-NEWER](../warnings.md#cache-format-newer)) and stores nothing
+on disk for that run.
 Within one format, entry metadata tolerates fields it does not know.
 
 ## Related

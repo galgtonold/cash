@@ -84,7 +84,7 @@ just before is read again.
 
 ## Cached functions that call it
 
-<!-- claim: cash/decorator/file_deps.py:pass_dynamic_sources_up @9f602771, cash/decorator/dynamic_sources.py:dynamic_sources_fresh @d071cce5, cash/decorator/dynamic_sources.py:held_sources @a009e761 -->
+<!-- claim: cash/decorator/file_deps.py:pass_dynamic_sources_up @a0cc10a8, cash/decorator/dynamic_sources.py:dynamic_sources_fresh @d071cce5, cash/decorator/dynamic_sources.py:held_sources @a009e761 -->
 A cached function that calls `load` depends on the same sources, though its
 own key never sees them. cash keeps them in its entry instead:
 

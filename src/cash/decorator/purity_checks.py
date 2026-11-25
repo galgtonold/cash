@@ -703,6 +703,190 @@ def _found_in(value, targets: dict[int, Any], depth: int) -> int | None:
     return None
 
 
+def _supplied(func, args, kwargs) -> list[tuple[str, Any]]:
+    """``(parameter name, value)`` of what a call was handed."""
+    try:
+        names = list(inspect.signature(func).parameters)
+    except (TypeError, ValueError):
+        names = []
+    supplied = [(names[i] if i < len(names) else f"arg{i}", value) for i, value in enumerate(args)]
+    supplied += list(kwargs.items())
+    return supplied
+
+
+#: How many items of the arguments' containers, all levels together, are
+#: looked through for an object the result holds and something else holds
+#: too. Past it the search stops and the warning says the result may hold
+#: an item of the argument: about a quarter of a second of looking.
+SHARED_ARGUMENT_ITEMS = 500_000
+
+_ITEM_BOXES = (dict, list, tuple, set, frozenset, collections.deque)
+
+
+def _references_as_counted(holder: dict, key: int) -> int:
+    return sys.getrefcount(holder[key])
+
+
+def _counted_alone() -> int:
+    holder = {0: object()}
+    return _references_as_counted(holder, 0)
+
+
+#: `_references_as_counted` of an object only *holder* holds. Measured, not
+#: assumed: it depends on the interpreter.
+_COUNTED_ALONE = _counted_alone()
+
+#: Reference counts say who holds an object only under the GIL.
+_COUNTS_HOLD = getattr(sys, "_is_gil_enabled", lambda: True)()
+
+
+def _held_elsewhere(result, held: bool | None) -> dict[int, Any]:
+    """The objects in *result* that something outside it holds too: the
+    result itself (when *held* is not False) and what it holds within
+    `SHARED_RESULT_DEPTH` levels, the first `SHARED_ITEMS` of each
+    container as `_found_in` walks them, whose reference count is above
+    the references the walk saw. An object the body made is held by the
+    result alone and is left out, which is what keeps a result of new
+    objects from costing a search of the arguments. Read while nothing
+    else in this function holds a member: the walk's own references are
+    gone when the counts are taken."""
+    members: dict[int, Any] = {}
+    seen_in: dict[int, int] = {}
+    _note_members(result, SHARED_RESULT_DEPTH, members, seen_in)
+    members.pop(id(result), None)
+    if _COUNTS_HOLD:
+        for key, count in seen_in.items():
+            if key in members and _references_as_counted(members, key) <= count + _COUNTED_ALONE:
+                del members[key]
+    # Nothing can be written through these, whoever else holds them (a
+    # date or a tuple of numbers passed through from an argument).
+    for key in [key for key, member in members.items() if _quiet(member, cheap=True)]:
+        del members[key]
+    if held is not False and type(result) not in _PLAIN_IMMUTABLE:
+        members[id(result)] = result
+    return members
+
+
+def _note_members(value, depth: int, members: dict[int, Any], seen_in: dict[int, int]) -> None:
+    """Add to *members* what *value* holds within *depth* levels that is
+    not a plain immutable value, and to *seen_in* how many references to
+    each the walk passed."""
+    if depth <= 0 or isinstance(value, enum.Enum):
+        return
+    if isinstance(value, dict):
+        held = value.values()
+    elif isinstance(value, (list, tuple, set, frozenset, collections.deque)):
+        held = value
+    elif class_name(type(value)) == "ndarray" and getattr(getattr(value, "dtype", None), "kind", None) == "O":
+        held = value.flat
+    else:
+        state = plain_getattr(value, "__dict__", None)
+        if not isinstance(state, dict):
+            return
+        held = state.values()
+    for member in itertools.islice(held, SHARED_ITEMS):
+        if type(member) in _PLAIN_IMMUTABLE:
+            continue
+        key = id(member)
+        first = key not in members
+        members[key] = member
+        seen_in[key] = seen_in.get(key, 0) + 1
+        if first:
+            _note_members(member, depth - 1, members, seen_in)
+
+
+def _item_label(name: str, path: tuple) -> str:
+    return name + "".join("[...]" if key is _UNKEYED else f"[{key!r}]" for key in path)
+
+
+_UNKEYED = object()
+
+
+def _keyed(box) -> Any:
+    if isinstance(box, dict):
+        return box.items()
+    if isinstance(box, (set, frozenset)):
+        return ((_UNKEYED, item) for item in box)
+    return enumerate(box)
+
+
+def _shared_argument_item(result, supplied, held: bool | None) -> tuple[str, str, str] | None:
+    """``(what, label, keeper)`` when *result* is, or holds, an item of a
+    list, tuple, dict, set or deque the call was handed, at any depth of
+    such containers (``[r for r in records if ...]``, ``cfg["section"]``,
+    ``rows[0]``, ``c["a"]["b"]``): a run hands back the caller's own
+    object, a hit a copy. None when it shares none.
+
+    Only objects something outside the result holds are looked for
+    (`_held_elsewhere`), so a result built of new objects costs a walk of
+    its first items and no look at the arguments. For the others every
+    item of the arguments' containers is compared by identity, up to
+    `SHARED_ARGUMENT_ITEMS` in all; past that nothing is proved either
+    way, and the answer says the result may hold an item of the argument
+    that was not searched to its end."""
+    boxes = [(name, value) for name, value in supplied if isinstance(value, _ITEM_BOXES) and value]
+    if not boxes:
+        return None
+    wanted = _held_elsewhere(result, held)
+    for _name, value in supplied:
+        wanted.pop(id(value), None)  # the argument itself: looked for by name
+    if not wanted:
+        return None
+    left = SHARED_ARGUMENT_ITEMS
+    caller = "the caller"
+    ids = wanted.keys()
+    boxed = _ITEM_BOXES
+    plain: set[type] = set(_PLAIN_IMMUTABLE)
+    for name, top in boxes:
+        # Each container reached, with the index of the one it was found
+        # in: a label is built from these only for an item found.
+        reached: list[tuple[Any, int]] = [(top, -1)]
+        visited = {id(top)}
+        at = 0
+        while at < len(reached):
+            box = reached[at][0]
+            left -= len(box)
+            if left < 0:
+                return "holds an object something else holds too, possibly an item of the argument", name, caller
+            held_here = box.values() if isinstance(box, dict) else box
+            # One pass in C: most containers hold none of them.
+            if not ids.isdisjoint(map(id, held_here)):
+                for key, item in _keyed(box):
+                    if wanted.get(id(item), _UNKEYED) is not item:
+                        continue
+                    if not _quiet(item):
+                        what = "is an item of the argument" if item is result else "holds an item of the argument"
+                        return what, _item_label(name, (*_path_to(reached, at), key)), caller
+                    del wanted[id(item)]
+                if not wanted:
+                    return None
+            # The types first, in C: a container of plain values (most
+            # records) is not walked a second time for containers in it.
+            kinds = set(map(type, held_here))
+            if not kinds <= plain:
+                for kind in kinds - plain:
+                    if not issubclass(kind, boxed):
+                        plain.add(kind)
+                if not kinds <= plain:
+                    for item in held_here:
+                        if isinstance(item, boxed) and item and id(item) not in visited:
+                            visited.add(id(item))
+                            reached.append((item, at))
+            at += 1
+    return None
+
+
+def _path_to(reached: list[tuple[Any, int]], at: int) -> tuple:
+    """The keys leading from the first container of *reached* to the one
+    at index *at* (`_shared_argument_item`)."""
+    path: list = []
+    while at > 0:
+        box, parent = reached[at]
+        path.append(next((key for key, item in _keyed(reached[parent][0]) if item is box), _UNKEYED))
+        at = parent
+    return tuple(reversed(path))
+
+
 def describe_scope_use(reader: Any, name: str, cached: Any) -> str:
     """`` -- through `X.f()` in mod.helper (file:line)`` for the warning, or ``""``.
 
@@ -865,7 +1049,7 @@ class PurityChecks:
         #: findings are said or dropped (`reads_as_changing`).
         self._changed_in_source: dict[str, frozenset[str]] = {}
 
-    def warn_shared_result(self, func, func_name: str, result, args, kwargs) -> str | None:
+    def warn_shared_result(self, func, func_name: str, result, args, kwargs, held: bool | None = None) -> str | None:
         """Say so when the result shares state with something the caller holds.
 
         A hit hands back a value rebuilt from the stored bytes, so what the
@@ -883,12 +1067,14 @@ class PurityChecks:
         returned for the entry to keep, so a hit in another process says
         them too. Every store is looked at (the walks are capped), so each
         entry carries the words of what it shares, or none; the warning is
-        said once per function.
+        said once per function. *held*: whether anything but the call held
+        the result as the body returned it (`call_state.result_held`), None
+        when that is not known.
         """
         if self._registry.purity_mode(func_name) == "silent":
             return None
         try:
-            shared = self._shared_with(result, args, kwargs, func)
+            shared = self._shared_with(result, args, kwargs, func, held)
         except Exception:  # noqa: BLE001 - a diagnostic must never break a call
             return None
         if shared is None:
@@ -958,16 +1144,23 @@ class PurityChecks:
             ),
         )
 
-    def _shared_with(self, result, args, kwargs, func) -> tuple[str, str, str] | None:
+    def _shared_with(self, result, args, kwargs, func, held: bool | None = None) -> tuple[str, str, str] | None:
         """``(what, name, keeper)`` for the first sharing found in *result*,
-        or None. *keeper* is who still holds the shared object."""
+        or None. *keeper* is who still holds the shared object. *held*:
+        whether something outside the call held *result* itself when the
+        body returned it (None: not known, taken as held)."""
+        supplied = _supplied(func, args, kwargs)
+        found = self._shared_by_name(result, supplied, func)
+        if found is not None:
+            return found
+        # Last: an object found above (the argument itself, a global) is
+        # named as that, and a result that comes back as itself was let
+        # through there.
+        return _shared_argument_item(result, supplied, held)
 
-        try:
-            names = list(inspect.signature(func).parameters)
-        except (TypeError, ValueError):
-            names = []
-        supplied = [(names[i] if i < len(names) else f"arg{i}", value) for i, value in enumerate(args)]
-        supplied += list(kwargs.items())
+    def _shared_by_name(self, result, supplied, func) -> tuple[str, str, str] | None:
+        """`_shared_with` for what has a name: an argument, an attribute
+        of one, and what the function reaches by name."""
         caller = "the caller"
 
         held_arrays: list | None = None

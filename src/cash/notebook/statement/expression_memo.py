@@ -39,6 +39,7 @@ from typing import Any
 from cash._user_attrs import attribute_or, has_attribute, instance_of
 from cash.analysis.ast_util import copy_tree
 
+from ...loaded_modules import loaded_module
 from ..shared_objects import output_history
 
 __all__ = ["ExpressionMemo", "MEMO_NAME_PREFIX"]
@@ -106,7 +107,7 @@ def _holds_only_immutables(value: Any) -> bool:
         return False
     if not parts:
         return True
-    pandas = sys.modules.get("pandas")
+    pandas = loaded_module("pandas")
     if pandas is None:
         return False
     try:
@@ -123,7 +124,7 @@ def _holds_only_immutables(value: Any) -> bool:
 def _arrays(value: Any) -> list[Any] | None:
     """The numpy arrays holding *value*'s data, or None when they cannot
     be listed."""
-    numpy = sys.modules.get("numpy")
+    numpy = loaded_module("numpy")
     if numpy is None:
         return None
     if isinstance(value, numpy.ndarray):

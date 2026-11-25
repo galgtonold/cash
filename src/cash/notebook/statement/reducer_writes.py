@@ -59,6 +59,7 @@ from cash.analysis.callee_effects import (
     source_global_rebinds,
 )
 from cash.analysis.mutations import MutationVisitor
+from cash.builtin_calls import CHANGE_NOTHING_HANDED, HOLD_NOTHING_HANDED
 from cash.install_paths import is_user_code_module
 from cash.kept_state import next_mark, set_reducer_veto, user_state_runs, user_state_types_since, users_function
 from cash.source_reading import getsourcelines
@@ -66,6 +67,7 @@ from cash.source_reading import getsourcelines
 from ... import _weak
 from ..._type_memo import class_dict
 from ..._user_attrs import static_attr
+from ...loaded_modules import loaded_module
 
 __all__ = ["Writer", "reach", "refused_since", "refuses", "runs_now", "unwatch", "watch", "writers", "writes_into"]
 
@@ -514,60 +516,9 @@ def _sets_only_attributes(body: ast.AST, param: str) -> bool:
     return True
 
 
-#: Builtins that read what they are handed and change none of it.
-_READS_ONLY = frozenset(
-    {
-        "len",
-        "isinstance",
-        "issubclass",
-        "type",
-        "id",
-        "hash",
-        "repr",
-        "str",
-        "int",
-        "float",
-        "bool",
-        "bytes",
-        "tuple",
-        "list",
-        "dict",
-        "set",
-        "frozenset",
-        "sorted",
-        "sum",
-        "min",
-        "max",
-        "any",
-        "all",
-        "getattr",
-        "hasattr",
-        "vars",
-        "abs",
-        "round",
-        "enumerate",
-        "zip",
-        "range",
-        "print",
-        "format",
-        "map",
-        "filter",
-        "iter",
-        "reversed",
-        "callable",
-        "ord",
-        "chr",
-        "ascii",
-        "bin",
-        "hex",
-        "oct",
-        "divmod",
-        "pow",
-        "complex",
-        "slice",
-        "bytearray",
-    }
-)
+#: Builtins that change nothing they are handed and hand back no part of it
+#: to change it through (``getattr(G, 'append')``, ``vars(G)``).
+_READS_ONLY = CHANGE_NOTHING_HANDED
 
 #: Modules whose functions read what they are handed and change none of it
 #: (``itertools.chain(LST)``, ``math.fsum(XS)``).
@@ -802,9 +753,7 @@ def _names(target: ast.AST) -> list[str]:
 
 
 #: Calls whose result holds nothing of what they are handed.
-_HOLDS_NOTHING_OF_IT = frozenset(
-    {"len", "str", "int", "float", "bool", "repr", "hash", "id", "abs", "round", "format", "isinstance", "callable"}
-)
+_HOLDS_NOTHING_OF_IT = HOLD_NOTHING_HANDED
 
 
 def _globals_read(
@@ -1030,7 +979,7 @@ def _holds_atoms_only(g: Mapping[str, Any], name: str) -> bool:
 
 def _is_numpy_array(callee: Any) -> bool:
     """Is *callee* ``numpy.array``, which copies what it is handed?"""
-    np = sys.modules.get("numpy")
+    np = loaded_module("numpy")
     return np is not None and callee is attribute_or(np, "array", None)
 
 
@@ -1045,7 +994,7 @@ def _never_changed(value: Any) -> bool:
         return True
     if type(value) in (tuple, frozenset):
         return len(value) <= 64 and all(_never_changed(item) for item in value)
-    np = sys.modules.get("numpy")
+    np = loaded_module("numpy")
     return np is not None and isinstance(value, np.generic) and type(value) is not np.void
 
 

@@ -30,7 +30,7 @@ section when a cell does something you did not expect.
 
 This is the one home for randomness in notebooks; other pages link here.
 
-<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @14702bda, cash/tracking/randomness/state.py:restore_rng_state @e78610bb, cash/tracking/randomness/state.py:capture_rng_state @6e1e1f8a, cash/notebook/statement/carrier_advances.py:advance_carriers @98d0397f -->
+<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @14702bda, cash/tracking/randomness/state.py:restore_rng_state @e78610bb, cash/tracking/randomness/state.py:capture_rng_state @cdfa39c0, cash/notebook/statement/carrier_advances.py:advance_carriers @98d0397f -->
 **Symptom:** re-running a cell returns the same random numbers.
 
 An unseeded draw is cached like any other value, so a re-run shows the stored
@@ -75,7 +75,7 @@ its closure (`arr = make_data()`). A draw from the global `random`,
 `np.random` or torch stream inside a helper is flagged once the statement has
 run, by comparing the streams.
 
-<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @6e1e1f8a, cash/notebook/statement/carrier_advances.py:advance_carriers @98d0397f, cash/tracking/randomness/lineage.py:advanced_carrier_lineage @eaa66fca, cash/notebook/upstream/statement_lineage.py:StatementLineage._recorded_draws @3b7507d9, cash/notebook/upstream/statement_lineage.py:StatementLineage._reachable_generators @bb6221ba -->
+<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @cdfa39c0, cash/notebook/statement/carrier_advances.py:advance_carriers @98d0397f, cash/tracking/randomness/lineage.py:advanced_carrier_lineage @eaa66fca, cash/notebook/upstream/statement_lineage.py:StatementLineage._recorded_draws @3b7507d9, cash/notebook/upstream/statement_lineage.py:StatementLineage._reachable_generators @bb6221ba -->
 A statement that draws from a generator held in a variable, or calls a function
 that does (also one the generator is handed to, as in `paths =
 simulate(n, rng)`), counts as changing that variable. It is stored like any
@@ -110,7 +110,11 @@ isolated re-run:
 <!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._warn_not_restored @b1e4daf3 -->
 A global stream (`np.random`, `random`, `torch`) is put where a run from the
 top has it before a cell draws: by a position cash recorded, by the position
-a restored result left, or by running a bare `seed(...)` call again. When the
+a restored result left, or by running a bare `seed(...)` call again. A call
+of a function of yours that only seeds (`set_seed(5)`) counts as a bare seed:
+its body may hold seed calls, calls of other such functions, imports,
+settings written onto a module (`os.environ["PYTHONHASHSEED"] = str(s)`) and
+`if` around these, and it has no decorator. When the
 statement above that last moved the stream also does other work, cash does
 not run it again for the stream alone. The draw then starts from where the
 stream stands, and cash warns
@@ -279,6 +283,16 @@ A function that changes a global of your notebook (`LOG.append(v)`,
 statement calling it runs every time so the change really happens, while the
 call inside it is served from the cache together with its effect on the
 global. Nothing to do.
+
+<!-- claim: cash/notebook/effects_record.py:EffectsRecord.changed @a4c3936b, cash/notebook/effects_record.py:RUNS_KEPT == 16 -->
+The same holds after a kernel restart when you run only a cell below: the
+statements that change the global run again first, so the cell sees what a
+run from the top gives it. That includes a change made through a variable
+that holds the function (`add = LOG.append` then `add(v)`, a
+`functools.partial`, a closure a factory returned such as `inc = make()`):
+cash keeps, for each statement, which variables a run of it changed, for
+its last 16 runs with different inputs. A statement edited to such a call
+and not run before the restart has no such record: run the notebook once.
 
 A change to a variable inside one of your modules that the notebook does not
 import is not seen: a function that imports the module itself and writes to it
@@ -939,7 +953,9 @@ cash watches file reads from `import cash` on. A memoised loader that first
 ran before that (it was imported, and called, ahead of `cash`) read the file
 where cash could not see it, so later calls get the memo and record no file.
 A loader first called after `import cash` is recorded, even when that call
-came from outside any cached function.
+came from outside any cached function. A function that reads thousands of
+files outside cached calls is remembered only up to a limit; past it, see
+[KEY-READS-NOT-KEPT](warnings.md#key-reads-not-kept).
 
 <!-- claim: cash/tracking/memos_before_import.py:find_memos_filled_before_import @e09c920f -->
 At `import cash`, cash names each memo of yours (`lru_cache`, `cache`)
@@ -1199,6 +1215,15 @@ default argument or base class does. **Fix:** move the binding above this cell.
 
 ## Others
 
+- **A NumPy array's read-only flag is not part of its key.** An array and a
+  read-only array of the same values, dtype, shape and memory order share an
+  entry, so a function that returns `a.flags.writeable`, or that writes into
+  its argument where plain Python would raise, can be served the other
+  array's result. The flag belongs to the view, not to the values: a copy or
+  a pickle of a read-only array is writable, and under pandas' copy-on-write
+  the array taken out of a table is read-only or not depending on how the
+  table keeps its columns. Keyed, equal data would miss on it. A result that
+  is a read-only array is stored and handed back read-only.
 - **An empty cached value** (an empty list or frame) may be computed again
   instead of restored.
 - **A pandas table served from memory is read-only past pandas.** Under

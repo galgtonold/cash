@@ -12,7 +12,6 @@ import functools
 import inspect
 import logging
 import os
-import sys
 import types
 import weakref
 from collections.abc import Callable
@@ -82,6 +81,7 @@ from .exceptions import (
     CashImpureFunctionError,
 )
 from .graph import DependencyGraph
+from .loaded_modules import loaded_module
 from .reconfigure import apply_overrides
 from .tracking.file_tracker import install_read_watch
 from .tracking.process_registries import register_atexit
@@ -106,7 +106,7 @@ def get_ipython():
     consulted first, so a plain script never imports IPython at all. Inside a
     notebook IPython is already imported, so the lookup is free.
     """
-    ipython_module = sys.modules.get("IPython")
+    ipython_module = loaded_module("IPython")
     if ipython_module is None:
         # Not already imported. In a notebook it always is, so reaching here
         # means we are not in one -- do not pay the import to find that out.

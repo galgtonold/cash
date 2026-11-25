@@ -47,6 +47,7 @@ from cash.tracking.tracker_context import active_tracker
 from cash.value_hash import compute_hash, is_identity_fallback_hash
 
 from .. import _weak
+from ..loaded_modules import loaded_module
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +147,7 @@ def _displays_counted():
     and the count stays 0. Cash's own progress badge, published by cash code
     while a long call runs, is not the call's and is not counted."""
     displays = [0]
-    ipython = sys.modules.get("IPython")
+    ipython = loaded_module("IPython")
     shell = ipython.get_ipython() if ipython is not None else None
     pub = attribute_or(shell, "display_pub", None)
     own = attribute_or(pub, "__dict__", None)
@@ -224,7 +225,8 @@ def replay_deps(metadata: Mapping[str, Any]) -> frozenset[str]:
             if isinstance(recorded, dict) and recorded.get("remote"):
                 declared.add(path)
                 if tracker is not None:
-                    tracker.add_tracked_remote(path)
+                    # Under the token the entry was just found fresh by.
+                    tracker.add_tracked_remote(path, recorded.get("hash"))
             else:
                 # The file THIS process reads, as the decorator replays it.
                 local = dep_path_for_this_process(path, recorded)

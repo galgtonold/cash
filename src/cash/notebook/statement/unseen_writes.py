@@ -33,6 +33,8 @@ import weakref
 from collections.abc import Callable, Collection, Iterable, Mapping
 from typing import Any
 
+from cash.builtin_calls import NO_EFFECT
+
 from ... import _weak
 from ..._type_memo import class_name
 from ..._user_attrs import attribute_or, from_family, has_attribute, instance_of, own_dict, static_attr
@@ -41,6 +43,7 @@ from ...analysis.callee_effects import free_vars_mutated_in_function, scope_loca
 from ...analysis.mutations import MUTATING_METHODS
 from ...exceptions import SOURCE_RETRIEVAL_ERRORS
 from ...install_paths import is_user_code_file
+from ...loaded_modules import loaded_module
 from ...source_reading import getsource
 from ...tracking import process_registries
 
@@ -604,10 +607,10 @@ def _array_kind(kind: type) -> str | None:
     ``"extension"`` for *kind*, a subclass of the user's included (``class
     S(pd.Series)``, a masked array); None for anything else. Asked only of
     numpy and pandas as they are loaded."""
-    np = sys.modules.get("numpy")
+    np = loaded_module("numpy")
     if np is not None and issubclass(kind, np.ndarray):
         return "ndarray"
-    pd = sys.modules.get("pandas")
+    pd = loaded_module("pandas")
     if pd is None or not has_attribute(pd, "Series"):
         return None
     if issubclass(kind, pd.DataFrame):
@@ -900,14 +903,7 @@ def own_writes(code: types.CodeType) -> frozenset[str]:
 #: the only calls code read off its bytecode may make. Any other name is a
 #: global or a closure variable, which may hold a stream that ``list`` or a
 #: ``for`` draws from.
-_PURE_BUILTINS = frozenset(
-    {
-        "abs", "all", "any", "ascii", "bin", "bool", "bytes", "callable", "chr", "complex", "dict", "divmod",
-        "enumerate", "filter", "float", "format", "frozenset", "hash", "hex", "id", "int", "isinstance",
-        "issubclass", "iter", "len", "list", "map", "max", "min", "oct", "ord", "pow", "range", "repr",
-        "reversed", "round", "set", "slice", "sorted", "str", "sum", "tuple", "type", "zip",
-    }
-)  # fmt: skip
+_PURE_BUILTINS = NO_EFFECT
 _STORES = frozenset({"STORE_GLOBAL", "DELETE_GLOBAL", "STORE_DEREF", "DELETE_DEREF"})
 #: An object changed in place: on which object, the bytecode alone does not
 #: say plainly.

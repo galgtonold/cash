@@ -53,6 +53,7 @@ from .._memo import CODE_OBJECTS, LruMemo
 from .._plain_data import whole_tree_facts
 from .._type_memo import class_bases, class_dict, class_flags, class_module, class_mro, class_name, per_mro, per_type
 from ..install_paths import is_user_code_module
+from ..loaded_modules import loaded_module
 from ..tracking import io_watch
 from ..tracking.function_tracker import is_local_module
 from ..value_types import LEAF_TYPES, library_scalar_types
@@ -957,7 +958,7 @@ def _infrastructure() -> list[Any]:
     found = [
         stream for stream in (sys.stdout, sys.stderr, sys.stdin, sys.__stdout__, sys.__stderr__) if stream is not None
     ]
-    shell_module = sys.modules.get("IPython.core.interactiveshell")
+    shell_module = loaded_module("IPython.core.interactiveshell")
     shell_class = attribute_or(shell_module, "InteractiveShell", None)
     shell = attribute_or(shell_class, "_instance", None)
     if shell is not None:

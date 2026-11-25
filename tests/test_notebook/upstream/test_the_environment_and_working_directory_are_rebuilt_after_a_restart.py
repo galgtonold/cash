@@ -116,6 +116,53 @@ def test_an_environment_variable_set_above_is_set_again(cash_magics, clean_backe
     assert cash_magics.shell.user_ns["x"] == "b"
 
 
+def test_a_variable_deleted_above_is_deleted_again(cash_magics, clean_backend, stores_everything, workdir):
+    """``del os.environ[...]`` binds no name and is no call: the rebuild
+    looked for the statements that changed the process among those the
+    simulation kept, and it was not one of them."""
+    _, name = workdir
+    cells = [
+        cell.format(m=name, v=VAR)
+        for cell in [
+            "import os\nimport {m}",
+            "os.environ[{v!r}] = 'b'",
+            "del os.environ[{v!r}]\ny = 1",
+            "x = {m}.mode()",
+        ]
+    ]
+    _run_above_then_restart(cash_magics, workdir, cells)
+
+    run_cash_cell(cash_magics, cells[-1], cells=cells)
+
+    assert VAR not in os.environ
+    assert cash_magics.shell.user_ns["x"] == "unset"
+
+
+def test_a_setting_assigned_on_what_a_call_returns_is_made_again(
+    cash_magics, clean_backend, stores_everything, workdir
+):
+    """``logging.getLogger(name).disabled = True`` assigns an attribute of
+    what a call returns: no name is bound, and the statement is no call."""
+    import logging
+
+    logger_name = f"zz.settings.{workdir[1]}"
+    cells = [
+        "import logging",
+        f"logging.getLogger({logger_name!r}).disabled = True",
+        "y = 1",
+        f"x = logging.getLogger({logger_name!r}).disabled",
+    ]
+    try:
+        _run_above_then_restart(cash_magics, workdir, cells)
+        logging.getLogger(logger_name).disabled = False  # as a new process starts
+
+        run_cash_cell(cash_magics, cells[-1], cells=cells)
+
+        assert cash_magics.shell.user_ns["x"] is True
+    finally:
+        logging.Logger.manager.loggerDict.pop(logger_name, None)
+
+
 DIRECTORY = {
     "written_in_the_cell": ["import os\nimport {m}", "os.chdir({sub!r})"],
     "a_module_helper": ["import os\nimport {m}", "{m}.go({sub!r})"],

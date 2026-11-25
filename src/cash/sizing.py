@@ -38,6 +38,7 @@ from ._user_attrs import (
     own_dict,
 )
 from .live_state import is_live_stream
+from .loaded_modules import loaded_module
 from .value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, PLAIN_SEQS, library_scalar_types
 
 logger = logging.getLogger(__name__)
@@ -174,8 +175,8 @@ def _arrow_backing(values: Any) -> Any:
     """The ``pa.ChunkedArray`` a pandas Arrow-backed array (``ArrowDtype``,
     ``string[pyarrow]``) keeps its values in; None for any other array, or
     a subclass with an ``nbytes`` of its own."""
-    arrow = sys.modules.get("pandas.core.arrays.arrow.array")
-    pa = sys.modules.get("pyarrow")
+    arrow = loaded_module("pandas.core.arrays.arrow.array")
+    pa = loaded_module("pyarrow")
     base = getattr(arrow, "ArrowExtensionArray", None)
     if base is None or pa is None or not isinstance(values, base):
         return None
@@ -623,7 +624,7 @@ def _data_size(obj: Any, _seen: set[int] | None = None) -> int | None:
         return _est_sparse_csr_csc(obj)
     if type_name in _SPARSE_COO_TYPES and from_family(kind, "scipy.sparse"):
         return _est_sparse_coo(obj)
-    if type_name == "ChunkedArray" and kind is getattr(sys.modules.get("pyarrow"), "ChunkedArray", None):
+    if type_name == "ChunkedArray" and kind is getattr(loaded_module("pyarrow"), "ChunkedArray", None):
         return chunked_nbytes(obj)
     # Through Python's generic lookup where the class has a lookup of its
     # own: a ``__getattribute__`` of the user's was run for every value a

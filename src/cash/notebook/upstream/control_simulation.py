@@ -26,7 +26,7 @@ from ...tracking.randomness import hidden_lineage_writes
 from ..cache_key import statement_source_hash
 from ..callee_reach import module_state_names
 from ..control_structures import extract_target_names, get_control_structure_type
-from ..lineage_formula import UNSEEDED, output_lineage
+from ..lineage_formula import UNSEEDED, key_hidden_reads, output_lineage, take_rng_reads_at_last_draw
 from ..loop_split import split_nodes
 from ..run_memo import file_component_this_run, stat_keys_this_run
 from ..statement.derivation_edges import bump_derived_lineages
@@ -235,6 +235,7 @@ class ControlSimulation:
 
         inputs, input_hashes = self._input_hashes(stmt_code, virtual_lineage)
         unseeded_before = _unseeded_streams_it_spells_seeds_of(stmt_code, virtual_lineage)
+        rng_reads = self._rng_reads(stmt_code, virtual_lineage)
 
         # The edges a run with these inputs linked: one of the same text
         # elsewhere may have linked others.
@@ -344,6 +345,7 @@ class ControlSimulation:
                     produced_lineages,
                     files_stale,
                     stored_lineages=_stored_for(produced_lineages, stored_lineages),
+                    rng_reads=rng_reads,
                 )
             )
             if lookup_time > 0:
@@ -353,8 +355,23 @@ class ControlSimulation:
             # no trace entry, and a replay after a restart re-ran the cell's
             # ``PACK.mkdir()`` without it.
             # The same rule simple statements follow in simulate_one_node.
-            sim.trace.append(TraceEntry(stmt_code, set(), inputs, input_hashes, {}, files_stale))
+            sim.trace.append(TraceEntry(stmt_code, set(), inputs, input_hashes, {}, files_stale, rng_reads=rng_reads))
         return _absolute_only(files)
+
+    def _rng_reads(self, stmt_code: str, virtual_lineage: dict[str, str]) -> dict[str, str | None] | None:
+        """The lineage each global stream *stmt_code* draws from has as the
+        structure is entered, read as a plain statement's is
+        (``VirtualLineage._simulate_one_node``): what the upstream check
+        puts the stream back to before it runs the structure again."""
+        try:
+            hidden_reads = key_hidden_reads(stmt_code, self.tracking_state)
+        except (SyntaxError, ValueError, TypeError, RecursionError):  # pragma: no cover - defensive
+            return None
+        if not hidden_reads:
+            return None
+        take_rng_reads_at_last_draw(self.tracking_state, stmt_code, hidden_reads, virtual_lineage)
+        live = self.tracking_state.variable_lineage
+        return {var: virtual_lineage.get(var, live.get(var)) for var in hidden_reads}
 
     def _input_hashes(self, stmt_code: str, virtual_lineage: dict[str, str]) -> tuple[set[str], dict[str, str]]:
         """What *stmt_code* reads, and the lineage each of those names has here."""

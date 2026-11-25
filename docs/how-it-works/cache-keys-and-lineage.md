@@ -40,12 +40,12 @@ value the watchers cannot fully cover is hashed every time.
 
 | Type | Library | What is hashed |
 |------|---------|----------------|
-| `DataFrame`, `Series` | pandas | column and index labels and axis names, dtypes (with a categorical's categories and order), an index's `freq`, `attrs`, and every value: numbers, booleans and dates from their memory, text columns of the Arrow-backed `str` type from their Arrow memory, other Python objects and strings by their pickled form, so `1` and `'1'` differ (a column holding only floats, only bools or only ints as the typed array it converts to; lists and tuples of plain values holding dates, such as `(action, datetime)` records, as their values written out with a tag each) |
+| `DataFrame`, `Series` | pandas | the labels, names and dtype of the column axis and of the row index, each keyed the same way (a `MultiIndex` by its levels and codes, a categorical axis with its categories and order, an axis's `freq`), the column dtypes (with a categorical's categories and order), `attrs`, whether it refuses duplicate labels (`set_flags`), and every value: numbers, booleans and dates from their memory, text columns of the Arrow-backed `str` type from their Arrow memory, other Python objects and strings by their pickled form, so `1` and `'1'` differ (a column holding only floats, only bools or only ints as the typed array it converts to; lists and tuples of plain values holding dates, such as `(action, datetime)` records, as their values written out with a tag each) |
 | `GeoDataFrame`, `GeoSeries` | geopandas | as pandas, with each geometry column by its CRS and every geometry's WKB, and a frame's active geometry column |
 | `ndarray` | numpy | shape, dtype, memory order and every byte; an object array by its items, column by column |
 | `DataFrame`, `Series` | polars | schema and every value, each column from its Arrow memory; an `Object` column by its values' content |
 | `LazyFrame` | polars | the serialised plan, including in-memory data; a plan reading a file holds the path, and the decorator records the files it scans as the call's reads |
-| `Table`, `RecordBatch`, `Array`, `ChunkedArray` | pyarrow | schema or type and every row, each column from its offset; a dictionary column by its values |
+| `Table`, `RecordBatch`, `Array`, `ChunkedArray` | pyarrow | schema or type and every row, each column from its offset; a dictionary column by its dictionary, in its order and with the entries no row uses, and its indices |
 | sparse matrices and arrays | scipy.sparse | type, shape, dtype, format and every array the format stores; a DOK or LIL matrix as the CSR matrix it converts to |
 | `DataFrame`, `Series` | modin | converted to pandas, then hashed as pandas |
 | any collection | dask | the task-graph keys and the schema |
@@ -208,7 +208,7 @@ the chain. You declare no dependencies.
 Files, called functions, local modules, callee globals and the value are left
 out when there are none.
 
-<!-- claim: cash/notebook/lineage_formula.py:def_time_names @e1b4dbfd, cash/notebook/statement/processor.py:StatementProcessor._decide_cacheability @729ea48d -->
+<!-- claim: cash/notebook/lineage_formula.py:def_time_names @e1b4dbfd, cash/notebook/statement/processor.py:StatementProcessor._decide_cacheability @f5ef231b -->
 A function whose body calls a helper defined in a cell below keeps one
 lineage, whether the helper was there when the `def` ran (the next Run All
 of the same kernel) or not (a first Run All, or after a restart): its

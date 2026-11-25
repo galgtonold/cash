@@ -231,6 +231,10 @@ def _unit_class() -> type:
             "surface",
         )
 
+        #: `lib_codes` holds each code's globals, the dicts themselves: not
+        #: listed, so never copied.
+        NESTED = {"attr_params": 2, "attr_targets": 2, "lib_cells": 1, "lib_keys": 1, "line_ran": 1, "sites": 1}
+
         def __init__(self, kind: str) -> None:
             super().__init__(kind)
             #: A traced call whose key holds the classes of module data by
@@ -918,6 +922,11 @@ def _recorder_class() -> type:
             with self._lock:
                 self.active = [u for u in self.active if u is not unit]
                 self.strict = any(u.global_starts is not None for u in self.active)
+            # What the call is judged by from here on: a copy no callback
+            # holds. One that picked *unit* up before it left `active`
+            # (code another thread started) may still write into it, while
+            # this thread reads what the call ran (`Unit.detached`).
+            unit = unit.detached()
             if not self._intact():
                 unit.markers.add("tool_conflict")
             for t in threading.enumerate():
@@ -1299,9 +1308,13 @@ def begin(*, watch_globals: bool = False, surface: bool = False) -> Any:
     return rec.begin("decorator", watch_globals=watch_globals, surface=surface) if rec is not None else None
 
 
-def end(unit: Any) -> None:
+def end(unit: Any) -> Any:
+    """Stop recording *unit*, a traced call's (`begin`). Returns what the
+    call is judged by, which is not *unit*: a copy of it that the
+    recorder's callbacks, on any thread, no longer write to."""
     if unit is not None and _RECORDER is not None:
-        _RECORDER.end(unit)
+        return _RECORDER.end(unit)
+    return unit
 
 
 def active() -> bool:
@@ -2267,7 +2280,10 @@ def import_reads_now(code: types.CodeType, g: Mapping[str, Any]) -> list[tuple[s
     loads ``a.b`` and binds ``a``). Only the code's own instructions: a
     nested function's are its own code."""
     try:
-        ins = list(dis.get_instructions(code))
+        # Without the ``EXTENDED_ARG`` prefixes, as `bytecode.imports_of`
+        # reads an import: past 255 names one stands between an import and
+        # the constants and stores around it.
+        ins = [i for i in dis.get_instructions(code) if i.opname != "EXTENDED_ARG"]
     except Exception:  # noqa: BLE001 - code dis cannot read takes nothing cash can name
         return []
     package = g.get("__package__") or ""

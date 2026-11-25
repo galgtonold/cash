@@ -616,7 +616,9 @@ class CacheRestorer:
             occurrence_index = occurrences.get(stmt_code, 0)
             occurrences[stmt_code] = occurrence_index + 1
 
-            effects, inputs, outputs = self.statements.reads_writes(stmt_code, parse_cached(stmt_code), virtual_modules)
+            effects, inputs, outputs = self.statements.reads_writes(
+                stmt_code, parse_cached(stmt_code), virtual_modules, bound_above=virtual_lineage
+            )
             outputs |= effects.callee_globals
             unresolved = inputs & (broken_vars - resolved_by_cache - needed_first)
             if not unresolved:

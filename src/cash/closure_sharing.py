@@ -37,6 +37,7 @@ from cash.live_state import is_live_stream
 from cash.value_types import IMMUTABLE_LEAF_TYPES, shapely_geometry_types
 
 from ._type_memo import class_dict, class_flags, class_module, class_mro, class_name
+from .loaded_modules import loaded_module
 
 __all__ = ["ClosureCheck", "closure_check_budget", "closures_sharing"]
 
@@ -57,9 +58,9 @@ def _leaves() -> frozenset:
     and not stored."""
     global _WITH_SCALARS
     scalars = numpy_scalar_set()
-    shapely = sys.modules.get("shapely")
+    shapely = loaded_module("shapely")
     if _WITH_SCALARS[0] is not scalars or _WITH_SCALARS[1] is not shapely:
-        numpy = sys.modules.get("numpy")
+        numpy = loaded_module("numpy")
         times = frozenset() if numpy is None else frozenset((numpy.datetime64, numpy.timedelta64))
         _WITH_SCALARS = (scalars, shapely, _LEAVES | scalars | times | shapely_geometry_types())
     return _WITH_SCALARS[2]
@@ -239,13 +240,13 @@ def _pandas_time_kind(kind: type) -> bool:
     as numbers and, for a ``Timestamp``, its ``tzinfo``, read on: nothing
     else of Python's that could hold a function. An object column of a frame
     concatenated from frames with and without times holds one per row."""
-    pandas = sys.modules.get("pandas")
+    pandas = loaded_module("pandas")
     return pandas is not None and (kind is pandas.Timestamp or kind is pandas.Timedelta)
 
 
 def _arrow_array_kind(kind: type) -> bool:
     """Is *kind* an Arrow array or chunked array class?"""
-    pyarrow = sys.modules.get("pyarrow")
+    pyarrow = loaded_module("pyarrow")
     return pyarrow is not None and issubclass(kind, (pyarrow.Array, pyarrow.ChunkedArray))
 
 

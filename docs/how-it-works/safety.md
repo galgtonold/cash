@@ -213,9 +213,14 @@ A bare `model.fit(X, y)` is cached like an assignment of the fitted model; see
 
 ### Side effects
 
-<!-- claim: cash/effects.py:METHOD_VERBS @343aee1e, cash/effects.py:is_open_write_mode @fa37e14b, cash/effects.py:MODULE_CALLS @91df07f5 -->
+<!-- claim: cash/effects.py:METHOD_VERBS @343aee1e, cash/effects.py:is_open_write_mode @fa37e14b, cash/effects.py:MODULE_CALLS @635ceceb -->
 cash spots side effects from the statement's source, without running it. So:
 
+- A call counts under whatever name it was imported: `run(cmd)` after
+  `from subprocess import run`, `sp.check_output(cmd)` after `import
+  subprocess as sp`, `post(url)` after `from requests import post`.
+  `urlopen(Request(url, data=..., method="POST"))` is judged by the request
+  written in it.
 - `open(p, "w")` counts, but `open(p, mode)` does not, because the mode is
   only known at run time (a write it makes is seen as it runs, below).
 - Write methods are matched by name on any object: `obj.save(x)` counts even
@@ -257,6 +262,17 @@ cash spots side effects from the statement's source, without running it. So:
   `with cash.assume_safe():` around either, or `@pure` on the function that
   writes. A waiver on another line, or `@pure` on a function that only made
   an argument, does not.
+<!-- claim: cash/notebook/write_observer.py:_note_effect @dd83f9b8, cash/notebook/write_observer.py:_on_http_send @450d3f8f -->
+- A statement seen starting a program, or sending a request that is not a
+  `GET`, `HEAD` or `OPTIONS`, is not stored either, when your own code did
+  it: a cell or a function of yours calling `subprocess`, `os.system`,
+  `requests`, `urllib3` or `urllib`, however the call is reached
+  (`getattr(sp, "run")(cmd)`, `session.request("POST", url)`,
+  `urlopen(req)` with a request built in another cell). A program or a
+  request a library makes for its own use (`platform.processor()` asking
+  `uname`, a client refreshing its token) is not counted, and neither is a
+  client that does not send through Python's `http.client` (`httpx`,
+  `aiohttp`). The same waivers apply as for a write.
 - A statement that starts worker processes or threads, itself or in a
   function of yours it calls (`ProcessPoolExecutor`, `multiprocessing.Pool`,
   `joblib.Parallel`, `ThreadPool`, `threading.Thread`), is not stored either:
@@ -315,14 +331,14 @@ draws are reproducible and do not warn. A generator object
 (`rng = np.random.default_rng()`) counts as seeded only if it was built with a
 seed; seeding `np.random` says nothing about it.
 
-<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @6e1e1f8a -->
+<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @cdfa39c0 -->
 A draw too cheap to cache is held too when it comes from the `random`,
 `numpy.random` or `torch` module stream: before a re-run, cash rewinds those
 streams to where the cell started, so the draw repeats. cash does not rewind a
 generator held in a variable, so a cheap draw from an unseeded `rng` changes on
 every run.
 
-<!-- claim: cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @0a570907 -->
+<!-- claim: cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @3c947b08 -->
 `# @cash:allow-random` silences the warning and changes nothing else.
 `# @cash:no-cache` on the statement draws fresh on every run, with no warning.
 The badge marks the row `seed`, `random` (a seeded draw) or `unseeded`. A cached fit of an estimator with
@@ -330,7 +346,7 @@ The badge marks the row `seed`, `random` (a seeded draw) or `unseeded`. A cached
 
 ### Values that cannot survive a round trip
 
-<!-- claim: cash/notebook/statement/derivation_edges.py:is_uncacheable_alias @03635f4a, cash/analysis/cacheability_decision.py:identity_coupled_reason @77bfb1cc, cash/notebook/borrowed_memory.py:borrowed_memory_names @d988c657 -->
+<!-- claim: cash/notebook/statement/derivation_edges.py:is_uncacheable_alias @03635f4a, cash/analysis/cacheability_decision.py:identity_coupled_reason @77bfb1cc, cash/notebook/borrowed_memory.py:borrowed_memory_names @ce6d2942 -->
 Three kinds of value are refused after the statement runs, because restoring
 a copy would break them: a view of another variable (a numpy slice, a pandas
 `groupby` object), which would come back detached from its base; a frame or

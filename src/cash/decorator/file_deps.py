@@ -38,7 +38,7 @@ from ..tracking.file_dep_snapshot import (
     walk_dataset_dir,
 )
 from ..tracking.file_tracker import unrecorded_reads, unseen_native_reads
-from ..tracking.read_credit import credited_reads
+from ..tracking.read_credit import IDLE_READS_PER_CODE, credited_reads, reads_not_kept
 from ..tracking.tracker_context import active_tracker
 from .cache_metadata import CacheMetadata
 from .function_identity import CODE_KEYED_STATS, file_stamp
@@ -74,6 +74,7 @@ def snapshot_tracked_deps(tracker: Any, code_module: str | None = None) -> dict[
         if path in read_stats
     }
     stats: dict[str, Any] = {}
+    remote_tokens: dict[str, str] = {}
     deps = snapshot_dependencies(
         tracker.get_accessed_files(),
         tracker.get_accessed_remote_urls(),
@@ -82,11 +83,15 @@ def snapshot_tracked_deps(tracker: Any, code_module: str | None = None) -> dict[
         unresolved=getattr(tracker, "unresolved_files", None),
         present=getattr(tracker, "present_files", None),
         stats=stats,
+        remote_tokens=remote_tokens,
     )
     # The stat each file had as it was snapshotted: the check that no input
     # moved during the call reads it instead of a second stat per file.
     if hasattr(tracker, "snapshot_stats"):
         tracker.snapshot_stats = stats
+    # And the token each remote object had, for the same check.
+    if hasattr(tracker, "snapshot_remote"):
+        tracker.snapshot_remote = remote_tokens
     # A file beside the function's own code is part of this INSTALL, not a
     # fixed location: record where it sits relative to the code, so another
     # install or release checks its own copy.
@@ -144,7 +149,9 @@ def propagate_file_deps_to_active_tracker(metadata: CacheMetadata, func_name: st
             if recorded.get("options"):
                 # The store this entry's read went to, for the outer entry's check.
                 remember_read_options(path, recorded["options"])
-            tracker.add_tracked_remote(path)
+            # Under the token the entry was just found fresh by: an object
+            # replaced from here on moved while the caller ran.
+            tracker.add_tracked_remote(path, recorded.get("hash"))
         elif isinstance(recorded, dict) and recorded.get("absent"):
             # Looked for and missing: still an absence, not a file to stat.
             tracker.add_tracked_absent(dep_path_for_this_process(path, recorded))
@@ -296,7 +303,7 @@ def pass_dynamic_sources_up(sources: list[tuple[Any, str]], resolutions: dict[tu
         elif isinstance(source, RemoteFileDataSource):
             if source.storage_options:
                 remember_read_options(source.url, source.storage_options)
-            tracker.add_tracked_remote(source.url)
+            tracker.add_tracked_remote(source.url, token)
         else:
             add = getattr(tracker, "add_dynamic_source", None)
             if add is not None:
@@ -332,6 +339,12 @@ def _code_of(fn: Any) -> types.CodeType | None:
     ``__code__`` too; that is not code."""
     code = plain_getattr(fn, "__code__", None)
     return code if isinstance(code, types.CodeType) else None
+
+
+def _reader_name(fn: Any) -> str:
+    """How a warning names the helper *fn*."""
+    name = plain_getattr(fn, "__qualname__", None) or plain_getattr(fn, "__name__", None)
+    return name if isinstance(name, str) else "a helper"
 
 
 class FileDeps:
@@ -578,19 +591,54 @@ class FileDeps:
             if code is None or code is own or code in live:
                 continue
             remembered = credited_reads(code)
-            if not remembered or remembered.keys() <= have:
+            # Not all it read is remembered (`read_credit.IDLE_READS_PER_CODE`):
+            # only a path the call was given can still say which file a
+            # memo handed over.
+            partial = reads_not_kept(code)
+            if not partial and (not remembered or remembered.keys() <= have):
                 continue
             if arg_paths is None:
                 arg_paths = argument_paths(args, kwargs)
             # Chosen BEFORE what is already tracked is taken away: `have` grows
             # as files are added, and a remainder that misses the arguments
             # would read as a memo of a fixed file.
-            chosen = (remembered.keys() & arg_paths) or set(remembered)
+            named = remembered.keys() & arg_paths
+            if partial and not named:
+                tracker.unknown_memo_readers.add(_reader_name(fn))
+                continue
+            chosen = named or set(remembered)
             for path in sorted(chosen - have):
                 tracker.add_tracked(path)
                 then = remembered[path]
                 if then is not None and tracker.read_stats.get(path, then) != then:
-                    tracker.stale_memo_reads.add(path)
+                    if partial:
+                        # Read again since, perhaps: past the bound, a later
+                        # read of the file was not recorded.
+                        tracker.unknown_memo_readers.add(_reader_name(fn))
+                    else:
+                        tracker.stale_memo_reads.add(path)
+        self._warn_reads_not_kept(func_name, tracker)
+
+    def _warn_reads_not_kept(self, func_name: str, tracker: Any) -> None:
+        """KEY-READS-NOT-KEPT when a helper the call reaches read more files
+        outside cached calls than cash remembers, and did not read in this
+        call: the call is not stored (`ResultStore` refuses it)."""
+        readers = getattr(tracker, "unknown_memo_readers", None)
+        if not readers:
+            return
+        reader = sorted(readers)[0]
+        self._notices.warn_once(
+            CashCacheIneffectiveWarning,
+            func_name,
+            "reads_not_kept",
+            f"@cash.cache on {func_name}: its helper {reader} read more than {IDLE_READS_PER_CODE} files "
+            f"outside every cached call, more than cash remembers for one function. If {reader} keeps "
+            f"what it read (a memo), this call may have been handed data from a file cash can no longer "
+            f"name, so the result was returned but not cached.",
+            code="KEY-READS-NOT-KEPT",
+            fix=f"pass the path {reader} reads to {func_name} as an argument, or call {reader} only "
+            f"inside cached functions, so each read is recorded with the call that used it.",
+        )
 
     def code_moved_since_keyed(self, func: Callable, func_name: str) -> bool:
         """Did a file this call's code came from change after its key was read?

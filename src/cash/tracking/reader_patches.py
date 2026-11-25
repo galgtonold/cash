@@ -52,6 +52,7 @@ from cash.tracking.tracker_context import active_tracker
 
 from .. import _weak
 from .._user_attrs import plain_getattr
+from ..loaded_modules import loaded_module
 
 __all__ = ["FileDependencyRegistry", "PostImportHook", "file_registry", "install_patches", "remove_patches"]
 
@@ -148,17 +149,65 @@ def _install_wrapper(owner: Any, name: str, original: Any, kind: Any, make: Call
 
     Trackers open and close around every cached call, so a wrapper is built
     once per original and only set again after that.
+
+    A module-level function gets ONE wrapper however many modules expose it
+    (``os.path.getsize`` is ``genericpath.getsize``), named as the original
+    and also set where that name points (``posix.stat`` for ``os.stat``):
+    pickle stores a function by module and name and checks that the name
+    still gives the same object, and a program may hand
+    ``os.path.getsize`` to a process pool while a cached call runs. Two
+    wrappers of one function, or one that is not where its name says,
+    raised ``PicklingError`` there.
     """
-    key = (id(owner), name, kind)
+    in_module = issubclass(type(owner), types.ModuleType)
+    key = (id(original), "", kind) if in_module else (id(owner), name, kind)
     cached = _wrappers.get(key)
     if cached is not None and cached[0] is original:
         wrapper = cached[1]
     else:
         wrapper = make(original)
         _mark_patch(wrapper, original)
+        if in_module:
+            _name_as(wrapper, original)
         _wrappers[key] = (original, wrapper)
     if not _patches.replace(owner, name, wrapper):
         logger.debug("[FILE_TRACKER] Failed to patch %r.%s", owner, name)
+    elif in_module:
+        home = _named_home(original)
+        if home is not None and home[0] is not owner:
+            _patches.replace(home[0], home[1], wrapper)
+
+
+def _name_as(wrapper: Any, original: Any) -> None:
+    """Give *wrapper* the module and name of *original*, as
+    ``functools.wraps`` does; a handler registered without it is named too."""
+    if type(wrapper) is not types.FunctionType:
+        return
+    for attribute in ("__module__", "__name__", "__qualname__"):
+        value = plain_getattr(original, attribute, None)
+        if isinstance(value, str) and plain_getattr(wrapper, attribute, None) != value:
+            try:
+                setattr(wrapper, attribute, value)
+            except (AttributeError, TypeError):
+                pass
+
+
+def _named_home(original: Any) -> tuple[Any, str] | None:
+    """``(module, name)`` where *original*'s own ``__module__`` and
+    ``__qualname__`` point, when that is a library module's attribute
+    holding it."""
+    module_name = plain_getattr(original, "__module__", None)
+    name = plain_getattr(original, "__qualname__", None)
+    if not isinstance(module_name, str) or not isinstance(name, str) or "." in name:
+        return None
+    module = sys.modules.get(module_name)
+    if module is None or not issubclass(type(module), types.ModuleType):
+        return None
+    if module_name == "__main__" or _is_user_module(module):
+        return None  # a stand-in of the user's own: its name there is theirs
+    if plain_getattr(module, "__dict__", {}).get(name) is not original:
+        return None
+    return module, name
 
 
 def _install_module_patches(module_name: str, module_obj: Any) -> None:
@@ -651,7 +700,7 @@ def _patch_thread_pool_submit() -> None:
 
             def run(*args, **kwargs):
                 try:
-                    return context.run(fn, *args, **kwargs)
+                    return context.run(_run_handed_task, fn, args, kwargs)
                 finally:
                     tracker.work_finished(trackers)
 
@@ -799,14 +848,33 @@ _PATH_MACHINERY = frozenset({"os", "posixpath", "ntpath", "genericpath", "pathli
 _NOTEBOOK_STATEMENT_PREFIX = CELL_NAME_PREFIX
 
 
+#: Modules that run a task someone handed them. A probe or metadata call
+#: they make directly IS the task -- ``pool.map(os.path.getsize, files)``,
+#: ``Thread(target=os.path.exists, args=(flag,))`` -- so it counts as asked
+#: by the user's code: in a pool's worker no frame of the user's is on the
+#: stack at all, and an answer nobody recorded is an input no entry checks.
+_TASK_RUNNERS = frozenset(
+    {"multiprocessing.pool", "concurrent.futures.process", "concurrent.futures.thread", "threading"}
+)
+
+
+def _run_handed_task(fn: Callable[..., Any], args: tuple, kwargs: dict) -> Any:
+    """Run the task a pool was handed, from cash's own relay of it. A frame
+    of this function stands for the task runner (`_TASK_RUNNERS`)."""
+    return fn(*args, **kwargs)
+
+
 def _who_asked(frame: Any) -> str:
     """`frame_kind` of the code that made the call *frame* made, looking
     through pathlib and ``os``, which only pass a path question on. A
-    notebook statement is the user's code."""
+    notebook statement is the user's code, and so is a task runner calling
+    the probe as its task (`_TASK_RUNNERS`)."""
     while frame is not None and frame.f_globals.get("__name__") in _PATH_MACHINERY:
         frame = frame.f_back
     if frame is None:
         return "other"
+    if frame.f_code is _run_handed_task.__code__ or frame.f_globals.get("__name__") in _TASK_RUNNERS:
+        return "user"
     filename = frame.f_code.co_filename
     if filename.startswith(_NOTEBOOK_STATEMENT_PREFIX):
         return "user"
@@ -892,6 +960,16 @@ def _storage_options(kwargs: dict[str, Any]) -> dict[str, Any] | None:
         return options
     options = getattr(kwargs.get("filesystem"), "storage_options", None)
     return options if isinstance(options, dict) else None
+
+
+def _remember_options(url: str, kwargs: dict[str, Any]) -> None:
+    """Note the store a reader's call reaches *url* in, before the read is
+    recorded: recording it asks that store for the object's token
+    (`FileAccessTracker.add_tracked_remote`), and so does every later
+    freshness check."""
+    options = _storage_options(kwargs)
+    if options:
+        remember_read_options(url, options)
 
 
 def track_dataset(tracker: Any, target: Any) -> None:
@@ -1006,7 +1084,7 @@ class _WorkerReads:
     """What a task run in a worker process returned, the files it read, and
     the ``dynamic_depends_on=`` sources of the cached calls it made."""
 
-    __slots__ = ("value", "files", "absent", "unresolved", "present", "remote", "dynamic")
+    __slots__ = ("value", "files", "absent", "unresolved", "present", "remote", "dynamic", "remote_as_read")
 
     def __init__(
         self,
@@ -1017,17 +1095,29 @@ class _WorkerReads:
         present: dict[str, str],
         remote: list[str],
         dynamic: tuple[list, dict, list[str]] = ([], {}, []),
+        remote_as_read: dict[str, str] | None = None,
     ) -> None:
         self.value, self.files, self.absent, self.unresolved = value, files, absent, unresolved
         self.present, self.remote = present, remote
         #: ``([(id, source, token)], resolutions, functions whose resolver
         #: failed)``, as the worker's tracker collected them.
         self.dynamic = dynamic
+        #: url -> the token the worker's tracker took before its read.
+        self.remote_as_read = remote_as_read or {}
 
     def __reduce__(self):
         return (
             _WorkerReads,
-            (self.value, self.files, self.absent, self.unresolved, self.present, self.remote, _portable(self.dynamic)),
+            (
+                self.value,
+                self.files,
+                self.absent,
+                self.unresolved,
+                self.present,
+                self.remote,
+                _portable(self.dynamic),
+                self.remote_as_read,
+            ),
         )
 
     def relay_to(self, tracker: Any) -> Any:
@@ -1042,7 +1132,7 @@ class _WorkerReads:
             for path, kind in self.present.items():
                 tracker.add_tracked_present(path, kind)
             for url in self.remote:
-                tracker.add_tracked_remote(url)
+                tracker.add_tracked_remote(url, self.remote_as_read.get(url))
             sources, resolutions, failed = self.dynamic
             if hasattr(tracker, "add_dynamic_source"):
                 for source_id, source, token in sources:
@@ -1116,7 +1206,7 @@ class _ReadsInWorker:
         _hold_for_worker_life()
         tracker = self.tracker_type()
         with tracker:
-            value = self.fn(*args, **kwargs)
+            value = _run_handed_task(self.fn, args, kwargs)
         return _WorkerReads(
             value,
             sorted(tracker.get_accessed_files()),
@@ -1125,6 +1215,7 @@ class _ReadsInWorker:
             dict(tracker.get_present_files()),
             sorted(tracker.get_accessed_remote_urls()),
             _dynamic_of(tracker),
+            dict(getattr(tracker, "remote_as_read", None) or {}),
         )
 
 
@@ -1223,7 +1314,7 @@ def _patch_process_pool_submit() -> None:
     loaded multiprocessing and subprocess, 9-12 ms of every process that
     caches a call, for a pool most of them never make.
     """
-    cf_process = sys.modules.get("concurrent.futures.process")
+    cf_process = loaded_module("concurrent.futures.process")
     if cf_process is not None:
         _patch_attribute(cf_process.ProcessPoolExecutor, "submit", _make_relaying_submit)
     # joblib vendors loky; loky also ships on its own. Only once imported: a
@@ -1251,7 +1342,7 @@ def _patch_multiprocessing_pool() -> None:
     # `multiprocessing.Pool()` imports the module only when called -- inside
     # the cached call, after this ran: the import hook patches it then
     # (`_POOL_MODULES`).
-    module = sys.modules.get("multiprocessing.pool")
+    module = loaded_module("multiprocessing.pool")
     if module is None:
         return
 
@@ -1567,8 +1658,10 @@ class FileDependencyRegistry:
             if isinstance(target, (str, bytes, os.PathLike)):
                 _tracker = active_tracker.get()
                 if _tracker is not None:
-                    track_dataset(_tracker, target)
                     remote = _is_remote_target(target)
+                    if remote:
+                        _remember_options(target, kwargs)
+                    track_dataset(_tracker, target)
                 else:
                     note_untracked_read(target, sys._getframe(1))
             elif isinstance(target, (list, tuple)):
@@ -1577,18 +1670,14 @@ class FileDependencyRegistry:
                 for item in target:
                     if isinstance(item, (str, bytes, os.PathLike)):
                         if _tracker is not None:
+                            if _is_remote_target(item):
+                                remote = True
+                                _remember_options(item, kwargs)
                             track_dataset(_tracker, item)
-                            remote = remote or _is_remote_target(item)
                         else:
                             note_untracked_read(item, sys._getframe(1))
             if not remote:
                 return original_func(*args, **kwargs)
-            options = _storage_options(kwargs)
-            if options:
-                # The freshness check must reach the store this read did.
-                for item in target if isinstance(target, (list, tuple)) else (target,):
-                    if _is_remote_target(item):
-                        remember_read_options(item, options)
             # The fetch of a remote file recorded above is a tracked read --
             # its ETag is checked on every hit -- not a connection the key
             # cannot see, so the effect observer does not report it.

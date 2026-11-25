@@ -19,6 +19,7 @@ from ..analysis.annotations import parse_annotation_line
 from ..analysis.ast_util import walk_tree
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_reading import getsource, getsourcelines
+from ..tracking import process_registries
 from ..tracking.randomness import (
     CashRandomnessWarning,
     RandomnessDetector,
@@ -35,6 +36,7 @@ from ..tracking.randomness import (
     seeded_rng_modules,
     unseeded_streams,
     watch_seeds,
+    watch_seeds_unless_disabled,
 )
 from . import state_memo
 
@@ -321,6 +323,11 @@ def read_seed(value: Any, path: tuple) -> Any:
     return value
 
 
+#: Before a stream's name in the stored marker: it moved once while other
+#: threads ran, and whose draw it was is not settled.
+_MAYBE = "maybe:"
+
+
 def rng_marker_key(func_name: str) -> str:
     """Backend key for the "this function draws" verdict."""
     return f"cash:rngdraw:{func_name}"
@@ -377,7 +384,13 @@ class RngWatch:
         self._self_seeded_fixed: dict[str, set[str]] = {}
         #: Functions whose source carries ``# @cash:allow-random``.
         self._source_allows_random: set[str] = set()
-        watch_seeds()
+        #: Functions whose own source shows a draw from a global stream: a
+        #: stream that moved under one is its own doing, whoever else ran.
+        self._source_draws: set[str] = set()
+        #: func_name -> the global streams that moved under its last
+        #: computed call while other threads ran (`maybe_another_threads`).
+        self._moved_beside_threads: dict[str, set[str]] = {}
+        watch_seeds_unless_disabled()
 
     def fold_rng_epoch(self, func_name: str, state_hash: str) -> str:
         """Fold the current seed epoch into the key, for RNG-drawing functions.
@@ -441,7 +454,10 @@ class RngWatch:
             if isinstance(stored, tuple) and len(stored) == 2 and isinstance(stored[0], dict):
                 stored = stored[1]
             if isinstance(stored, (set, frozenset, list, tuple)):
-                modules = {m for m in stored if isinstance(m, str)}
+                modules = {m for m in stored if isinstance(m, str) and not m.startswith(_MAYBE)}
+                maybe = {m[len(_MAYBE) :] for m in stored if isinstance(m, str) and m.startswith(_MAYBE)}
+                if maybe:
+                    self._moved_beside_threads.setdefault(func_name, maybe)
         except Exception:  # noqa: BLE001 - a marker miss must never break a call
             modules = set()
         if cf is not None:
@@ -458,8 +474,11 @@ class RngWatch:
         without the seed, found nothing (the call that revealed the draw is
         never stored), and so no seeded call ever hit across processes.
         """
+        # And the streams that moved once beside other threads, which the
+        # next computed call settles (`maybe_another_threads`).
+        maybe = {_MAYBE + m for m in self._moved_beside_threads.get(func_name, ())}
         try:
-            self._backend_slot.backend.set(rng_marker_key(func_name), set(modules), {"force_persist": True})
+            self._backend_slot.backend.set(rng_marker_key(func_name), {*modules, *maybe}, {"force_persist": True})
         except Exception:  # noqa: BLE001 - best effort; correctness degrades to today's
             logger.debug("could not persist RNG draw marker for %s", func_name)
 
@@ -479,6 +498,45 @@ class RngWatch:
         except (TypeError, AttributeError):  # pragma: no cover
             return set()
         return {m for m in changed if m in pre_state}
+
+    def maybe_another_threads(self, func_name: str, drew: set[str], threads: Any) -> set[str]:
+        """The streams of *drew* not yet taken as *func_name*'s own draw.
+
+        The global streams are the process's: comparing one around a body
+        also sees the numbers another thread drew meanwhile. Marking the
+        function as drawing on that alone is kept for good, and across
+        processes (`_store_rng_draw_marker`): its key then moves with every
+        draw anyone makes, and RANDOM-UNSEEDED names a function that draws
+        nothing. So the first time a stream the function is not known to
+        draw from moved while a thread that may do the program's work was
+        alive beside the call (*threads*: the call's
+        `process_registries.Snapshot`), the streams are handed back here:
+        not noted as drawn, not warned about, and the call is not stored,
+        since the draw may have been its own. The next computed call that
+        moves a stream it is not known to draw from is taken as drawing, as
+        any is at once when it runs alone; one that moves none starts over.
+        Which it is waits with the marker, so a function called once a
+        process is judged by its second run.
+        """
+        if not drew:
+            if func_name in self._moved_beside_threads:
+                del self._moved_beside_threads[func_name]
+                self._store_rng_draw_marker(func_name, self._load_rng_draw_marker(func_name))
+            return set()
+        if self._registry.cached.get(func_name) is None:
+            return set()
+        unknown = drew - self._load_rng_draw_marker(func_name)
+        if not unknown:
+            return set()
+        if self._moved_beside_threads.pop(func_name, None):
+            return set()  # a second time: `note_draw` stores the marker without it
+        cf = self._registry.cached[func_name]
+        said = cf.allow_random or func_name in self._source_allows_random or func_name in self._source_draws
+        if said or not process_registries.beside_threads(threads):
+            return set()
+        self._moved_beside_threads[func_name] = set(unknown)
+        self._store_rng_draw_marker(func_name, self._load_rng_draw_marker(func_name))
+        return unknown
 
     def note_draw(self, func_name: str, drew: set[str]) -> bool:
         """Record that *func_name* just advanced the global streams *drew*."""
@@ -649,7 +707,7 @@ class RngWatch:
         """
         # A seed the caller sets must be seen from now on (`watch_seeds`), and
         # the module that imports numpy has usually just been imported.
-        watch_seeds()
+        watch_seeds_unless_disabled()
         self.note_self_seeding(func, func_name)
         if allow_random:
             return
@@ -692,6 +750,7 @@ class RngWatch:
         if not unseeded:
             self._warn_unseeded_library_calls(func, func_name, src, first_lineno)
             return
+        self._source_draws.add(func_name)
         # A draw from a global stream that a seed already stands behind is
         # keyed on where that stream stands when the function is called
         # (`fold_rng_epoch`), however long before the decoration it was set.

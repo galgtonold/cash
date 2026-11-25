@@ -111,6 +111,7 @@ from typing import Any
 from .. import _weak
 from .._type_memo import class_dict, class_module, class_mro, class_name, class_qualname
 from .._user_attrs import attribute_or, named_attr, plain_getattr, static_attr
+from ..loaded_modules import loaded_module
 
 __all__ = [
     "KEYED_NAMES",
@@ -563,10 +564,10 @@ _NUMPY_LAST: list[Any] = [_MISSING, ""]
 
 
 def _numpy_state() -> str:
-    np = sys.modules.get("numpy")
+    np = loaded_module("numpy")
     if np is None:
         return "absent"
-    config = sys.modules.get("numpy._core._ufunc_config")
+    config = loaded_module("numpy._core._ufunc_config")
     var = getattr(config, "_extobj_contextvar", None)
     if type(var) is not ContextVar:
         return _numpy_compute(np)
@@ -589,7 +590,7 @@ def _numpy_compute(np: Any) -> str:
 
 
 def _decimal_state() -> str:
-    mod = sys.modules.get("decimal")
+    mod = loaded_module("decimal")
     if mod is None:
         return "absent"
     try:

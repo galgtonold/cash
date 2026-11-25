@@ -10,6 +10,7 @@ reads or writes needs the live namespace and lives in
 from __future__ import annotations
 
 import ast
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from ..effects import Action, EffectKind, classify_call, is_open_write_mode, writes_to_console
@@ -67,9 +68,11 @@ NOTEBOOK_POLICY: dict[EffectKind, Action] = {
 }
 
 
-#: Kinds judged by :meth:`CodeAnalyzer.scan_for_forbidden_functions`, which
-#: resolves a call through what its names are bound to (``from time import time
-#: as now; now()``). The side-effect visitor below reads spelling alone.
+#: Kinds judged by :meth:`CodeAnalyzer.scan_for_forbidden_functions`: what
+#: such a call returns differs from run to run, so its statement's outputs
+#: are keyed by value. The side-effect visitor below judges the other kinds.
+#: Both resolve a call through what its names are bound to (``from time
+#: import time as now; now()``, ``from subprocess import run; run(cmd)``).
 SCANNED_KINDS: frozenset[EffectKind] = frozenset({EffectKind.CLOCK, EffectKind.ENVIRONMENT, EffectKind.INTERACTIVE})
 
 
@@ -447,12 +450,16 @@ class SideEffectVisitor(ast.NodeVisitor):
     """Collects the calls a notebook statement must not be restored past:
     those whose kind :data:`NOTEBOOK_POLICY` refuses."""
 
-    def __init__(self) -> None:
+    def __init__(self, aliases: Mapping[str, str] | None = None) -> None:
         self.effects: list[SideEffectInfo] = []
+        #: What the statement's name chains are bound to, where that is a
+        #: known call under another spelling (`effects.canonical_spellings`):
+        #: ``run(cmd)`` after ``from subprocess import run``.
+        self._aliases = aliases
 
     def visit_Call(self, node: ast.Call) -> None:
         """Detect function/method calls with side effects."""
-        effect = classify_call(node)
+        effect = classify_call(node, None, self._aliases)
         if effect is not None and effect.kind not in SCANNED_KINDS and NOTEBOOK_POLICY[effect.kind] is Action.REFUSE:
             if effect.method:
                 base = get_base_name(node.func.value)  # type: ignore[attr-defined]

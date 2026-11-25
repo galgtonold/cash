@@ -384,6 +384,49 @@ class TestTheHeldTestsRunNightly:
         assert not unmarked, f"these modules shorten a sweep per push but are not marked full_sweep: {unmarked}"
 
 
+class TestTheSelfChecksRunNightly:
+    """``CASH_VERIFY=1`` turns on every memo's check against the slow path
+    (`cash._verify`). No push runs with it (a checked run is several times
+    slower); the nightly self-check job runs the unit suite and the
+    integration core set that way, so a memo that disagrees with the slow
+    path fails a job the morning after."""
+
+    def test_the_nightly_workflow_runs_the_unit_suite_and_the_core_set_checked(self):
+        job = _job(NIGHTLY_YML.read_text(encoding="utf-8"), "self-check")
+        unit = _step_run(job, "Run the unit tests with every self-check on")
+        assert re.search(r"pytest\s+tests/\s", unit), unit
+        ignored = set(re.findall(r"--ignore=tests/([\w\-./]+)", unit))
+        # The work-count tests bound the work a call does; a check adds to it.
+        assert ignored == EXPECTED_EXCLUSIONS | {"test_core/internals", "test_notebook/internals"}, unit
+        assert re.findall(r'-m "([^"]*)"', unit) == ["not perf and not nightly"], unit
+        for narrowing in ("--deselect", " -k ", "::", "--shard"):
+            assert narrowing not in unit, f"the self-check run is narrowed by {narrowing.strip()!r}: {unit}"
+        core = _step_run(job, "Run the integration core set with every self-check on")
+        assert "@tools/test_selection/core_set.txt" in core, core
+        assert job.count('CASH_VERIFY: "1"') == 2, job
+
+    def test_no_push_runs_with_the_self_checks_on(self):
+        assert "CASH_VERIFY:" not in CI_YML.read_text(encoding="utf-8")
+
+    def test_the_switch_covers_every_check(self):
+        """A check added with a switch of its own is asked for through
+        `cash._verify.requested`, or the one switch leaves it off."""
+        src = REPO_ROOT / "src" / "cash"
+        own = set()
+        direct = []
+        for path in src.rglob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            own |= set(re.findall(r'_verify\.requested\("(CASH_[A-Z_]+)"\)', text))
+            direct += [
+                f"{path.relative_to(src)}: {m}"
+                for m in re.findall(r'(?:environ\.get|getenv|_flag)\(\s*"(CASH_\w*VERIFY\w*)"', text)
+                if not m.endswith("_LOG")
+            ]
+        assert {"CASH_HITPATH_VERIFY", "CASH_STATE_MEMO_VERIFY", "CASH_CLASS_MEMO_VERIFY"} <= own, own
+        assert {"CASH_ANALYSIS_MEMO_VERIFY", "CASH_CWATCH_VERIFY"} <= own, own
+        assert not direct, f"read from the environment past cash._verify: {direct}"
+
+
 def _job(text: str, name: str) -> str:
     """The body of the top-level job called *name*, up to the next job."""
     m = re.search(rf"^  {re.escape(name)}:\n(?P<body>(?:(?:    .*|\s*)\n)+)", text + "\n", re.MULTILINE)

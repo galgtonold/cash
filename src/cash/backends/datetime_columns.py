@@ -27,6 +27,8 @@ import sys
 from itertools import repeat
 from typing import Any
 
+from ..loaded_modules import loaded_module
+
 __all__ = ["DATETIME_OBJECTS_MIN_ITEMS", "datetime_objects", "reduce_datetime_objects"]
 
 #: Arrays shorter than this are pickled as before: the columns cost more
@@ -50,7 +52,7 @@ _REDUCE_V4 = operator.methodcaller("__reduce_ex__", 4)
 def _kinds() -> dict[type, int]:
     """Each item type the columns take, and the number it is stored as."""
     kinds = {type(None): _NONE, datetime.datetime: _DATETIME, datetime.date: _DATE}
-    pd = sys.modules.get("pandas")
+    pd = loaded_module("pandas")
     timestamp, nat = getattr(pd, "Timestamp", None), getattr(pd, "NaT", None)
     if isinstance(timestamp, type) and nat is not None:
         kinds[timestamp] = _TIMESTAMP
@@ -63,14 +65,14 @@ def _plain_zone(tz: Any) -> bool:
     object for every item: the standard library's, not a subclass?"""
     if type(tz) is datetime.timezone:
         return True
-    zoneinfo = sys.modules.get("zoneinfo")
+    zoneinfo = loaded_module("zoneinfo")
     return zoneinfo is not None and type(tz) is zoneinfo.ZoneInfo
 
 
 def reduce_datetime_objects(array: Any) -> tuple | None:
     """*array*'s reduce as columns (`datetime_objects`), or None to pickle
     it as before: not an object array of the items the module names."""
-    np = sys.modules.get("numpy")
+    np = loaded_module("numpy")
     try:
         if (
             array.dtype.kind != "O"

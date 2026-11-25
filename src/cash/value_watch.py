@@ -42,11 +42,12 @@ from collections.abc import Callable
 from time import perf_counter
 from typing import Any
 
-from . import _native, _weak, kept_state
+from . import _native, _verify, _weak, kept_state
 from ._native import REASON
 from ._native import cwatch as _cw
 from ._type_memo import class_dict, class_flags, class_module, class_name, class_qualname
 from ._user_attrs import plain_getattr
+from .loaded_modules import loaded_module
 
 __all__ = [
     "KIND_HANDED",
@@ -81,12 +82,12 @@ KIND_HANDED = 4  # a copy the memory tier handed out, unchanged since (handed_co
 KIND_FROZEN = 5  # a frozen=True result passed on as an argument, unchanged since (decorator.frozen)
 
 
-class WatchMismatch(AssertionError):
+class WatchMismatch(_verify.Mismatch):
     """``CASH_CWATCH_VERIFY=1``: a digest the watchers called unchanged is
     not the digest hashing the value again gives."""
 
 
-VERIFY = os.environ.get("CASH_CWATCH_VERIFY", "") not in ("", "0")
+VERIFY = _verify.requested("CASH_CWATCH_VERIFY")
 
 _FIRST = _ARM = _ALREADY = _ARMED = _NEED_TYPE = _KEPT = -1
 if _cw is not None:
@@ -343,7 +344,7 @@ def _anchors() -> tuple:
     ns = plain_getattr(main, "__dict__", None)
     if isinstance(ns, dict) and all(ns is not other for other in found):
         found.append(ns)
-    ipython = sys.modules.get("IPython")
+    ipython = loaded_module("IPython")
     if ipython is not None:
         try:
             shell = ipython.get_ipython()

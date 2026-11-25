@@ -13,7 +13,6 @@ from __future__ import annotations
 import ast
 import logging
 import pickle
-import sys
 import time
 import types
 from collections.abc import Callable, Iterable, Mapping
@@ -59,6 +58,7 @@ from cash.value_hash import known_size
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
 from ..._type_memo import class_name
+from ...loaded_modules import loaded_module
 from ..call_key import TooMuchToLookThrough, holds_a_closure_with_state
 from ..call_refs import DECORATOR_ENTRY, REF_BYTES_FIELD, REFS_FIELD, CallRef
 from ..closed_stream import ClosedStream, stored_form
@@ -688,8 +688,9 @@ class StatementStore:
         reuse_end_stats: bool = False,
         reuse_checked: bool = False,
     ) -> bool:
-        """Did a file the statement read change after it read it, or a
-        folder it listed gain or lose an entry from outside?
+        """Did a file the statement read change after it read it, a remote
+        object it read get replaced, or a folder it listed gain or lose an
+        entry from outside?
 
         The entry's file fingerprints are taken when it is stored, after the
         statement ran: a file another process replaced while it ran would be
@@ -703,7 +704,9 @@ class StatementStore:
         `FileAccessTracker.inputs_changed_since_read`).
         """
         tracker = execution.file_tracker
-        if tracker is None or not (tracker.read_stats or tracker.listed_stats):
+        if tracker is None or not (
+            tracker.read_stats or tracker.listed_stats or attribute_or(tracker, "remote_as_read", None)
+        ):
             return False
         try:
             moved = tracker.inputs_changed_since_read(reuse_end_stats=reuse_end_stats, reuse_checked=reuse_checked)
@@ -1206,7 +1209,7 @@ class StatementStore:
             helper_memos=run.helper_memos,
             holders=run.holders or None,
             holders_moved=True if run.holders and run.moves_holders else None,
-            scalar_identity=scalar_identity() if "pandas" in sys.modules else None,
+            scalar_identity=scalar_identity() if loaded_module("pandas") is not None else None,
             anchors=run.anchors or None,
             restored_into=sorted(run.restored_into & run.outputs) or None,
             bound_copies=sorted(run.bound_copies & run.outputs) or None,

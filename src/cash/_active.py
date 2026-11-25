@@ -15,11 +15,12 @@ from __future__ import annotations
 import contextvars
 import logging
 import os
-import sys
 import threading
 from typing import TYPE_CHECKING, Any
 
 from cash.config.resolve import get_config
+
+from .loaded_modules import loaded_module
 
 if TYPE_CHECKING:
     from cash.config.schema import CashConfig
@@ -183,7 +184,7 @@ def publish_settings(config: CashConfig, names: Any) -> None:
 def _forget_settings() -> None:
     global _inherited
     _inherited = None
-    mp = sys.modules.get("multiprocessing")
+    mp = loaded_module("multiprocessing")
     store = getattr(mp.current_process(), "_config", None) if mp is not None else None
     if isinstance(store, dict):
         with _settings_lock:

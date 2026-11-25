@@ -33,6 +33,7 @@ from typing import Any, NamedTuple
 
 from . import _native, _weak, kept_state
 from ._type_memo import class_name
+from .loaded_modules import loaded_module
 from .value_types import IMMUTABLE_LEAF_TYPES, LEAF_TYPES, PLAIN_SEQS
 
 MAX_LEVELS = 16
@@ -52,7 +53,7 @@ def fake_clock() -> tuple[tuple, dict]:
     an entry with a real one. Reduced as the real class reduces,
     it is keyed as the value it is.
     """
-    mod = sys.modules.get("freezegun.api")
+    mod = loaded_module("freezegun.api")
     if mod is None:
         return (), {}
     known = _FAKE_CLOCK.get(id(mod))
@@ -908,14 +909,14 @@ def numpy_scalar_set() -> frozenset:
     value a key walks, so answered from one comparison when numpy is as
     it was."""
     known = _NUMPY_SCALARS
-    if sys.modules.get("numpy") is known[0]:
+    if loaded_module("numpy") is known[0]:
         return known[2]
     return _numpy_scalars()[2]
 
 
 def _numpy_scalars() -> tuple[Any, tuple, frozenset]:
     global _NUMPY_SCALARS
-    numpy = sys.modules.get("numpy")
+    numpy = loaded_module("numpy")
     if numpy is not _NUMPY_SCALARS[0]:
         found = () if numpy is None else tuple(dict.fromkeys(numpy.dtype(c).type for c in "?bhilqpBHILQPefdFD"))
         _NUMPY_SCALARS = (numpy, found, frozenset(found))

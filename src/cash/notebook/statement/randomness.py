@@ -516,7 +516,7 @@ class StatementRandomness:
             unseeded_calls, _has_seed = check_and_warn_randomness(
                 code,
                 self.detector,
-                suppress_warning=allow_random or skip_cache,
+                suppress_warning=allow_random or skip_cache or self._draws_only_unplaced(code),
             )
             unseeded_calls = list(unseeded_calls)
         except (SyntaxError, ValueError, AttributeError, RecursionError):
@@ -528,6 +528,22 @@ class StatementRandomness:
             except Exception:  # advisory: a scan fault must not break the statement
                 logger.debug("%s Hidden-draw scan failed for statement", _LOG_PROCESSOR, exc_info=True)
         return unseeded_calls
+
+    def _draws_only_unplaced(self, code: str) -> bool:
+        """Whether every global stream *code* spells a draw from is one the
+        upstream check just said it could not put back
+        (``RANDOM-STREAM-UNRESTORED``). The stream was seeded above, by a
+        statement this kernel has not run (after a restart): the draw is not
+        an unseeded one, its value is not stored, and "seed the source" is
+        the wrong advice for it."""
+        unplaced = self.tracking_state.rng_unplaced
+        if not unplaced:
+            return False
+        try:
+            drawn = get_drawing_rng_modules(code)
+        except (SyntaxError, ValueError, AttributeError, RecursionError):
+            return False
+        return bool(drawn) and set(drawn) <= unplaced
 
     def _warn_hidden_unseeded(self, code: str, *, suppress: bool) -> list:
         """RANDOM-UNSEEDED for draws the source scan cannot attribute to a

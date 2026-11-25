@@ -18,10 +18,10 @@ from __future__ import annotations
 
 import ast
 import logging
-import sys
 from typing import TYPE_CHECKING, Any
 
 from ...analysis.ast_util import walk_tree
+from ...loaded_modules import loaded_module
 from ..loop_split import LoopSplitStore, is_split_half, loop_source_hash, store_for_backend
 from .single_unit_policy import has_file_io_calls
 
@@ -56,7 +56,7 @@ def slices_as_it_iterates(iterable: Any) -> bool:
     """
     if type(iterable) in _SLICES_AS_IT_ITERATES:
         return True
-    numpy = sys.modules.get("numpy")
+    numpy = loaded_module("numpy")
     return numpy is not None and type(iterable) is numpy.ndarray and iterable.ndim >= 1
 
 

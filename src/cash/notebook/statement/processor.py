@@ -53,10 +53,13 @@ from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.call_effects import DigestHandoff
 from cash.notebook.compiled_source import register_cell_source
 from cash.notebook.consumables import (
+    LOCK,
     STREAM,
     UNREAD,
     drawn_stream_inputs,
     drawn_stream_inputs_why,
+    effect_calls_on_functions,
+    moved_through_callables,
     with_other_names,
     without_read_handles,
 )
@@ -156,6 +159,7 @@ from ...analysis.annotations import CacheAnnotation
 from ...analysis.ast_util import called_names, handed_names, parse_cached, resolve_dotted_name, walk_tree
 from ...analysis.cacheability import analyze_statement, statement_writes_files
 from ...analysis.cacheability_decision import (
+    analysis_failed,
     cacheability_verdict,
     identity_coupled_reason,
 )
@@ -173,6 +177,7 @@ from ...analysis.namespace_effects import (
     statement_starting_workers,
 )
 from ...analytics import AnalyticsManager
+from ...loaded_modules import loaded_module
 from ...tracking import lookups_seen, process_registries, reference_states
 from ...tracking.env_reads import environment_digests
 from ...tracking.env_reads import recording as recording_env_reads
@@ -263,7 +268,14 @@ from ..shared_objects import (
     walk_budget,
 )
 from ..value_cutoff import LineageAliasStore, ValueLineageLog, use_value_lineage_log
-from ..write_observer import child_works, children_left_running, keeps_a_write, kept_writes, observe_writes
+from ..write_observer import (
+    OBSERVED_EFFECT_REASON,
+    child_works,
+    children_left_running,
+    keeps_a_write,
+    kept_writes,
+    observe_writes,
+)
 from . import hidden_generators, in_place
 from .collect_first import CollectFirstStore
 from .digest_carry import DigestCarry
@@ -339,6 +351,27 @@ _HOLDS_ITEMS = 2000
 _KERNEL_PACKAGES = frozenset({"IPython", "ipykernel"})
 #: How many statements refused for an unseen writer are remembered.
 _UNSEEN_REFUSED_KEPT = 1024
+
+
+def _refuse_unanalysed(run: StatementRun, check: str, exc: BaseException) -> None:
+    """Refuse to store *run*: a *check* that guards its entry raised *exc*.
+    "Could not tell" is not "found nothing": the statement runs every time,
+    and the user is told once (``NOTEBOOK-ANALYSIS-FAILED``)."""
+    run.skip_cache = True
+    run.metrics["uncacheable_reasons"].append(analysis_failed(check, exc))
+
+
+#: The messages `_log_once` has logged at warning level.
+_LOGGED_ONCE: set[str] = set()
+
+
+def _log_once(message: str, code: str) -> None:
+    """Log that a check on *code* raised and what follows is the safe side
+    of it: at warning level the first time for each *message*, at debug
+    level after. Call it from the ``except`` block."""
+    level = logging.DEBUG if message in _LOGGED_ONCE else logging.WARNING
+    _LOGGED_ONCE.add(message)
+    logger.log(level, f"%s {message}", _LOG_PROCESSOR, code[:80], exc_info=True)
 
 
 def _may_hold_memory(value: Any) -> bool:
@@ -1037,6 +1070,9 @@ class StatementProcessor:
         #: cell it watched: ``name -> (id, lineage, fingerprint)``.
         self._as_written_prints: dict[str, tuple[int, str, str]] = {}
         self._key_parts: KeyParts | None = None
+        #: The error of the last statement keyed whose module-state writes
+        #: could not be read (`_record_module_state_writes`), or None.
+        self._module_state_unread: BaseException | None = None
         self._randomness.use_draw_store(ObservedDrawStore(_guard_dir) if _guard_dir else None)
         #: `TrackingState.collect_first`, kept across kernels.
         self._collect_first_store = CollectFirstStore(_guard_dir) if _guard_dir else None
@@ -2357,6 +2393,9 @@ class StatementProcessor:
             run.code, occurrence_index=run.occurrence_index, tree=run.tree
         )
         run.key_parts = self._key_parts
+        if self._module_state_unread is not None:
+            _refuse_unanalysed(run, "tell which modules it sets state on", self._module_state_unread)
+            self._module_state_unread = None
         outputs = set(effects.outputs)
         callee_globals = set(effects.callee_globals)
         run.callee_globals = frozenset(callee_globals)
@@ -2669,6 +2708,42 @@ class StatementProcessor:
             run.skip_cache = True
             run.value_varies = True
             run.drew_from_stream = any(isinstance(self.shell.user_ns.get(name), io.IOBase) for name in drawn)
+            return
+        held = moved_through_callables(run.tree, run.inputs, run.outputs, self.shell.user_ns)
+        if held:
+            # ``w = buf.write`` then ``w('hi')``: the same call as
+            # ``buf.write('hi')``, which the statement's text refuses.
+            streams = [repr(name) for name, kind in held.items() if kind == STREAM]
+            locks = [repr(name) for name, kind in held.items() if kind == LOCK]
+            if streams:
+                run.metrics["uncacheable_reasons"].append(
+                    f"Calls {', '.join(streams)}, which holds an iterator or stream: "
+                    f"a cache hit would not advance it, so the statement runs every time"
+                )
+            if locks:
+                run.metrics["uncacheable_reasons"].append(
+                    f"Calls {', '.join(locks)}, which holds a lock: "
+                    f"a cache hit would not take or release it, so the statement runs every time"
+                )
+            run.skip_cache = True
+            run.value_varies = True
+            return
+        registered = effect_calls_on_functions(run.tree, self.shell.user_ns)
+        if registered:
+            run.metrics["uncacheable_reasons"].append(
+                f"Calls {', '.join(registered)} on a function for its effect: "
+                f"what it changes is kept on the function, which a cache hit would not change, "
+                f"so the statement runs every time"
+            )
+            run.skip_cache = True
+            return
+        deleted = _deleted_names(run.tree)
+        if deleted:
+            run.metrics["uncacheable_reasons"].append(
+                f"Deletes {', '.join(repr(name) for name in deleted)}: "
+                f"a cache hit would leave it bound, so the statement runs every time"
+            )
+            run.skip_cache = True
             return
         drawn = library_streams_read(run.code, self.shell.user_ns)
         if drawn:
@@ -3039,8 +3114,8 @@ class StatementProcessor:
         names = set(run.inputs)
         try:
             names |= called_function_globals(run.inputs, user_ns, variable_lineage=self.tracking_state.variable_lineage)
-        except Exception:
-            logger.debug("%s could not read what %r calls", _LOG_PROCESSOR, run.code[:80], exc_info=True)
+        except Exception as exc:  # noqa: BLE001 - not read: nothing guards its entry, so none is made
+            _refuse_unanalysed(run, "read the globals the functions it calls read", exc)
         held = reference_states.states(names, self.tracking_state.current_session_hashes, known) or {}
         found = dict(held)
         for key, digest in self._freshness.inherited_reference_states(self.tracking_state, run.inputs).items():
@@ -3143,8 +3218,8 @@ class StatementProcessor:
         # it sets state on that its text does not say (`note_module_state`).
         try:
             held = module_globals(run.code, self.shell.user_ns)
-        except Exception:
-            logger.debug("%s could not watch the modules %r reaches", _LOG_PROCESSOR, run.code[:80], exc_info=True)
+        except Exception as exc:  # noqa: BLE001 - not watched: what it sets on a module is not seen
+            _refuse_unanalysed(run, "watch the modules it reaches", exc)
             held = {}
         # pyplot's figures, to see a statement change them through a name
         # cash does not know (`pyplot_state`). Not read for one that already
@@ -3230,6 +3305,7 @@ class StatementProcessor:
                 execution.written_paths = frozenset(written_paths)
                 execution.appended_paths = frozenset(written_paths.appended)
                 execution.unseen_writer = written_paths.unseen
+                execution.observed_effect = written_paths.effect
                 execution.children_running = children_left_running(written_paths)
                 execution.waived_paths = written_paths.waived
                 execution.file_tracker = file_tracker
@@ -3311,6 +3387,18 @@ class StatementProcessor:
             if wrote:
                 run.skip_cache = True
                 run.metrics["uncacheable_reasons"].append(wrote)
+        if (
+            not run.skip_cache
+            and execution.observed_effect is not None
+            and execution.result.success
+            and not attribute_or(run.annotation, "assume_safe", False)
+        ):
+            # ``session.request("POST", url)``, a helper's ``sp.run(cmd)``,
+            # ``urlopen(req)`` with a request built in a cell above: nothing
+            # in the statement's text names the effect, and it was seen.
+            run.skip_cache = True
+            label, what = execution.observed_effect
+            run.metrics["uncacheable_reasons"].append(OBSERVED_EFFECT_REASON.format(what=what, label=label))
         if not run.skip_cache and execution.result.success and not attribute_or(run.annotation, "assume_safe", False):
             workers = self._workers_reason(run)
             if workers:
@@ -3380,8 +3468,8 @@ class StatementProcessor:
             # it ran and the module is loaded.
             try:
                 run.rebound_modules = run.rebound_modules | import_state_writes(run.code, self.shell.user_ns)
-            except Exception:
-                logger.debug("%s could not read what %r's imports set", _LOG_PROCESSOR, run.code[:80], exc_info=True)
+            except Exception as exc:  # noqa: BLE001 - not read: an entry would not bring that state back
+                _refuse_unanalysed(run, "read what its imports set on other modules", exc)
         with self._after_it_ran(run):
             self._forget_file_answers_if_it_wrote(code, execution)
         execution.wall_time = wall_time
@@ -3481,9 +3569,8 @@ class StatementProcessor:
         every time (``# @cash:assume-safe`` caches it anyway)."""
         try:
             started = statement_starting_workers(run.code, self.shell.user_ns, run.tree)
-        except Exception:
-            logger.debug("%s could not read whether %r starts workers", _LOG_PROCESSOR, run.code[:80], exc_info=True)
-            return None
+        except Exception as exc:  # noqa: BLE001 - not told: taken to start them
+            return analysis_failed("tell whether it starts worker processes or threads", exc)
         if not started:
             return None
         return (
@@ -3533,7 +3620,10 @@ class StatementProcessor:
         try:
             before = snapshot(reads.watched, code, self.shell.user_ns)
         except Exception:
-            logger.debug("%s could not watch the reads %r may change", _LOG_PROCESSOR, code[:80], exc_info=True)
+            # Fails safe: a value no write is noted for is taken as changed
+            # from outside the notebook, and the keys that read it move
+            # (`recorded_reads.choose`).
+            _log_once("could not watch the reads %r may change", code)
             before = {}
         try:
             yield
@@ -3541,8 +3631,8 @@ class StatementProcessor:
             if before:
                 try:
                     note_writes(before, code, reads)
-                except Exception:
-                    logger.debug("%s could not note what %r changed", _LOG_PROCESSOR, code[:80], exc_info=True)
+                except Exception:  # fails safe, as above
+                    _log_once("could not note what %r changed", code)
 
     def _finish(self, run: StatementRun, execution: StatementExecution) -> ProcessResult:
         """Record what the executed statement did, and store it."""
@@ -4022,6 +4112,40 @@ class StatementProcessor:
         user_ns = self.shell.user_ns
         return any(_open_stream(user_ns.get(name)) for name in run.outputs)
 
+    def _note_changed_names(self, run: StatementRun, execution: StatementExecution) -> None:
+        """Keep for the upstream simulation the variables *run* changed that
+        its statement's text does not bind (`StatementRecords.note_changed_names`):
+        what the objects it met said (``f(4)`` with ``f`` holding
+        ``lst.append``, a call of a closure that counts), which a
+        simulation after a restart has no object to ask.
+
+        Of a statement the user wrote at cell level: a loop's or a branch's
+        body statements are the structure's, which the simulation reads as
+        one unit from the outcome its run recorded."""
+        if not execution.result.success or run.tree is None or not run.source_hash:
+            return
+        if is_control_body(run.code) or is_one_structure(run.tree) or run.magic_reads is not None:
+            return
+        try:
+            names = set(run.outputs) - {
+                node.id
+                for node in walk_tree(run.tree)
+                if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load)
+            }
+            if not names and run.source_hash not in self.tracking_state.effects_records:
+                return
+            # What the text alone says, as a simulation with no object to
+            # ask reads it: the names it binds, and the inputs the run is
+            # filed under.
+            reads, binds = CodeAnalyzer.analyze_code_block(run.code, tree=run.tree)
+            # ``lst.append(5)``: the simulation takes the receiver of a
+            # bare method call as changed from the text.
+            names -= binds | _bare_call_receivers(run.tree)
+            entry = {name: lineage for name, lineage in run.entry_lineages.items() if name in reads}
+            self._records.note_changed_names(run.source_hash, entry, names)
+        except Exception:  # noqa: BLE001 - best-effort: the simulation reads the text alone
+            logger.debug("%s could not record what %r changed", _LOG_PROCESSOR, run.code[:80], exc_info=True)
+
     def _post_execute(self, run: StatementRun, execution: StatementExecution) -> None:
         """Auto-track imports, capture vars, detect mutations, save to cache, record analytics.
 
@@ -4287,6 +4411,7 @@ class StatementProcessor:
         storage = (saved_metadata.storage if saved_metadata else None) or ()
         self._note_unstored(run, storage, execution.cost or execution.wall_time or 0.0)
         self._note_last_run(run, storage)
+        self._note_changed_names(run, execution)
         self._rebuild_cost.note(
             run.cache_key, run.inputs, run.outputs, execution.store_cost, on_disk=any(s != "RAM" for s in storage)
         )
@@ -5175,7 +5300,7 @@ class StatementProcessor:
         budget. Those it holds only read-only views of are linked one way
         here (`read_only_view_homes`), whether or not the statement is
         stored."""
-        if "numpy" not in sys.modules:
+        if loaded_module("numpy") is None:
             return [], True
         user_ns = self.shell.user_ns
         hidden = attribute_or(self.shell, "user_ns_hidden", None) or {}
@@ -6081,7 +6206,8 @@ class StatementProcessor:
             return False
         try:
             return statement_calls_user_writer(run.code, self.shell.user_ns, run.tree, appends=False) is not None
-        except Exception:  # noqa: BLE001 - unjudged: as before, not recorded
+        except Exception:  # noqa: BLE001 - unjudged: not recorded, so the replay runs it again
+            _log_once("could not tell whether %r writes a file through a function of yours", run.code)
             return False
 
     def _record_file_effects(self, run: StatementRun, execution: StatementExecution) -> None:
@@ -6507,7 +6633,7 @@ class StatementProcessor:
         self._key_parts = KeyParts(frozenset(functions), frozenset(modules), occurrence_index)
 
         self._randomness.record_seeds(code, cache_key)
-        self._record_module_state_writes(code)
+        self._module_state_unread = self._record_module_state_writes(code)
 
         hash_time = _perf_counter() - t2
         return effects, source_hash, cache_key, analysis_time, hash_time
@@ -6534,21 +6660,23 @@ class StatementProcessor:
             occurrence_index=occurrence_index,
         )
 
-    def _record_module_state_writes(self, code: str) -> None:
+    def _record_module_state_writes(self, code: str) -> BaseException | None:
         """Note *code* as a statement that sets state on a local module, so a
         reload of the module knows its state is to be rebuilt
         (``ModuleInvalidator``). Run again, it moves to the end: the order is
-        the one the kernel last ran them in."""
+        the one the kernel last ran them in. Returns the error when the
+        modules could not be told: the statement is then not stored, so a
+        reload has no entry of it to serve in place of the state."""
         try:
             modules = module_state_writes(code, self.shell.user_ns)
-        except Exception:
-            logger.debug("%s could not tell which modules %r sets state on", _LOG_PROCESSOR, code[:80], exc_info=True)
-            return
+        except Exception as exc:  # noqa: BLE001 - handed to the caller, which refuses the store
+            return exc
         for module in modules:
             writers = self.tracking_state.module_state_writers.setdefault(module, [])
             if code in writers:
                 writers.remove(code)
             writers.append(code)
+        return None
 
     def _log_cache_lookup(
         self,
@@ -6592,6 +6720,38 @@ def _open_stream(value: Any) -> bool:
         return not value.closed
     except Exception:  # noqa: BLE001 - a handle that cannot say is taken as open
         return True
+
+
+def _deleted_names(tree: ast.Module | None) -> list[str]:
+    """The names the top-level ``del`` statements of *tree* unbind."""
+    if tree is None:
+        return []
+    return sorted(
+        {
+            target.id
+            for node in tree.body
+            if isinstance(node, ast.Delete)
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        }
+    )
+
+
+def _bare_call_receivers(tree: ast.Module) -> set[str]:
+    """The names the bare method calls of *tree* are made on: ``lst`` in
+    ``lst.append(5)`` and in ``box.items[0].add(x)``."""
+    found: set[str] = set()
+    for node in tree.body:
+        if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
+            continue
+        root = node.value.func
+        if not isinstance(root, ast.Attribute):
+            continue
+        while isinstance(root, (ast.Attribute, ast.Subscript)):
+            root = root.value
+        if isinstance(root, ast.Name):
+            found.add(root.id)
+    return found
 
 
 def _loop_targets(tree: ast.AST | None) -> frozenset[str]:

@@ -60,7 +60,9 @@ storage backends and the effect vocabulary (`effects.py`), not a key builder.
 - **`src/cash/config/`**: the settings. `schema.py` holds `CashConfig` and
   `TierConfig` and what each value may be; `sources.py` reads a config file and
   the `CASH_*` variables; `resolve.py` merges the layers (`get_config`);
-  `template.py` writes the documented config file. Which keys a tier type uses
+  `template.py` writes the documented config file. `env_names.py` lists the
+  `CASH_*` switches that are not settings; a new switch is added there, or a
+  mistyped setting cannot be told from it. Which keys a tier type uses
   is `backends/factory.py`'s `TIER_FIELDS`. Byte sizes (`"2GB"`) are read and
   formatted in `units.py`.
 - **`src/cash/tracking/`** and **`src/cash/analysis/`**, plus `purity.py`,
@@ -162,6 +164,17 @@ statement's occurrence index in the cell.
   receiver, a drained iterator, a view's base) records its verdict for the
   simulation to read back; it never recomputes a source hash or feeds
   `compute_cache_key`.
+
+### Module-level memos in the notebook path
+
+A dict, list, set or memo object kept at the top level of a `cash.notebook`
+module outlives the session that filled it. Each one is listed with its
+scope (`statement`, `cell`, `session`, `process` or `block`) in
+`notebook/memo_lifetimes.py`, and `cash.reset_session()` clears the session's
+through `cash._memo_registry.reset`. A new one gets an entry there
+(`tests/test_notebook/internals/test_memo_lifetimes.py` fails otherwise), and
+may be given a scope a reset clears only if dropping an entry can cost a
+recomputation or a miss and nothing else.
 
 ### Cache metadata
 

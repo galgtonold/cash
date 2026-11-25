@@ -1210,7 +1210,9 @@ class ReexecutionPlanner:
         cannot see it: both imports bind the same lineage.
 
         With *virtual_lineage*, the globals the statement's callees read count
-        as inputs too (``absent_callee_globals``).
+        as inputs too (``absent_callee_globals``), and for a statement that
+        looks names up by a string (``reads_names_unseen``), every variable
+        bound above it.
         """
         user_ns = self.shell.user_ns
         live_lineage = self.tracking_state.variable_lineage
@@ -1221,6 +1223,10 @@ class ReexecutionPlanner:
             inputs = set(simulation_trace[i].inputs or ())
             if virtual_lineage is not None:
                 inputs |= self.callables.absent_callee_globals(inputs, virtual_lineage, virtual_modules or set())
+                if self.callables.reads_names_unseen(simulation_trace[i].stmt_code, inputs, virtual_lineage):
+                    # ``y = eval('K * 10')``: it may read any variable bound
+                    # above it, so each is brought up to date before it runs.
+                    inputs |= {name for q in range(i) for name in simulation_trace[q].outputs}
             for v in sorted(inputs):
                 if v not in user_ns and has_attribute(builtins, v):
                     continue

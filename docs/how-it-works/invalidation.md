@@ -328,7 +328,7 @@ ran runs again too, whatever the cell reads.
 
 ### Finding your notebook
 
-<!-- claim: cash/notebook/server_discovery.py:NotebookCellReaders.read @9011fcb8, cash/notebook/server_discovery.py:get_notebook_path @94e1bc3d, cash/notebook/server_discovery.py:_collect_running_servers @1cd179a1, cash/notebook/server_discovery.py:_search_servers_for_notebook @630038cc -->
+<!-- claim: cash/notebook/server_discovery.py:NotebookCellReaders.read @9011fcb8, cash/notebook/server_discovery.py:get_notebook_path @387d0034, cash/notebook/server_discovery.py:_collect_running_servers @1cd179a1, cash/notebook/server_discovery.py:_search_servers_for_notebook @630038cc -->
 To simulate, cash needs the notebook's current cells. It tries, in order:
 cells pushed by cash's JupyterLab extension before each run, Colab's
 frontend, and VS Code's unsaved-changes backup. All three see edits you have

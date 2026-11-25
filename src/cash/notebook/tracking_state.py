@@ -16,6 +16,7 @@ from cash.notebook.recorded_reads import ReadRecord
 from cash.notebook.value_cutoff import ValueCutoff
 
 if TYPE_CHECKING:
+    from cash.notebook.effects_record import EffectsRecord
     from cash.notebook.restored_var import HeldObject
 
 __all__ = ["ENTRY_HISTORY", "TrackingState", "outcome_key"]
@@ -83,6 +84,14 @@ class TrackingState:
     # W: StatementLineageBuilder, both restorers, the simulator's restore drain.
     # R: UpstreamChecker, the RNG lineage helpers.
     executed_cell_hashes: dict[str, set[str]] = field(default_factory=dict)
+
+    # Variable -> the lineage the upstream check last left it with, by
+    # running a statement of the notebook again or restoring it. While the
+    # variable holds that lineage, its value is one the notebook's own text
+    # gave it, as the notebook was then: never an edit the user ran and did
+    # not save, whatever the notebook holds now.
+    # W: UpstreamChecker. R: MismatchClassifier.
+    rebuilt_by_check: dict[str, str] = field(default_factory=dict)
 
     # Every variable's lineage hash; read it as ``variable_lineage``.
     # W: StatementProcessor, StatementLineageBuilder, the control-structure
@@ -492,7 +501,7 @@ class TrackingState:
 
     # Statement source hash -> what of the process (``callee_reach.ENVIRON``,
     # ``CWD``) the statement changed when it ran, in this kernel or, read
-    # back, an earlier one (``process_state_key``). A restart puts the
+    # back, an earlier one (``statement_effects_key``). A restart puts the
     # environment and the working directory back as the shell started them;
     # the upstream check runs again each statement above the cell that
     # changed them and has not run in this kernel (``process_state_ran``).
@@ -501,6 +510,14 @@ class TrackingState:
     # Source hashes of those that ran in this kernel.
     # W: MutationRouting. R: ReexecutionPlanner.
     process_state_ran: set[str] = field(default_factory=set)
+
+    # Statement source hash -> what its runs were seen to change besides the
+    # names its text binds (``effects_record.EffectsRecord``): of this
+    # kernel's runs, or read back from an earlier kernel's
+    # (``statement_effects_key``). The upstream simulation adds it to what
+    # the statement's text says. W: StatementRecords; StatementLineage (read
+    # back). R: StatementLineage, VirtualLineage.
+    effects_records: dict[str, EffectsRecord] = field(default_factory=dict)
 
     # `outcome_key` (sha256 of ``ast.unparse`` of a top-level
     # if/for/while/with/try, and which copy in its cell it is) ->

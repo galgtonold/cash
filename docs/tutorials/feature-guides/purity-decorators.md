@@ -29,7 +29,7 @@ it is never cached); see the [Notebook guide](../../notebook_caching_api.md#what
 
 ## `@cash.pure`: trust this helper
 
-<!-- claim: cash/purity.py:pure @26a3db86, cash/analysis/purity_analyzer.py:PurityAnalyzer.analyze @16bee3e6 -->
+<!-- claim: cash/purity.py:pure @26a3db86, cash/analysis/purity_analyzer.py:PurityAnalyzer.analyze @6e6ebbd2 -->
 Mark a helper `@cash.pure` when its result depends only on its arguments and it
 has no effect you care about: no writes, no network, no in-place change to its
 arguments. cash then stops reporting it:

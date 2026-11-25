@@ -24,7 +24,7 @@ from typing import Any, NamedTuple, Protocol, runtime_checkable
 from cash._memo import CODE_OBJECTS, NOTEBOOK_STATEMENTS, LruMemo
 from cash._paths import is_pseudo_filename
 from cash._user_attrs import attribute_or, has_attribute, instance_of
-from cash.analysis.bytecode import argvals
+from cash.analysis.bytecode import argvals, imports_of
 from cash.analysis.unloaded_modules import module_file
 from cash.install_paths import is_user_path
 from cash.notebook.lineage_store import resolve_lineage
@@ -175,16 +175,20 @@ def module_state_key(source_hash: str) -> str:
     return "modstate:" + source_hash
 
 
-def process_state_key(source_hash: str) -> str:
-    """Backend key for what of the process (the environment, the working
-    directory) a statement changed when it last ran.
+def statement_effects_key(source_hash: str) -> str:
+    """Backend key for what a statement's runs were seen to change besides
+    the names its text binds (``effects_record.EffectsRecord``): the
+    notebook's variables it changed through what it called, and what of the
+    process (the environment, the working directory, a registry).
 
-    ``TrackingState.process_state_writers`` holds it for the session. After
-    a restart ``setup()`` doing ``os.environ["MODE"] = "b"`` reads as a call
-    of a function not defined yet, and the environment the cell below runs
-    in is the one the shell started the kernel with.
+    ``TrackingState.effects_records`` holds it for the session. After a
+    restart the objects that told the runtime are gone: ``f(4)`` reads as a
+    call of a name bound to nothing, ``setup()`` doing ``os.environ["MODE"]
+    = "b"`` as a call of a function not defined yet, and a cell run alone
+    read the list without the item, in the environment the shell started
+    the kernel with.
     """
-    return "procstate:" + source_hash
+    return "effects:" + source_hash
 
 
 def pyplot_draws_key(source_hash: str) -> str:
@@ -1074,33 +1078,20 @@ _UNKNOWN_PACKAGE = "<unknown package>"
 
 
 def _imports_of(code: types.CodeType, package: str | None | object) -> Iterator[str]:
-    # ``IMPORT_NAME`` takes the level and the fromlist from the two
-    # constants loaded just before it.
-    loaded: list[Any] = []
-    for ins in dis.get_instructions(code):
-        if ins.opname != "IMPORT_NAME":
-            if ins.opname.startswith(("LOAD_CONST", "LOAD_SMALL_INT")):
-                loaded = [*loaded[-1:], ins.argval]
-            else:
-                loaded = []
-            continue
-        level, fromlist = loaded if len(loaded) == 2 else (0, None)
-        name = ins.argval
-        if isinstance(level, int) and level > 0:
+    for level, name, fromlist in imports_of(code):
+        if level > 0:
             if package is _UNREAD_PACKAGE:
                 package = _package_of(code.co_filename)
             if not package:
                 yield _UNKNOWN_PACKAGE
-                loaded = []
                 continue
-            base = package.rsplit(".", level - 1)[0] if level > 1 else package
+            base = package.rsplit(".", level - 1)[0] if level > 1 else package  # type: ignore[union-attr]
             name = f"{base}.{name}" if name else base
         if name:
             yield name
-            for item in fromlist or ():
-                if isinstance(item, str) and item != "*":
+            for item in fromlist:
+                if item != "*":
                     yield f"{name}.{item}"
-        loaded = []
 
 
 _UNREAD_PACKAGE = object()

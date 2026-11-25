@@ -34,6 +34,7 @@ from ..analysis.mutations import repeatable_setting_receiver
 from ..analysis.purity_analyzer import get_analyzer
 from ..code_digest import module_identity
 from ..effects import ENVIRONMENT_TEXT_MARKERS, environment_component, environment_input
+from ..loaded_modules import loaded_module
 from ..source_norm import exact_source_digest, unparse_without_docstrings
 from ..tracking.module_symbols import closure_digest, static_attribute_reads
 from ..tracking.randomness import drawn_rng_vars, hidden_lineage_reads, observed_rng_reads
@@ -61,7 +62,7 @@ def is_cash_instrumentation(val: object) -> bool:
     """
     if attribute_or(val, "_is_file_tracker_patch", False) is True:
         return True
-    shell = sys.modules.get("IPython.core.interactiveshell")
+    shell = loaded_module("IPython.core.interactiveshell")
     return shell is not None and val is attribute_or(shell, "_modified_open", _NO_SHELL_OPEN)
 
 

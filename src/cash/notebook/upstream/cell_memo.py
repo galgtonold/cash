@@ -27,7 +27,6 @@ stands in for, from the same state, and fails when the two differ
 
 from __future__ import annotations
 
-import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -35,6 +34,7 @@ from typing import TYPE_CHECKING, Any
 
 from cash._user_attrs import attribute_or, has_attribute
 
+from ... import _verify
 from ..._type_memo import class_name
 
 if TYPE_CHECKING:
@@ -56,8 +56,9 @@ VERIFY_LOG_ENV = "CASH_VERIFY_INCREMENTAL_SIM_LOG"
 
 
 def verify_requested() -> bool:
-    """Whether ``CASH_VERIFY_INCREMENTAL_SIM`` asks to check each memo used."""
-    return os.environ.get(VERIFY_ENV, "") not in ("", "0")
+    """Whether ``CASH_VERIFY_INCREMENTAL_SIM`` (or ``CASH_VERIFY``) asks to
+    check each memo used."""
+    return _verify.requested(VERIFY_ENV)
 
 
 class RecordingLineage(dict):

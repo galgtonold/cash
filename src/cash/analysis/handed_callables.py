@@ -66,6 +66,7 @@ from .._user_attrs import (
     unwrapped,
 )
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+from ..loaded_modules import loaded_module
 from ..source_reading import own_source, wrapper_layers
 from ..tracking.function_tracker import is_local_module
 from .analysis_budget import check_analysis_budget
@@ -3290,7 +3291,7 @@ def _logging_callbacks(owner: Any, attr: str) -> list[Any]:
     for it."""
     if attr not in _LOGGING_CALLS:
         return []
-    logging_module = sys.modules.get("logging")
+    logging_module = loaded_module("logging")
     if logging_module is None:
         return []
     if owner is logging_module:

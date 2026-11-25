@@ -47,6 +47,7 @@ from cash import kept_state
 from cash._referents import get_referents
 from cash._user_attrs import attribute_or, instance_of
 from cash.analysis.ast_util import walk_tree
+from cash.builtin_calls import CALL_WHAT_THEY_ARE_HANDED, FOLLOW_FROM_ARGUMENTS
 from cash.install_paths import is_user_code_file, is_user_module
 from cash.value_hash import compute_hash
 
@@ -608,11 +609,7 @@ def _fixed(value: Any, depth: int = 3, *, key: bool = False) -> bool:
 
 #: The builtins a pure helper may call: each returns a value made from its
 #: arguments alone, and reads or writes nothing else.
-_PURE_BUILTINS = frozenset(
-    "abs all any bin bool bytes chr complex dict divmod enumerate filter float format frozenset hex int "
-    "isinstance issubclass len list map max min oct ord pow range repr reversed round set slice sorted str "
-    "sum tuple zip".split()
-)
+_PURE_BUILTINS = FOLLOW_FROM_ARGUMENTS
 #: Instructions a pure helper never runs: reading an attribute (a method of
 #: anything, a module's state), writing or deleting a global or an
 #: attribute, importing, or reading a name a class body or exec resolves.
@@ -674,7 +671,7 @@ def _pure(memo: Any) -> bool:
 
 #: The pure builtins that call a function they are given (``map(g, xs)``,
 #: ``sorted(xs, key=g)``): a helper calling one is not called by cash.
-_CALLING_BUILTINS = frozenset(("map", "filter", "sorted", "min", "max"))
+_CALLING_BUILTINS = CALL_WHAT_THEY_ARE_HANDED
 _CALL_OPS = frozenset(("CALL", "CALL_KW", "CALL_FUNCTION_EX"))
 
 

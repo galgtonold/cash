@@ -30,6 +30,7 @@ from . import _weak, kept_state, value_watch
 from ._type_memo import class_name
 from ._user_attrs import instance_of
 from .content_hashers import builtin_hash, builtin_hash_family, is_native_panic
+from .loaded_modules import loaded_module
 from .sizing import pandas_nbytes
 from .stored_pickle import HashBudgetExceeded, run_on, running_on, sized_object_digest, unshared_digest
 
@@ -103,7 +104,7 @@ def _scalar_run_type(obj: Any, types: set[type] | None = None) -> Any:
     types of its items, when known."""
     if (type(obj) is not list and type(obj) is not tuple) or len(obj) < SCALAR_RUN_MIN:
         return None
-    numpy = sys.modules.get("numpy")
+    numpy = loaded_module("numpy")
     if numpy is None:
         return None
     if types is None:

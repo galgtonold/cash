@@ -9,6 +9,7 @@ from collections.abc import Callable
 from typing import Any, NamedTuple
 
 from .._type_memo import class_name
+from ..loaded_modules import loaded_module
 from ..sizing import memory_footprint, pickled_size_estimate
 from . import chunk_store, memory_backend, set_order, write_cost
 from ._base import MEASURED_ROUND_TRIP, CacheBackend, MetadataDict, entry_expired, store_seconds
@@ -425,9 +426,11 @@ class TieredBackend(CacheBackend):
                             # tier may keep it as the copy handed out.
                             holder, value = [value], None
                             try:
-                                keep_read(key, holder, metadata, stream, restore_s)
-                            finally:
+                                value = keep_read(key, holder, metadata, stream, restore_s)
+                            except BaseException:
+                                # Not kept: the holder is still this read's.
                                 value = holder[0]
+                                raise
                             laid_out = True
                             continue
                         self.backends[j].set(key, value, metadata)
@@ -1006,10 +1009,10 @@ def _array_bytes(value: Any, depth: int = 0) -> int:
             return 0
         items = value.values() if kind is dict else value
         return sum(_array_bytes(item, depth + 1) for item in items)
-    numpy = sys.modules.get("numpy")
+    numpy = loaded_module("numpy")
     if numpy is not None and kind is numpy.ndarray:
         return 0 if value.dtype.hasobject else int(value.nbytes)
-    pandas = sys.modules.get("pandas")
+    pandas = loaded_module("pandas")
     if pandas is None or kind not in (pandas.DataFrame, pandas.Series):
         return 0
     arrays = [getattr(block.values, "_ndarray", block.values) for block in value._mgr.blocks]

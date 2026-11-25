@@ -27,6 +27,7 @@ from ..._clock import perf_counter as _perf_counter
 from ...analysis.cacheability_decision import has_missing_lineage
 from ...analysis.code_analyzer import parse_cell_source
 from ...analysis.mutation_effects import statement_effects
+from ...loaded_modules import loaded_module
 from ...tracking.env_reads import environment_unchanged
 from ...tracking.randomness import rng_virtual_var
 from .. import helper_memos
@@ -384,7 +385,7 @@ class PlotRuns:
         if not run.drew or run.refused is not None or not inline_backend_closes_figures():
             logger.debug("%s open at the end of the cell, not kept: %s", _LOG, run.refused or "drew nothing")
             return
-        flush = sys.modules.get("matplotlib_inline.backend_inline")
+        flush = loaded_module("matplotlib_inline.backend_inline")
         flush = attribute_or(flush, "flush_figures", None)
         if flush is None:
             return

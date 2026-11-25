@@ -54,7 +54,7 @@ from cash._user_attrs import attribute_or, has_attribute, instance_of
 
 from .._type_memo import class_dict, class_mro
 from .._user_attrs import static_attr
-from ..analysis.ast_util import walk_tree
+from ..analysis.ast_util import called_names, handed_names, walk_tree
 from ..analysis.mutation_effects import captured_call_receivers
 from ..analysis.mutations import NON_CONSUMING_FUNCS, consumed_input_names
 from .read_handles import is_read_handle, reaches_read_handle
@@ -642,6 +642,106 @@ def is_stream(obj: Any) -> bool:
         return _is_self_iterator(obj) or is_consumable_unrestorable(obj)
     except (TypeError, ValueError, AttributeError, RecursionError):
         return False
+
+
+#: How many objects `moved_through_callables` unwraps from one callable.
+_CALLABLE_PARTS = 32
+
+#: What `moved_through_callables` says a callable holds.
+LOCK = "lock"
+
+
+def _is_lock(obj: Any) -> bool:
+    """Whether *obj* is one of ``threading``'s locks or what is built on one."""
+    import threading
+
+    kinds = (
+        type(threading.Lock()),
+        type(threading.RLock()),
+        threading.Condition,
+        threading.Semaphore,
+        threading.Event,
+    )
+    return isinstance(obj, kinds)
+
+
+def _held_by_callable(value: Any) -> list[Any]:
+    """The objects a call of *value* is made on or hands on without the
+    statement spelling them: the receiver of a bound method (``w =
+    buf.write``), and what a ``functools.partial`` was given (``partial(next,
+    it)``, ``partial(print, file=buf)``), through partials of partials."""
+    import functools
+
+    found: list[Any] = []
+    todo = [value]
+    for _ in range(_CALLABLE_PARTS):
+        if not todo:
+            break
+        fn = todo.pop()
+        if isinstance(fn, functools.partial):
+            todo.append(fn.func)
+            found.extend(fn.args)
+            found.extend(fn.keywords.values())
+        elif isinstance(fn, (types.MethodType, types.BuiltinMethodType, types.MethodWrapperType)):
+            owner = attribute_or(fn, "__self__", None)
+            if owner is not None and not instance_of(owner, types.ModuleType):
+                found.append(owner)
+    return found
+
+
+def moved_through_callables(
+    tree: ast.Module | None,
+    inputs: Iterable[str],
+    outputs: Iterable[str],
+    user_ns: Mapping[str, Any],
+) -> dict[str, str]:
+    """The names *tree* calls, or hands to a call, that hold a callable
+    whose call moves something a cache hit could not move: `STREAM` for a
+    bound method of an iterator or stream, or a partial handed one (``w =
+    buf.write`` then ``w('hi')``, ``nx = partial(next, it)`` then ``a =
+    nx()``), `LOCK` for one of a lock (``acq = lk.acquire`` then ``acq()``).
+
+    The call spelled out (``buf.write('hi')``, ``next(it)``,
+    ``lk.acquire()``) is refused by what the statement names; held in a
+    variable, the same call names only the variable. Asked of the object,
+    the two spellings get the same answer. A name the statement also
+    rebinds does not count, as for `drawn_stream_inputs`.
+    """
+    if tree is None:
+        return {}
+    names = (called_names(tree) | handed_names(tree)) & (set(inputs) - set(outputs))
+    found: dict[str, str] = {}
+    for name in sorted(names):
+        value = user_ns.get(name)
+        if value is None or not callable(value):
+            continue
+        try:
+            held = _held_by_callable(value)
+        except Exception:  # noqa: BLE001 - not told: the statement is judged by its text alone
+            continue
+        if any(_is_lock(obj) for obj in held):
+            found[name] = LOCK
+        elif any(is_stream(obj) for obj in held):
+            found[name] = STREAM
+    return found
+
+
+def effect_calls_on_functions(tree: ast.Module | None, user_ns: Mapping[str, Any]) -> list[str]:
+    """The calls of *tree* made for their effect on a function of the
+    notebook's: a bare ``fmt.register(int, fi)`` on a
+    ``functools.singledispatch`` function keeps what it registers on the
+    function, which no entry holds. Each as ``name.method``."""
+    if tree is None:
+        return []
+    found: list[str] = []
+    for node in tree.body:
+        if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
+            continue
+        func = node.value.func
+        if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+            if type(user_ns.get(func.value.id)) is types.FunctionType:
+                found.append(f"{func.value.id}.{func.attr}")
+    return found
 
 
 def watched_call_receivers(tree: ast.Module | None, user_ns: Mapping[str, Any]) -> frozenset[str]:

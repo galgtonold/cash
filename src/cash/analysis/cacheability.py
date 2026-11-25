@@ -21,7 +21,7 @@ from typing import Any
 from cash._user_attrs import instance_of
 
 from .._memo import NOTEBOOK_STATEMENTS, STATEMENTS, LruMemo
-from ..effects import EffectKind
+from ..effects import EffectKind, canonical_spellings
 from .aliases import bare_alias_targets, reference_alias_targets
 from .ast_util import called_names
 from .callee_effects import callee_global_mutations
@@ -150,7 +150,7 @@ class StatementAnalysis:
 
 #: ``(code, the identifiers in it that name a module) -> StatementAnalysis``.
 #: See ``analyze_statement``.
-_ANALYSIS_MEMO: LruMemo[tuple[str, frozenset, frozenset], StatementAnalysis] = LruMemo(STATEMENTS)
+_ANALYSIS_MEMO: LruMemo[tuple[str, frozenset, frozenset, frozenset], StatementAnalysis] = LruMemo(STATEMENTS)
 
 
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -175,17 +175,22 @@ def analyze_statement(
     """
     modules: frozenset[str] = frozenset()
     writers: frozenset[tuple[str, str | None]] = frozenset()
+    effect_names: frozenset[tuple[str, str]] = frozenset()
     if user_ns is not None:
         identifiers = set(_IDENTIFIER.findall(code))
         modules = frozenset(n for n in identifiers if instance_of(user_ns.get(n), types.ModuleType))
         # ``sa = setattr`` in a cell above: ``sa(points[7], 'x', -3)`` writes.
         writers = frozenset(writer_names_aliases(identifiers, user_ns).items())
+        # ``from subprocess import run`` in a cell above: ``run(cmd)`` starts
+        # a program, as ``subprocess.run(cmd)`` does.
+        if "(" in code:
+            effect_names = frozenset(canonical_spellings(code, user_ns).items())
     if resolve_source is not None:
-        return _analyze_statement(code, tree, modules, resolve_source, writers)
-    key = (code, modules, writers)
+        return _analyze_statement(code, tree, modules, resolve_source, writers, effect_names)
+    key = (code, modules, writers, effect_names)
     found = _ANALYSIS_MEMO.get(key)
     if found is None:
-        found = _analyze_statement(code, tree, modules, resolve_source, writers)
+        found = _analyze_statement(code, tree, modules, resolve_source, writers, effect_names)
         _ANALYSIS_MEMO[key] = found
     return found
 
@@ -196,6 +201,7 @@ def _analyze_statement(
     module_names: frozenset[str] = frozenset(),
     resolve_source=None,
     writers: frozenset[tuple[str, str | None]] = frozenset(),
+    effect_names: frozenset[tuple[str, str]] = frozenset(),
 ) -> StatementAnalysis:
     """Return a :class:`StatementAnalysis` for *code* using pure-AST analysis.
 
@@ -212,6 +218,9 @@ def _analyze_statement(
         module_names: Names bound to modules, for the check above.
         writers: ``(name, spelling)`` for the names the namespace binds to a
             writer (`writer_names_aliases`), for `MutationVisitor`.
+        effect_names: ``(name chain, known call)`` for the chains the
+            namespace binds to a call with an effect under another spelling
+            (`cash.effects.canonical_spellings`), for `SideEffectVisitor`.
         resolve_source: Optional ``name -> source`` for called functions. When
             supplied, globals a CALLEE mutates in place are propagated into
             the mutation sets as though the mutation had been written inline
@@ -267,7 +276,7 @@ def _analyze_statement(
     )
 
     # --- Side effects ---
-    se_visitor = SideEffectVisitor()
+    se_visitor = SideEffectVisitor(dict(effect_names))
     se_visitor.visit(tree)
 
     return StatementAnalysis(
