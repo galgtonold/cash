@@ -688,8 +688,9 @@ class StatementStore:
         reuse_end_stats: bool = False,
         reuse_checked: bool = False,
     ) -> bool:
-        """Did a file the statement read change after it read it, or a
-        folder it listed gain or lose an entry from outside?
+        """Did a file the statement read change after it read it, a remote
+        object it read get replaced, or a folder it listed gain or lose an
+        entry from outside?
 
         The entry's file fingerprints are taken when it is stored, after the
         statement ran: a file another process replaced while it ran would be
@@ -703,7 +704,9 @@ class StatementStore:
         `FileAccessTracker.inputs_changed_since_read`).
         """
         tracker = execution.file_tracker
-        if tracker is None or not (tracker.read_stats or tracker.listed_stats):
+        if tracker is None or not (
+            tracker.read_stats or tracker.listed_stats or attribute_or(tracker, "remote_as_read", None)
+        ):
             return False
         try:
             moved = tracker.inputs_changed_since_read(reuse_end_stats=reuse_end_stats, reuse_checked=reuse_checked)

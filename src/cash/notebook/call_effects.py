@@ -224,7 +224,8 @@ def replay_deps(metadata: Mapping[str, Any]) -> frozenset[str]:
             if isinstance(recorded, dict) and recorded.get("remote"):
                 declared.add(path)
                 if tracker is not None:
-                    tracker.add_tracked_remote(path)
+                    # Under the token the entry was just found fresh by.
+                    tracker.add_tracked_remote(path, recorded.get("hash"))
             else:
                 # The file THIS process reads, as the decorator replays it.
                 local = dep_path_for_this_process(path, recorded)

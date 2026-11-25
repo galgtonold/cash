@@ -205,6 +205,17 @@ class FileAccessTracker:
         # every consumer of that set stats/hashes its members, and a URL is not
         # a path. They are re-joined downstream as remote dependency entries.
         self.accessed_remote: set[str] = set()
+        #: url -> the token its store gave BEFORE the block's first read of
+        #: it. The entry's token is taken when it is stored, after the block
+        #: ran: an object replaced in between would be recorded as the new
+        #: one next to a value computed from the old
+        #: (`inputs_changed_since_read`).
+        self.remote_as_read: dict[str, str] = {}
+        #: url -> the token the call's snapshot took of it, for
+        #: `inputs_changed_since_read`; None when no snapshot is pending.
+        self.snapshot_remote: dict[str, str] | None = None
+        # The URLs `inputs_changed_since_read` found as read.
+        self._remote_checked: set[str] = set()
         # Paths this block looked for and did not find. Recorded as their own
         # kind of dependency (``{'absent': True}``) so an entry computed
         # WITHOUT an optional file stops being valid once that file appears --
@@ -507,7 +518,8 @@ class FileAccessTracker:
         if taken is None:
             taken = {}
         earlier = self.checked_stats
-        if not reuse_checked or self._work_running or self.work_outlived_block:
+        reuse_checked = reuse_checked and not (self._work_running or self.work_outlived_block)
+        if not reuse_checked:
             earlier = {}
         checked: dict[str, os.stat_result] = {}
         self.checked_stats = checked
@@ -531,6 +543,32 @@ class FileAccessTracker:
         for path, before in list(self.listed_stats.items()):
             if path not in self.touched_dirs and folder_stat(path) != before:
                 moved.append(path)
+        moved.extend(self._remote_changed_since_read(reuse_checked))
+        return moved
+
+    def _remote_changed_since_read(self, reuse_checked: bool) -> list[str]:
+        """The remote objects whose token moved between the block's first
+        read of each and now. With *reuse_checked*, one the previous check
+        found as read is not asked again."""
+        taken, self.snapshot_remote = self.snapshot_remote, None
+        if not self.remote_as_read:
+            return []
+        found_as_read = self._remote_checked if reuse_checked else set()
+        checked: set[str] = set()
+        self._remote_checked = checked
+        moved = []
+        for url, before in list(self.remote_as_read.items()):
+            if url in found_as_read:
+                checked.add(url)
+                continue
+            now = taken.get(url) if taken else None
+            if now is None:
+                with untracked():
+                    now = file_dep_snapshot.remote_token_now(url)
+            if file_dep_snapshot.remote_moved(before, now):
+                moved.append(url)
+            else:
+                checked.add(url)
         return moved
 
     def take_checked_stats(self) -> dict[str, os.stat_result]:
@@ -1257,10 +1295,26 @@ class FileAccessTracker:
             known = tracker.present_files.get(path)
             tracker.present_files[path] = kind if known in (None, kind) else "any"
 
-    def add_tracked_remote(self, url: str) -> None:
-        """Record a remote *url* read, propagating to the enclosing tracker."""
+    def add_tracked_remote(self, url: str, token: str | None = None) -> None:
+        """Record a remote *url* read, propagating to the enclosing tracker.
+
+        Called BEFORE the read: the first time this block meets *url*, the
+        token its store gives now is kept (`remote_as_read`), for the check
+        that the object was not replaced while the block ran. *token* is
+        that token where the caller holds it already: the one an entry
+        served inside this block was just found fresh under, the one a
+        worker process took before its read.
+        """
         for tracker in self._self_and_parents():
             tracker.accessed_remote.add(url)
+        if url in self.remote_as_read:
+            return
+        if token is None:
+            # Cash's own request: not a file or a connection of the block's.
+            with untracked():
+                token = file_dep_snapshot.remote_token_now(url)
+        for tracker in self._self_and_parents():
+            tracker.remote_as_read.setdefault(url, token)
 
     def add_dynamic_source(self, source_id: str, source: Any, token: str) -> None:
         """Record a data source this block depends on, with its token now,

@@ -961,6 +961,16 @@ def _storage_options(kwargs: dict[str, Any]) -> dict[str, Any] | None:
     return options if isinstance(options, dict) else None
 
 
+def _remember_options(url: str, kwargs: dict[str, Any]) -> None:
+    """Note the store a reader's call reaches *url* in, before the read is
+    recorded: recording it asks that store for the object's token
+    (`FileAccessTracker.add_tracked_remote`), and so does every later
+    freshness check."""
+    options = _storage_options(kwargs)
+    if options:
+        remember_read_options(url, options)
+
+
 def track_dataset(tracker: Any, target: Any) -> None:
     """Record what a reader given *target* reads: a file, or every file of a
     directory or glob.
@@ -1073,7 +1083,7 @@ class _WorkerReads:
     """What a task run in a worker process returned, the files it read, and
     the ``dynamic_depends_on=`` sources of the cached calls it made."""
 
-    __slots__ = ("value", "files", "absent", "unresolved", "present", "remote", "dynamic")
+    __slots__ = ("value", "files", "absent", "unresolved", "present", "remote", "dynamic", "remote_as_read")
 
     def __init__(
         self,
@@ -1084,17 +1094,29 @@ class _WorkerReads:
         present: dict[str, str],
         remote: list[str],
         dynamic: tuple[list, dict, list[str]] = ([], {}, []),
+        remote_as_read: dict[str, str] | None = None,
     ) -> None:
         self.value, self.files, self.absent, self.unresolved = value, files, absent, unresolved
         self.present, self.remote = present, remote
         #: ``([(id, source, token)], resolutions, functions whose resolver
         #: failed)``, as the worker's tracker collected them.
         self.dynamic = dynamic
+        #: url -> the token the worker's tracker took before its read.
+        self.remote_as_read = remote_as_read or {}
 
     def __reduce__(self):
         return (
             _WorkerReads,
-            (self.value, self.files, self.absent, self.unresolved, self.present, self.remote, _portable(self.dynamic)),
+            (
+                self.value,
+                self.files,
+                self.absent,
+                self.unresolved,
+                self.present,
+                self.remote,
+                _portable(self.dynamic),
+                self.remote_as_read,
+            ),
         )
 
     def relay_to(self, tracker: Any) -> Any:
@@ -1109,7 +1131,7 @@ class _WorkerReads:
             for path, kind in self.present.items():
                 tracker.add_tracked_present(path, kind)
             for url in self.remote:
-                tracker.add_tracked_remote(url)
+                tracker.add_tracked_remote(url, self.remote_as_read.get(url))
             sources, resolutions, failed = self.dynamic
             if hasattr(tracker, "add_dynamic_source"):
                 for source_id, source, token in sources:
@@ -1192,6 +1214,7 @@ class _ReadsInWorker:
             dict(tracker.get_present_files()),
             sorted(tracker.get_accessed_remote_urls()),
             _dynamic_of(tracker),
+            dict(getattr(tracker, "remote_as_read", None) or {}),
         )
 
 
@@ -1634,8 +1657,10 @@ class FileDependencyRegistry:
             if isinstance(target, (str, bytes, os.PathLike)):
                 _tracker = active_tracker.get()
                 if _tracker is not None:
-                    track_dataset(_tracker, target)
                     remote = _is_remote_target(target)
+                    if remote:
+                        _remember_options(target, kwargs)
+                    track_dataset(_tracker, target)
                 else:
                     note_untracked_read(target, sys._getframe(1))
             elif isinstance(target, (list, tuple)):
@@ -1644,18 +1669,14 @@ class FileDependencyRegistry:
                 for item in target:
                     if isinstance(item, (str, bytes, os.PathLike)):
                         if _tracker is not None:
+                            if _is_remote_target(item):
+                                remote = True
+                                _remember_options(item, kwargs)
                             track_dataset(_tracker, item)
-                            remote = remote or _is_remote_target(item)
                         else:
                             note_untracked_read(item, sys._getframe(1))
             if not remote:
                 return original_func(*args, **kwargs)
-            options = _storage_options(kwargs)
-            if options:
-                # The freshness check must reach the store this read did.
-                for item in target if isinstance(target, (list, tuple)) else (target,):
-                    if _is_remote_target(item):
-                        remember_read_options(item, options)
             # The fetch of a remote file recorded above is a tracked read --
             # its ETag is checked on every hit -- not a connection the key
             # cannot see, so the effect observer does not report it.

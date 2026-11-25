@@ -74,6 +74,7 @@ def snapshot_tracked_deps(tracker: Any, code_module: str | None = None) -> dict[
         if path in read_stats
     }
     stats: dict[str, Any] = {}
+    remote_tokens: dict[str, str] = {}
     deps = snapshot_dependencies(
         tracker.get_accessed_files(),
         tracker.get_accessed_remote_urls(),
@@ -82,11 +83,15 @@ def snapshot_tracked_deps(tracker: Any, code_module: str | None = None) -> dict[
         unresolved=getattr(tracker, "unresolved_files", None),
         present=getattr(tracker, "present_files", None),
         stats=stats,
+        remote_tokens=remote_tokens,
     )
     # The stat each file had as it was snapshotted: the check that no input
     # moved during the call reads it instead of a second stat per file.
     if hasattr(tracker, "snapshot_stats"):
         tracker.snapshot_stats = stats
+    # And the token each remote object had, for the same check.
+    if hasattr(tracker, "snapshot_remote"):
+        tracker.snapshot_remote = remote_tokens
     # A file beside the function's own code is part of this INSTALL, not a
     # fixed location: record where it sits relative to the code, so another
     # install or release checks its own copy.
@@ -144,7 +149,9 @@ def propagate_file_deps_to_active_tracker(metadata: CacheMetadata, func_name: st
             if recorded.get("options"):
                 # The store this entry's read went to, for the outer entry's check.
                 remember_read_options(path, recorded["options"])
-            tracker.add_tracked_remote(path)
+            # Under the token the entry was just found fresh by: an object
+            # replaced from here on moved while the caller ran.
+            tracker.add_tracked_remote(path, recorded.get("hash"))
         elif isinstance(recorded, dict) and recorded.get("absent"):
             # Looked for and missing: still an absence, not a file to stat.
             tracker.add_tracked_absent(dep_path_for_this_process(path, recorded))
@@ -296,7 +303,7 @@ def pass_dynamic_sources_up(sources: list[tuple[Any, str]], resolutions: dict[tu
         elif isinstance(source, RemoteFileDataSource):
             if source.storage_options:
                 remember_read_options(source.url, source.storage_options)
-            tracker.add_tracked_remote(source.url)
+            tracker.add_tracked_remote(source.url, token)
         else:
             add = getattr(tracker, "add_dynamic_source", None)
             if add is not None:
