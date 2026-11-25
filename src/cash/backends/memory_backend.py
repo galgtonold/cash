@@ -25,6 +25,7 @@ from cash.exceptions import CacheBackendError
 
 from .. import (
     _native,
+    _pandas_compat,
     _plain_data,
     _weak,
     cost_model,
@@ -2954,13 +2955,13 @@ def _copies_in_full(frame: Any) -> bool:
 
     if type(frame) not in (pd.DataFrame, pd.Series) or frame.attrs:
         return False
-    if not all(_full_copy_values(blk.values) for blk in frame._mgr.blocks):
+    if not all(_full_copy_values(blk.values) for blk in _pandas_compat.blocks(frame)):
         return False
     axes = (frame.index,) if frame.ndim == 1 else (frame.index, frame.columns)
     for axis in axes:
         if isinstance(axis, pd.RangeIndex):
             continue
-        if isinstance(axis, pd.MultiIndex) or not _full_copy_values(axis._data):
+        if isinstance(axis, pd.MultiIndex) or not _full_copy_values(_pandas_compat.index_data(axis)):
             return False
     return True
 
@@ -2973,8 +2974,9 @@ def _full_copy_values(values: Any) -> bool:
     it that is not memory only Arrow holds."""
     import numpy as np
     import pandas as pd
-    from pandas.core.arrays.arrow import ArrowExtensionArray
-    from pandas.core.arrays.masked import BaseMaskedArray
+
+    ArrowExtensionArray = _pandas_compat.internal("ArrowExtensionArray")
+    BaseMaskedArray = _pandas_compat.internal("BaseMaskedArray")
 
     if type(values) is np.ndarray:
         return not values.dtype.hasobject or immutable_cells(values.ravel())
@@ -2982,7 +2984,7 @@ def _full_copy_values(values: Any) -> bool:
         return True  # one array; a StringArray holds only str and missing values
     if type(values) is pd.Categorical:
         # Its codes and its categories are copied (`frame_sharing._owned_categories`).
-        return _full_copy_values(values.categories._data)
+        return _full_copy_values(_pandas_compat.index_data(values.categories))
     return isinstance(values, (BaseMaskedArray, ArrowExtensionArray)) and class_module(type(values)).startswith(
         "pandas."
     )
@@ -3039,7 +3041,9 @@ def _big_table(frame: Any) -> bool:
     """Does the DataFrame *frame* hold a block the chunk store keeps apart
     (`block_digests.MIN_BYTES`)?"""
     try:
-        return frame.ndim == 2 and any(block.values.nbytes >= block_digests.MIN_BYTES for block in frame._mgr.blocks)
+        return frame.ndim == 2 and any(
+            block.values.nbytes >= block_digests.MIN_BYTES for block in _pandas_compat.blocks(frame)
+        )
     except Exception:  # noqa: BLE001 - not a table as known here
         return False
 
@@ -3337,7 +3341,7 @@ def store_copy_seconds(value: Any) -> float | None:
             if not (frame_sharing.enabled() and frame_sharing.freezable(value)):
                 return None
             if value.ndim == 1:
-                nbytes = int(value.array.nbytes) if getattr(value.array, "_pa_array", None) is None else 0
+                nbytes = int(value.array.nbytes) if _pandas_compat.arrow_data(value.array) is None else 0
             else:
                 nbytes = shared_blocks.bytes_to_copy(value)
             if not _STORE_COPY_SPEED:
@@ -3876,7 +3880,7 @@ def column_dtypes(frame: Any) -> list:
     if getattr(frame, "ndim", 2) == 1:
         return [frame.dtype]
     try:
-        return list(frame._mgr.get_dtypes())
+        return list(_pandas_compat.manager(frame).get_dtypes())
     except Exception:  # noqa: BLE001 - pandas internals changed: its public answer
         return list(frame.dtypes)
 

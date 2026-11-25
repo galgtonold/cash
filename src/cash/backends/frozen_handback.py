@@ -39,7 +39,7 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
-from .. import handed_copies, value_watch
+from .. import _pandas_compat, handed_copies, value_watch
 
 __all__ = [
     "CHANGED",
@@ -146,7 +146,7 @@ def _copy_on_write(pd: Any) -> bool:
 
 
 def _frame_snapshot(value: Any) -> tuple:
-    mgr = value._mgr
+    mgr = _pandas_compat.manager(value)
     blocks = mgr.blocks
     axes = tuple(mgr.axes)
     return (
@@ -180,7 +180,7 @@ def _keep_frame(value: Any) -> Kept | None:
         return None
     infer = pd.api.types.infer_dtype
     nbytes = 0
-    for block in value._mgr.blocks:
+    for block in _pandas_compat.blocks(value):
         values = block.values
         if getattr(getattr(values, "dtype", None), "hasobject", False):
             # Cells pandas cannot see written: only atoms.

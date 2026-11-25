@@ -35,7 +35,7 @@ from typing import Any
 
 from cash.builtin_calls import NO_EFFECT
 
-from ... import _weak
+from ... import _pandas_compat, _weak
 from ..._type_memo import class_name
 from ..._user_attrs import attribute_or, from_family, has_attribute, instance_of, own_dict, static_attr
 from ...analysis.ast_util import walk_tree
@@ -683,7 +683,7 @@ def _object_array(held: Any, pd: Any, np: Any) -> Any:
         held = vars(pd.Index)["array"].__get__(categories, pd.Index)
     if class_name(type(held)) != "NumpyExtensionArray" or not from_family(type(held), "pandas"):
         return None
-    found = held._ndarray
+    found = _pandas_compat.inner_ndarray(held)
     return found if type(found) is np.ndarray and found.dtype == np.dtype(object) else None
 
 

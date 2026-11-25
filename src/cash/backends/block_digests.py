@@ -40,7 +40,7 @@ import threading
 from collections import OrderedDict
 from typing import Any
 
-from .. import _weak
+from .. import _pandas_compat, _weak
 from .._type_memo import class_module, class_name
 
 __all__ = [
@@ -125,14 +125,14 @@ def note_copy(copied: Any, keys: dict[tuple, tuple]) -> None:
     from .shared_blocks import block_layout
 
     try:
-        for block in copied._mgr.blocks:
+        for block in _pandas_compat.blocks(copied):
             key = keys.get(tuple(int(pos) for pos in block.mgr_locs.as_array))
             values = block.values
             # The copy keeps each block's layout (`copy_keeping_blocks`);
             # checked, not trusted.
             if key is None or block_layout(values) != key[0]:
                 continue
-            array = getattr(values, "_ndarray", values)
+            array = _pandas_compat.inner_ndarray(values, values)
             if array.nbytes < MIN_BYTES:
                 continue
             at = id(array)

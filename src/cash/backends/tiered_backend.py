@@ -8,6 +8,7 @@ import time
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
+from .. import _pandas_compat
 from .._type_memo import class_name
 from ..loaded_modules import loaded_module
 from ..sizing import memory_footprint, pickled_size_estimate
@@ -1015,12 +1016,12 @@ def _array_bytes(value: Any, depth: int = 0) -> int:
     pandas = loaded_module("pandas")
     if pandas is None or kind not in (pandas.DataFrame, pandas.Series):
         return 0
-    arrays = [getattr(block.values, "_ndarray", block.values) for block in value._mgr.blocks]
+    arrays = [_pandas_compat.inner_ndarray(block.values, block.values) for block in _pandas_compat.blocks(value)]
     index = value.index
     if not isinstance(index, (pandas.RangeIndex, pandas.MultiIndex)):
         # A range's labels are built when read; a MultiIndex's are levels.
-        arrays.append(getattr(index, "_data", None))
-    arrays = [getattr(array, "_ndarray", array) for array in arrays]
+        arrays.append(_pandas_compat.index_data(index, None))
+    arrays = [_pandas_compat.inner_ndarray(array, array) for array in arrays]
     return sum(int(array.nbytes) for array in arrays if type(array) is numpy.ndarray and not array.dtype.hasobject)
 
 

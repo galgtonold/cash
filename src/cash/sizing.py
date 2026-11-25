@@ -25,7 +25,7 @@ import types
 import weakref
 from typing import Any
 
-from . import _native, _plain_data, _weak
+from . import _native, _pandas_compat, _plain_data, _weak
 from ._type_memo import class_dict, class_mro, class_name, mro_of
 from ._user_attrs import (
     attribute_or,
@@ -175,7 +175,7 @@ def _arrow_backing(values: Any) -> Any:
     """The ``pa.ChunkedArray`` a pandas Arrow-backed array (``ArrowDtype``,
     ``string[pyarrow]``) keeps its values in; None for any other array, or
     a subclass with an ``nbytes`` of its own."""
-    arrow = loaded_module("pandas.core.arrays.arrow.array")
+    arrow = _pandas_compat.loaded_arrow_array_module()
     pa = loaded_module("pyarrow")
     base = getattr(arrow, "ArrowExtensionArray", None)
     if base is None or pa is None or not isinstance(values, base):
@@ -185,7 +185,7 @@ def _arrow_backing(values: Any) -> Any:
             break
         if "nbytes" in class_dict(kind):
             return None
-    chunked = getattr(values, "_pa_array", None)
+    chunked = _pandas_compat.arrow_data(values)
     return chunked if type(chunked) is pa.ChunkedArray else None
 
 
@@ -225,7 +225,7 @@ def _python_objects(values: Any, held: Any) -> Any:
     which for strings stored as Python objects looks for missing values and
     copies: 75 ms per 900,000-row column, paid on every size check of the
     frame. *held* is `held_values` of it."""
-    array = getattr(held, "_ndarray", held)
+    array = _pandas_compat.inner_ndarray(held, held)
     if class_name(type(array)) == "ndarray" and array.dtype == object and array.ndim == 1:
         return array
     return values.to_numpy(dtype=object)
@@ -238,7 +238,7 @@ def _arrays_bytes(obj: Any) -> int | None:
     ~1.5 ms a call for a 20-column group frame, sized once per element of a
     comprehension over 360 of them."""
     try:
-        arrays = obj._mgr.arrays
+        arrays = _pandas_compat.arrays(obj)
     except Exception:  # noqa: BLE001 - a private attribute: any surprise means "no"
         return None
     total = 0
@@ -348,7 +348,7 @@ def _array_estimate(arr: Any, seen: set[int]) -> int:
     if _holds_python_objects(getattr(arr, "dtype", None)):
         # The array's own object ndarray when it has one: ``to_numpy`` copies
         # every reference, 50 ms for two million strings, to sample 64.
-        held = getattr(arr, "_ndarray", None)
+        held = _pandas_compat.inner_ndarray(arr, None)
         if class_name(type(held)) != "ndarray" or held.dtype.kind != "O":
             held = arr.to_numpy(dtype=object)
         return _objects_estimate(held, seen)
@@ -378,7 +378,7 @@ def _index_estimate(index: Any, seen: set[int]) -> int:
             return sum(_index_estimate(level, seen) for level in levels) + sum(
                 _array_estimate(code, seen) for code in codes
             )
-    return _array_estimate(index._values, seen)
+    return _array_estimate(_pandas_compat.held_values(index), seen)
 
 
 def _multi_index_parts(index: Any) -> tuple[list, list] | None:
@@ -427,10 +427,12 @@ def pickled_size_estimate(value: Any, _depth: int = 0, _seen: set[int] | None = 
             # (`serialization._reduce_polars`); polars sums them natively.
             return int(value.estimated_size())
         if kind == "DataFrame" and from_family(type(value), "pandas"):
-            return sum(_array_estimate(arr, seen) for arr in value._mgr.arrays) + _index_estimate(value.index, seen)
+            return sum(_array_estimate(arr, seen) for arr in _pandas_compat.arrays(value)) + _index_estimate(
+                value.index, seen
+            )
         if kind == "Series" and from_family(type(value), "pandas"):
             # ``_values``: the ndarray itself for a numpy dtype, else the extension array.
-            return _array_estimate(value._values, seen) + _index_estimate(value.index, seen)
+            return _array_estimate(_pandas_compat.held_values(value), seen) + _index_estimate(value.index, seen)
         if kind == "ndarray" and from_family(type(value), "numpy"):
             return _array_estimate(value, seen)
     except Exception:  # noqa: BLE001 - an estimate is optional: none is 0

@@ -30,7 +30,7 @@ import weakref
 from collections.abc import Callable
 from typing import Any
 
-from . import _plain_data, _weak
+from . import _pandas_compat, _plain_data, _weak
 from ._memo import ARROW_VALUES, LruMemo
 from ._type_memo import class_module, class_name, class_qualname, per_type
 from ._user_attrs import from_family
@@ -317,8 +317,8 @@ def index_memory_key(index: Any, pd: Any) -> tuple | None:
         route = pandas_value_route(index.dtype, pd)
         if route not in ("raw", "datetimetz"):
             return None
-        array = index._data
-        array = getattr(array, "_ndarray", array)
+        array = _pandas_compat.index_data(index)
+        array = _pandas_compat.inner_ndarray(array, array)
         if type(array) is not np.ndarray or array.ndim != 1:
             return None
         return (
@@ -473,7 +473,7 @@ def _fold_pandas_array(h: Any, values: Any, pd: Any) -> None:
         route = None
     elif route == "masked":
         array = held_values(values)
-        data, mask = getattr(array, "_data", None), getattr(array, "_mask", None)
+        data, mask = _pandas_compat.index_data(array, None), getattr(array, "_mask", None)
         if data is not None and mask is not None:
             # The values under a missing one are whatever was there: two equal
             # columns can differ in them, and only hash apart -- never alike.
@@ -622,22 +622,22 @@ def column_memory_key(frame: Any, pos: int, route: str | None, dtype: Any = None
     import numpy as np
 
     try:
-        mgr = frame._mgr
-        values = mgr.blocks[mgr.blknos[pos]].values
+        mgr = _pandas_compat.manager(frame)
+        values = _pandas_compat.column_values(mgr, pos)
         dtype = str(frame.dtypes.iloc[pos] if dtype is None else dtype)
         if type(values) is np.ndarray:
             if values.ndim != 2:
                 return None
-            array = values[mgr.blklocs[pos]]
+            array = values[_pandas_compat.column_row(mgr, pos)]
         else:
-            arrow = getattr(values, "_pa_array", None)
+            arrow = _pandas_compat.arrow_data(values)
             if arrow is not None:
                 return _arrow_memory_key(arrow, dtype, route)
-            array = getattr(values, "_ndarray", None)
+            array = _pandas_compat.inner_ndarray(values, None)
             if type(array) is not np.ndarray:
                 return None
             if array.ndim == 2:  # dates kept as a 2-d block
-                array = array[mgr.blklocs[pos]]
+                array = array[_pandas_compat.column_row(mgr, pos)]
             elif array.ndim != 1:
                 return None
         interface = array.__array_interface__
@@ -702,8 +702,8 @@ def _column_buffers(frame: Any) -> Callable[[int, Any], Any]:
     import numpy as np
 
     try:
-        mgr = frame._mgr
-        blocks, blknos, blklocs = mgr.blocks, mgr.blknos, mgr.blklocs
+        mgr = _pandas_compat.manager(frame)
+        blocks, blknos, blklocs = _pandas_compat.column_layout(mgr)
     except Exception:  # noqa: BLE001 - pandas internals changed: through iloc
         return lambda pos, dtype: None
     slab: list[Any] = [None, 0, 0, None]  # block values, first row, stop, the copy
@@ -978,7 +978,7 @@ def _fold_geometries(h: Any, array: Any) -> bool:
     geometries. False, folding nothing, for an array of another kind."""
     import shapely
 
-    data = getattr(array, "_data", None)
+    data = _pandas_compat.index_data(array, None)
     if type(data) is not _numpy().ndarray or data.dtype != object or data.ndim != 1:
         return False
     crs = getattr(array, "crs", None)

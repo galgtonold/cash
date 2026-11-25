@@ -39,7 +39,7 @@ import weakref
 from collections.abc import Callable, Iterator
 from typing import Any
 
-from . import _native, _weak
+from . import _native, _pandas_compat, _weak
 from ._own_work import own_work
 from ._type_memo import class_dict, class_dictoffset, class_flags, class_mro, class_name, class_qualname, mro_of
 from ._user_attrs import attribute_or, class_attr, from_family, instance_of, named_attr, own_lookup, plain_getattr
@@ -2783,7 +2783,7 @@ def _pandas_cached_names(t: type) -> frozenset[str]:
     for klass in class_mro(t):
         for member in class_dict(klass).values():
             kind = type(member)
-            if class_name(kind) == "CachedProperty" and class_module(kind) == "pandas._libs.properties":
+            if (class_module(kind), class_name(kind)) == _pandas_compat.CACHED_PROPERTY:
                 name = getattr(member, "name", None)
                 if isinstance(name, str):
                     names.add(name)
@@ -3186,10 +3186,10 @@ def _decide_may_stand_by_reference(t: type) -> bool:
 #: with a reduce of its own is decided by that.
 _REDUCES_BY_VALUE = frozenset(
     {
-        ("pandas._libs.tslibs.timestamps", "_Timestamp"),
+        _pandas_compat.TIMESTAMP_BASE,
         ("pandas", "Timedelta"),
         # pandas 2 names its Timedelta for the module that defines it.
-        ("pandas._libs.tslibs.timedeltas", "Timedelta"),
+        _pandas_compat.TIMEDELTA_PANDAS_2,
     }
 )
 
@@ -3390,7 +3390,7 @@ def _decide_fills_cache_readonly(t: type) -> bool:
     for klass in t.__mro__:
         for value in class_dict(klass).values():
             kind = type(value)
-            if class_name(kind) == "CachedProperty" and class_module(kind) == "pandas._libs.properties":
+            if (class_module(kind), class_name(kind)) == _pandas_compat.CACHED_PROPERTY:
                 return True
     return False
 

@@ -39,6 +39,7 @@ from typing import Any
 from cash._user_attrs import attribute_or, has_attribute, instance_of
 from cash.analysis.ast_util import copy_tree
 
+from ... import _pandas_compat
 from ...loaded_modules import loaded_module
 from ..shared_objects import output_history
 
@@ -130,7 +131,7 @@ def _arrays(value: Any) -> list[Any] | None:
     if isinstance(value, numpy.ndarray):
         return [value]
     try:
-        held = value._mgr.arrays  # a series' or frame's blocks
+        held = _pandas_compat.arrays(value)  # a series' or frame's blocks
     except Exception:  # noqa: BLE001 - not listed: not kept
         return None
     arrays = []
@@ -139,7 +140,7 @@ def _arrays(value: Any) -> list[Any] | None:
             arrays.append(array)
             continue
         # An extension array: its numpy parts, where it has them.
-        for attr in ("_ndarray", "_data", "_mask", "_codes"):
+        for attr in _pandas_compat.ARRAY_SLOTS:
             part = attribute_or(array, attr, None)
             if isinstance(part, numpy.ndarray):
                 arrays.append(part)

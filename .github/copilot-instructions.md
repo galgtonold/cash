@@ -178,6 +178,18 @@ through `cash._memo_registry.reset`. A new one gets an entry there
 may be given a scope a reset clears only if dropping an entry can cost a
 recomputation or a miss and nothing else.
 
+### pandas internals
+
+pandas is not a dependency, so a user's upgrade decides which pandas cash
+meets. Every private pandas attribute (`_mgr`, `_ndarray`, `_pa_array`, ...)
+and private module (`pandas.core.*`, `pandas._libs.*`) is spelled in
+`src/cash/_pandas_compat.py` only: call an accessor from there, or add one
+(`tests/test_tooling/test_pandas_internals_have_one_home.py`). The frame memo
+(skip hashing a frame nothing wrote to) is used only with a pandas no newer
+than `NEWEST_TESTED` there and only after its start-up check passed; a new
+way to write into a frame's memory goes into `WRITE_ROUTES`, which that
+check and the nightly `pandas-prerelease` job run.
+
 ### Cache metadata
 
 Inside cash, entry metadata is a frozen dataclass (`CacheMetadata` for the

@@ -32,7 +32,7 @@ import logging
 import threading
 from typing import Any
 
-from .. import _weak
+from .. import _pandas_compat, _weak
 from .._type_memo import class_qualname
 from ..content_hashers import column_memory_key, known_column_pieces, pandas_value_route
 
@@ -90,10 +90,10 @@ def block_layout(values: Any) -> tuple | None:
     elif kind in (pd.arrays.DatetimeArray, pd.arrays.TimedeltaArray):
         from .frame_sharing import array_freq
 
-        array = values._ndarray
+        array = _pandas_compat.inner_ndarray(values)
         extra = repr(array_freq(values))  # none on the array from pandas 3.1
     elif kind is pd.arrays.StringArray:
-        array = values._ndarray
+        array = _pandas_compat.inner_ndarray(values)
         extra = None
     else:
         return None
@@ -172,7 +172,7 @@ class BlockReuse:
         ones `find` hands out for their content, and for the caller's
         blocks they were copied from."""
         try:
-            for block in copied._mgr.blocks:
+            for block in _pandas_compat.blocks(copied):
                 positions = tuple(block.mgr_locs.as_array)
                 layout = block_layout(block.values)
                 values = block.values
@@ -202,9 +202,9 @@ def bytes_to_copy(frame: Any) -> int:
     (shared when Arrow allocated it, `frame_sharing.arrow_owned`). An
     estimate for the store's cost, never a promise of what is shared."""
     total = 0
-    for block in frame._mgr.blocks:
+    for block in _pandas_compat.blocks(frame):
         values = block.values
-        if getattr(values, "_pa_array", None) is not None:
+        if _pandas_compat.arrow_data(values) is not None:
             continue
         with _LOCK:
             refs = _COPIED_FROM.get(id(values))
@@ -242,7 +242,7 @@ def _sources(frame: Any) -> dict[tuple, tuple[Any, tuple]]:
     bytes `same_bytes` can compare."""
     sources = {}
     try:
-        for block in frame._mgr.blocks:
+        for block in _pandas_compat.blocks(frame):
             layout = block_layout(block.values)
             if layout is not None and _raw(block.values).dtype.kind not in "OV":
                 sources[tuple(int(pos) for pos in block.mgr_locs.as_array)] = (block.values, layout)
@@ -277,7 +277,7 @@ def _remember_copy(source: Any, stored: Any) -> None:
 
 def _raw(values: Any) -> Any:
     """The numpy array a block's *values* keep their data in (`block_layout`)."""
-    return getattr(values, "_ndarray", values)
+    return _pandas_compat.inner_ndarray(values, values)
 
 
 #: Elements `same_bytes` compares at a time: what it allocates is this many
@@ -322,7 +322,7 @@ def _plan(frame: Any) -> list[tuple[tuple, tuple, list[tuple]]]:
 
     plan = []
     try:
-        for block in frame._mgr.blocks:
+        for block in _pandas_compat.blocks(frame):
             layout = block_layout(block.values)
             if layout is None:
                 continue

@@ -57,7 +57,7 @@ from cash.install_paths import is_user_code_module
 from cash.live_state import is_live_stream
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
-from ... import _weak
+from ... import _pandas_compat, _weak
 from ..._type_memo import class_dict, class_dictoffset, class_flags, class_module, class_mro, class_name
 from ...loaded_modules import loaded_module
 from .identity_holders import IdentityHeld, library_parts
@@ -1047,7 +1047,7 @@ _MAX_CELLS = 2_000_000
 #: What a pandas object's ``__dict__`` keeps that is not what it holds: the
 #: block manager (its arrays are read by type below), caches of what it
 #: holds, flags, and an index's copy-on-write bookkeeping.
-_PANDAS_NOT_HELD = frozenset({"_mgr", "_item_cache", "_flags", "_cache", "_references", "_id"})
+_PANDAS_NOT_HELD = _pandas_compat.NOT_HELD_SLOTS
 
 
 def _typed_referents(item: Any, cells: list[int], mode: int | None = None) -> list[Any] | None:
@@ -1079,9 +1079,9 @@ def _typed_referents(item: Any, cells: list[int], mode: int | None = None) -> li
         held = [value for name, value in state.items() if name not in _PANDAS_NOT_HELD]
         try:
             if mode == _FRAME:
-                held += [item.index, item.columns, *item._mgr.arrays]
+                held += [item.index, item.columns, *_pandas_compat.arrays(item)]
             elif mode == _SERIES:
-                held += [item.index, item._values]
+                held += [item.index, _pandas_compat.held_values(item)]
         except Exception:  # noqa: BLE001 - a pandas of another shape: as the collector sees it
             return get_referents(item)
         return held

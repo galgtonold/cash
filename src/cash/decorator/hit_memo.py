@@ -73,7 +73,7 @@ import typing
 import weakref
 from typing import TYPE_CHECKING, Any
 
-from .. import _native, _verify, _weak
+from .. import _native, _pandas_compat, _verify, _weak
 from .._clock import perf_counter as _perf_counter
 from .._memo import CODE_OBJECTS, LruMemo
 from .._type_memo import class_flags, class_mro, class_name
@@ -81,6 +81,7 @@ from .._user_attrs import named_attr, plain_getattr
 from ..analysis import text_store
 from ..analysis.helper_code import own_code_is_user
 from ..jit_functions import is_jit_type, jit_python_function
+from ..loaded_modules import loaded_module
 from ..source_reading import own_source
 from ..tracking.tracker_context import active_tracker
 from . import library_reads
@@ -94,7 +95,6 @@ from .user_code import (
     own_package,
     unregistered_namespace_code,
 )
-from ..loaded_modules import loaded_module
 
 if TYPE_CHECKING:
     from .cached_function import CachedFunction
@@ -853,7 +853,7 @@ class _Scan:
         if t is getattr(dataclasses, "_DataclassParams", None):
             return True
         module = t.__module__
-        if module == "pandas._libs.properties" and t.__name__ == "AxisProperty":
+        if (module, t.__name__) == _pandas_compat.AXIS_PROPERTY:
             return True
         pd = loaded_module("pandas")
         if pd is not None and v is getattr(pd, "NaT", None):

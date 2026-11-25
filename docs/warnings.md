@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @97ebd651 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @981a2f73 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -162,6 +162,7 @@ Caching happened, or refused to, and it is worth saying. Every code here starts 
 | [CACHE-NET-LOSS](#cache-net-loss) | decorator | caching this function costs more time than it saves |
 | [CACHE-NONDETERMINISTIC](#cache-nondeterministic) | decorator | computed again, a result differs from the one stored before |
 | [CACHE-NOT-WORTH-BYTES](#cache-not-worth-bytes) | notebook | a big, cheap value was not written to disk |
+| [CACHE-PANDAS-UNTESTED](#cache-pandas-untested) | both | this pandas is newer than cash was tested with, so frames are hashed in full every time |
 | [CACHE-PER-ITEM-RERUN](#cache-per-item-rerun) | notebook | a slow step ran again over a whole collection, though most of it is unchanged |
 | [CACHE-RETURNS-AWAITABLE](#cache-returns-awaitable) | decorator | a sync function returned a coroutine, which is not stored |
 | [CACHE-RESULT-SHARED](#cache-result-shared) | decorator | the result shares state with an object outside the call |
@@ -601,6 +602,32 @@ value the statement builds from its result.
 
 **When it is safe to ignore.** Usually. Act on it when the message names a
 recompute time you can feel on every restart.
+
+### CACHE-PANDAS-UNTESTED {#cache-pandas-untested}
+
+<span class="md-tag cash-warning-path">both</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/_pandas_compat.py:frame_memo_usable @124afdcf, cash/_pandas_compat.py:self_test @130807bd -->
+**What happened.** With pandas 3 (copy-on-write), cash does not read a
+DataFrame or Series again while it can prove that nothing has written to it
+since it was last hashed. That proof rests on how pandas keeps its data, which
+can change with a pandas release. So the first time a frame reaches cash, it
+checks two things: that the installed pandas is no newer than the newest one
+cash was tested with, and that on a few small frames of its own it
+notices a write through every route it knows. One of the two failed, and the
+message says which, and names the newest pandas this cash was tested with.
+It is shown once per process.
+
+**Why it matters.** Nothing stale is served: cash reads every frame in full
+each time it builds a key, as it does with pandas 2. Keying a large frame
+takes longer, on every call.
+
+**What to do.** Upgrade `cash-lib`; a release that has been tested with your
+pandas turns the check back on. Until then, the pandas version the message
+names keeps it on.
+
+**When it is safe to ignore.** Always, for correctness. Only the time to key
+large frames is affected.
 
 ### CACHE-PER-ITEM-RERUN {#cache-per-item-rerun}
 

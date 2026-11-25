@@ -121,7 +121,7 @@ would have to copy 64 MB or more goes to the disk tier alone when it is
 stored, and is not kept in memory when it is read either; when no disk tier
 takes it, memory keeps it as usual.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @4d56c7f5, cash/backends/frame_sharing.py:_freeze @d40098df, cash/backends/frame_sharing.py:own_parts @bd7577a7, cash/backends/tiered_backend.py:TieredBackend.get @e6cc8e5a, cash/backends/memory_backend.py:_copy_polars @d34b28a6 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @4d56c7f5, cash/backends/frame_sharing.py:_freeze @d40098df, cash/backends/frame_sharing.py:own_parts @12de7a0e, cash/backends/tiered_backend.py:TieredBackend.get @e6cc8e5a, cash/backends/memory_backend.py:_copy_polars @d34b28a6 -->
 The memory tier keeps a copy of each value that only it holds, so nothing you
 do to a value you were handed reaches the stored one, or the other way round.
 Under pandas copy-on-write (pandas 3, or `pd.options.mode.copy_on_write = True`
@@ -358,7 +358,7 @@ write and read. Parquet files are smaller for columns with few distinct values
 matters more than speed, the [`compress`](../getting-started/configuration.md#all-settings)
 setting gets most of that back.
 
-<!-- claim: cash/backends/serialization.py:_reduce_arrow_array @834e4921, cash/backends/serialization.py:_compact @79a515ab -->
+<!-- claim: cash/backends/serialization.py:_reduce_arrow_array @2c6d8f04, cash/backends/serialization.py:_compact @79a515ab -->
 A pandas column backed by Arrow (pandas' `str` columns, `ArrowDtype`) is
 stored as its Arrow chunks, written as they are: pandas' own pickle first
 joins a column's chunks into one copy. A short slice of a long column is
@@ -378,7 +378,7 @@ before: a subclass of `datetime`, items in two zones or in a zone other than
 item (a `NaN` for missing), Timestamps of two units, or fewer than 1,024
 items.
 
-<!-- claim: cash/backends/text_columns.py:encode @738da182, cash/backends/text_columns.py:encode_column @e0182210, cash/backends/serialization.py:_reduce_text_for_write @670ff542, cash/backends/serialization.py:reduce_text_objects @24bb6968 -->
+<!-- claim: cash/backends/text_columns.py:encode @738da182, cash/backends/text_columns.py:encode_column @e0182210, cash/backends/serialization.py:_reduce_text_for_write @8b382b8e, cash/backends/serialization.py:reduce_text_objects @24bb6968 -->
 A pandas column of Python strings (pandas 3's `str` columns without
 `pyarrow`, `string[python]`, or an object column holding only strings and
 missing values) is stored as its strings joined in one UTF-8 buffer, with

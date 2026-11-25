@@ -28,6 +28,7 @@ from __future__ import annotations
 import types
 from typing import Any
 
+from .. import _pandas_compat
 from .._type_memo import class_dict, class_name, mro_of
 from .._user_attrs import plain_getattr
 from ..loaded_modules import loaded_module
@@ -233,7 +234,7 @@ def _column_arrays(frame: Any, ndarray: type) -> list:
                 continue
         return found
     try:
-        blocks = vars(frame)["_mgr"].arrays
+        blocks = vars(frame)[_pandas_compat.MANAGER_SLOT].arrays
     except (KeyError, AttributeError, TypeError):
         return found
     return [block for block in blocks if type(block) is ndarray]
