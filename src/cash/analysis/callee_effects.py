@@ -8,6 +8,7 @@ namespace.
 from __future__ import annotations
 
 import ast
+import copy
 import functools
 import textwrap
 from collections.abc import Callable, Iterable
@@ -912,7 +913,20 @@ def source_called_names(source: str) -> frozenset[str]:
     node = parse_function_source(source)
     if node is None:
         return frozenset()
-    return (called_names(node) | handed_names(node)) - scope_locals(node)
+    run = called_function(node)
+    return (called_names(run) | handed_names(run)) - scope_locals(node)
+
+
+def called_function(node: ast.FunctionDef | ast.AsyncFunctionDef) -> ast.AST:
+    """*node* as a call of the function runs it: without the decorators
+    above it. They ran once, with the ``def``; a call of ``closure`` does
+    not call the ``register`` standing above ``def closure`` again, so a
+    function is not taken to change what its decorator changed."""
+    if not node.decorator_list:
+        return node
+    run = copy.copy(node)
+    run.decorator_list = []
+    return run
 
 
 def callee_global_mutations(
