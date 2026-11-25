@@ -122,17 +122,15 @@ def never_fresh_reads(tracker: Any, file_deps: dict[str, Any] | None) -> str | N
 def propagate_file_deps_to_active_tracker(metadata: CacheMetadata, func_name: str) -> None:
     """Register this entry's recorded deps with the enclosing
     ``FileAccessTracker`` (if any), so a cached function that calls this
-    one on a *hit* still inherits its dependencies. Best-effort: any
-    failure (no tracker active, import issue) is silently ignored.
+    one on a *hit* still inherits its dependencies. Nothing to do with no
+    tracker active. A failure is not swallowed: an enclosing entry stored
+    without these files would be served after one of them changed.
 
     The enclosing tracker also learns that *func_name* was served from an
     entry: those files are all this call brings it, so what *func_name*'s code
     read for OTHER entries is not credited to it as a memo's reads
     (`FileDeps.credit_remembered_reads`)."""
-    try:
-        tracker = active_tracker.get()
-    except Exception:  # noqa: BLE001 - tracking is best-effort
-        return
+    tracker = active_tracker.get()
     if tracker is None:
         return
     note_served = getattr(tracker, "note_served", None)
@@ -170,10 +168,7 @@ def note_unentered_body(func_name: str) -> None:
     """Tell the enclosing tracker (if any) that the body of the cached
     *func_name* is running with no entry of its own, so its code's remembered
     reads are credited to the enclosing call as any helper's are."""
-    try:
-        tracker = active_tracker.get()
-    except Exception:  # noqa: BLE001 - tracking is best-effort
-        return
+    tracker = active_tracker.get()
     note = getattr(tracker, "note_unentered", None)
     if note is not None:
         note(func_name)
