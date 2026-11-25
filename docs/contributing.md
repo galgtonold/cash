@@ -212,7 +212,8 @@ out again behind every reuse and raises when the two differ. `CASH_VERIFY=1`
 turns all of them on at once:
 
 ```bash
-CASH_VERIFY=1 pytest tests/test_core/globals_and_closures tests/test_core/arguments -m "not perf"
+CASH_VERIFY=1 pytest tests/test_core/globals_and_closures \
+    tests/test_core/arguments -m "not perf"
 ```
 
 | Switch | Checks | Raises |

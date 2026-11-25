@@ -245,7 +245,7 @@ SCRIPT = """
 
 def test_the_flags_are_keyed_alike_in_the_next_process(tmp_path):
     script = tmp_path / "flags.py"
-    script.write_text(textwrap.dedent(SCRIPT))
+    script.write_text(textwrap.dedent(SCRIPT), encoding="utf-8")
     env = {**os.environ, "CASH_CACHE_DIR": str(tmp_path / "cache"), "PYTHONDONTWRITEBYTECODE": "1"}
     outs = [
         subprocess.run([sys.executable, str(script)], cwd=tmp_path, env=env, capture_output=True, text=True, check=True)

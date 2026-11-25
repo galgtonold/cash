@@ -383,6 +383,9 @@ class RngWatch:
         self._self_seeded_fixed: dict[str, set[str]] = {}
         #: Functions whose source carries ``# @cash:allow-random``.
         self._source_allows_random: set[str] = set()
+        #: Functions whose own source shows a draw from a global stream: a
+        #: stream that moved under one is its own doing, whoever else ran.
+        self._source_draws: set[str] = set()
         #: func_name -> the global streams that moved under its last
         #: computed call while other threads ran (`maybe_another_threads`).
         self._moved_beside_threads: dict[str, set[str]] = {}
@@ -526,7 +529,9 @@ class RngWatch:
             return set()
         if self._moved_beside_threads.pop(func_name, None):
             return set()  # a second time: `note_draw` stores the marker without it
-        if not process_registries.beside_threads(threads):
+        cf = self._registry.cached[func_name]
+        said = cf.allow_random or func_name in self._source_allows_random or func_name in self._source_draws
+        if said or not process_registries.beside_threads(threads):
             return set()
         self._moved_beside_threads[func_name] = set(unknown)
         self._store_rng_draw_marker(func_name, self._load_rng_draw_marker(func_name))
@@ -744,6 +749,7 @@ class RngWatch:
         if not unseeded:
             self._warn_unseeded_library_calls(func, func_name, src, first_lineno)
             return
+        self._source_draws.add(func_name)
         # A draw from a global stream that a seed already stands behind is
         # keyed on where that stream stands when the function is called
         # (`fold_rng_epoch`), however long before the decoration it was set.

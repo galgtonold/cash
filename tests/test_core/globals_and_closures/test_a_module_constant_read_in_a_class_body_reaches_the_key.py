@@ -90,12 +90,12 @@ CASES = [
 
 @pytest.mark.parametrize("main", CASES)
 def test_editing_the_constant_between_runs_recomputes(tmp_path, main):
-    (tmp_path / "main.py").write_text(textwrap.dedent(main))
-    (tmp_path / "helper.py").write_text(textwrap.dedent(HELPER))
-    (tmp_path / "settings.py").write_text("WIDTH = 1\n")
+    (tmp_path / "main.py").write_text(textwrap.dedent(main), encoding="utf-8")
+    (tmp_path / "helper.py").write_text(textwrap.dedent(HELPER), encoding="utf-8")
+    (tmp_path / "settings.py").write_text("WIDTH = 1\n", encoding="utf-8")
     assert run_python("main.py", cwd=tmp_path).stdout.strip() == "1"
     assert run_python("main.py", cwd=tmp_path).stdout.strip() == "1"
-    (tmp_path / "settings.py").write_text("WIDTH = 10  # edited\n")
+    (tmp_path / "settings.py").write_text("WIDTH = 10  # edited\n", encoding="utf-8")
     assert run_python("main.py", cwd=tmp_path).stdout.strip() == "10"
 
 
@@ -118,8 +118,8 @@ def test_rebinding_the_constant_in_the_process_recomputes(tmp_path):
         seen += [build(1) for _ in range(3)]
         print(seen)
     """
-    (tmp_path / "main.py").write_text(textwrap.dedent(main))
-    (tmp_path / "settings.py").write_text("WIDTH = 1\n")
+    (tmp_path / "main.py").write_text(textwrap.dedent(main), encoding="utf-8")
+    (tmp_path / "settings.py").write_text("WIDTH = 1\n", encoding="utf-8")
     assert run_python("main.py", cwd=tmp_path).stdout.strip() == str([1] * 5 + [10] * 3 + [1] * 3)
 
 
