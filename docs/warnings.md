@@ -1981,6 +1981,17 @@ it is nested too deeply to key: deeper than pickle follows, such as a long
 linked list. A value a cached `functools.partial` binds counts as an argument
 too. The call ran uncached.
 
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.unhashable_attribute @fa9cf9cb -->
+When the argument is an object and one of its attributes is the reason (a
+lock, a client or a logger an instance holds), the message names the
+parameter and that attribute, and the fix line names the attributes that are
+left to key on:
+
+```text title="Output"
+[KEY-UNHASHABLE-ARG] @cash.cache on app.Model.predict: the argument `self`, of type Model, could not be hashed: its attribute `_lock` (lock) cannot be hashed, so this call and every call like it does not cache.
+  Fix: if Model is your own class, give it a __cash_key__(self) method that returns what identifies an instance and leaves `_lock` out, such as `def __cash_key__(self): return (self.weights, self.name)`; otherwise register a hasher with cash.register_hasher(Model, ...), or pass the argument by a hashable value.
+```
+
 It is also shown for an argument that is an `object()` or an instance of an
 empty class that no module-level name or class attribute holds
 (`f(x, object())`). Such a value
