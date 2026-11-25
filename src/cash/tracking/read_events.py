@@ -90,6 +90,10 @@ def _is_read_mode(mode: str) -> bool:
     return "r" in mode or ("+" in mode and "w" not in mode and "x" not in mode)
 
 
+#: The modes nearly every read is opened with.
+_READ_ONLY_MODES = frozenset({"r", "rb", "rt"})
+
+
 def _on_open(args: tuple) -> None:
     """The ``open`` audit event: a read is a dependency, a write an effect.
 
@@ -100,6 +104,13 @@ def _on_open(args: tuple) -> None:
     """
     path, mode, flags = args
     if not isinstance(path, (str, bytes, os.PathLike)):
+        return
+    if type(mode) is str and mode in _READ_ONLY_MODES:
+        # A plain read, which most opens are: what the steps below come to
+        # for it, without asking each of them.
+        caller = sys._getframe(io_watch.CALLER_DEPTH)
+        if not _not_a_read(caller):
+            _track_read(path, caller, appends=False)
         return
     if _opens_to_write(mode, flags) or (isinstance(flags, int) and flags & os.O_CREAT):
         tracker = active_tracker.get()
@@ -170,13 +181,18 @@ def _track_read(path: Any, caller: Any, *, appends: bool) -> None:
     if tracker is None:
         note_untracked_read(path, caller)
         return
+    # A read this block recorded already, of the file as it was: nothing
+    # left to record (`FileAccessTracker.recorded_unchanged`).
+    read = tracker.read_key(path, caller)
+    if read is not None and tracker.recorded_unchanged(read):
+        return
     if is_cash_internal(path):
         # The cache's own lookups: each call a statement keys looks its
         # entry up, and resolving and probing the path cost ~50 us of a
         # ~2 us miss, 3 ms of the first 50 calls in `[f(i) for i in xs]`.
         # The tracker drops these paths anyway, after resolving them.
         return
-    found = tracker.track_path(path)
+    found = tracker.track_path(path, read)
     if not appends and not found:
         # A file that was not there is an input too, and the docs say so --
         # but only the `os.path.exists` spelling recorded it.
@@ -220,6 +236,8 @@ def _walks_by_descriptor(frame: Any) -> bool:
 def _opens_to_write(mode: Any, flags: Any) -> bool:
     """Does an ``open`` with *mode* (or ``os.open``'s *flags*) allow writing?"""
     if isinstance(mode, str):
+        if mode in _READ_ONLY_MODES:
+            return False  # every read's first question: no scan of the mode
         return any(ch in mode for ch in "wax+")
     return isinstance(flags, int) and bool(flags & (os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_TRUNC))
 

@@ -48,11 +48,12 @@ from cash.tracking.read_classification import (
     is_pseudo_fs,
     is_runtime_cache_path,
     module_kind,
+    own_lstat,
     own_stat,
     regular_file_stat,
     stat_key,
 )
-from cash.tracking.read_credit import credit_read_again, credit_read_to_stack
+from cash.tracking.read_credit import credit_read_again, credit_read_to_stack, frame_kind
 from cash.tracking.read_events import subscribe_read_events
 from cash.tracking.reader_patches import install_patches, patch_reader_aliases, remove_patches
 from cash.tracking.tracker_context import active_tracker, untracked
@@ -112,6 +113,16 @@ def regular_file_stat_kept(path: str) -> os.stat_result | None:
 
 #: How many failed events a tracker names (`note_tracking_failed`).
 _FAILURES_KEPT = 8
+
+#: How many reads a tracker remembers as recorded (`FileAccessTracker.read_key`).
+_READS_KEPT = 65536
+#: A `track_path` without a key from its caller: it makes its own.
+_NO_KEY: Any = object()
+#: code filename -> `frame_kind`, for the walk `read_key` makes at every
+#: read: a plain dictionary, started over when it has grown past any
+#: program's files.
+_frame_kinds: dict[str, str] = {}
+_FRAME_KINDS_MAX = 16384
 
 
 def unrecorded_reads(tracker: Any) -> str | None:
@@ -240,6 +251,11 @@ class FileAccessTracker:
         # its own memo (`realpath_of_read_this_run`); dropped when the block
         # ends, so a link re-pointed between two calls is resolved anew.
         self._folders: dict[tuple[str, str], str] = {}
+        # `read_key` of a read this block recorded -> ``(its resolved path,
+        # the file's stat then, the objects the key names by id)``: the
+        # same read again, of the file as it was, has nothing left to
+        # record (`recorded_unchanged`). Dropped when the block ends.
+        self._reads_recorded: dict[tuple, tuple] = {}
         self._probes_seen: set[tuple[Any, str | None]] = set()
         # The stat of each regular file WHEN IT WAS FIRST READ. The entry's
         # fingerprint is taken when it is stored, after the body has finished,
@@ -368,6 +384,7 @@ class FileAccessTracker:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.credit_anchor = None
         self._folders = {}
+        self._reads_recorded = {}
         self.incidental_anchor = [None]
         self._last_readers = ()
         self._last_chain = ([], {})
@@ -561,18 +578,137 @@ class FileAccessTracker:
     # The three methods below are what the feeders (`read_events`,
     # `reader_patches`, `read_credit`) call when they see a read.
 
-    def track_path(self, path) -> bool:
+    def read_key(self, path: Any, frame: Any) -> tuple | None:
+        """What tells a read of *path* made from *frame* from every read that
+        could be recorded differently: the path as written, the working
+        directory a relative one is read from, and the code of each frame
+        from *frame* up to the cached call's own wrapper. None when that
+        cannot be told cheaply.
+
+        Recording a read resolves its path, classifies it by the frames
+        around it and credits it to the user code on the stack: ~50 us,
+        paid again for every ``open`` of a file the block had already
+        recorded, 100,000 small reads taking 6 s where plain Python takes
+        0.8 s. All of that is a function of this key, so the same key again
+        is the same record again (`recorded_unchanged`).
+
+        The walk ends where `credit_read_to_stack`'s does: at the wrapper,
+        or at a frame of cash's above the user's code that is the one the
+        last full walk anchored on (``credit_anchor``; the code above a
+        running frame does not change).
+
+        Returns ``(key, frame)``: the key names each code by its id, and
+        `_note_recorded` walks from *frame* again for the objects, which
+        are kept with the key.
+        """
+        start = frame
+        if type(path) is not str:
+            try:
+                path = os.fspath(path)
+            except TypeError:
+                return None
+            if type(path) is not str:
+                return None
+        kinds = _frame_kinds
+        ids = []
+        below = None
+        while frame is not None:
+            code = frame.f_code
+            filename = code.co_filename
+            kind = kinds.get(filename)
+            if kind is None:
+                if len(kinds) >= _FRAME_KINDS_MAX:
+                    kinds.clear()
+                kind = kinds[filename] = frame_kind(filename)
+            if kind == "wrapper":
+                break
+            if kind == "cash" and below is not None and below != "cash":
+                anchor = self.credit_anchor
+                if anchor is None or anchor[0] is not frame:
+                    return None  # the next full walk anchors here
+                code = anchor  # stands for the frame and all above it
+                frame = None
+            else:
+                below = kind
+                frame = frame.f_back
+            ids.append(id(code))
+        try:
+            cwd = "" if os.path.isabs(path) else os.getcwd()
+        except OSError:
+            return None
+        return ((path, cwd, tuple(ids)), start)
+
+    def recorded_unchanged(self, read: tuple) -> bool:
+        """Did this block already record *read* (a `read_key`), of the file
+        as it still is? One ``lstat``: the file is there, a regular file and
+        no link, with the size and times it had when the block first read
+        it, so a full `track_path` would find every record it makes
+        already made."""
+        key = read[0]
+        known = self._reads_recorded.get(key)
+        if known is None:
+            return False
+        abs_path, then = known[0], known[1]
+        try:
+            st = own_lstat(key[0])
+        except (OSError, ValueError):
+            return False
+        if not stat.S_ISREG(st.st_mode) or stat_key(st) != then:
+            return False
+        return self.read_stats.get(abs_path) == then and abs_path in self.accessed_files
+
+    def _note_recorded(self, read: tuple, abs_path: str, lstat: Any) -> None:
+        """Remember that *read* (a `read_key`) was recorded in full, as
+        *abs_path* (`recorded_unchanged`). Only a regular file that is no
+        link, as the block's first read found it: anything else is recorded
+        in full each time."""
+        if len(self._reads_recorded) >= _READS_KEPT:
+            return
+        key, frame = read
+        # The objects the key names by id, so none of the ids is used again
+        # while the key is kept: the codes from *frame* up, and last the
+        # anchor that stands for the frames above them.
+        holders: list[Any] = []
+        for named in key[2]:
+            code = frame.f_code if frame is not None else None
+            if id(code) != named:
+                anchor = self.credit_anchor
+                if id(anchor) != named or len(holders) != len(key[2]) - 1:
+                    return  # the stack is not the one the key was made from
+                code = anchor
+            holders.append(code)
+            frame = frame.f_back if frame is not None else None
+        try:
+            if lstat is None:
+                lstat = own_lstat(key[0])
+            if not stat.S_ISREG(lstat.st_mode):
+                return
+        except (OSError, ValueError):
+            return
+        then = stat_key(lstat)
+        if self.read_stats.get(abs_path) != then:
+            return  # a link, or changed since the block first read it
+        self._reads_recorded[key] = (abs_path, then, holders)
+
+    def track_path(self, path, read: Any = _NO_KEY) -> bool:
         """Record a read of *path*, unless it is not a user dependency.
         True when resolving it just found a regular file there (its
-        ``lstat``), so the caller need not stat it to know it is there."""
+        ``lstat``), so the caller need not stat it to know it is there.
+
+        *read* is the caller's `read_key` of this read, when it has asked
+        `recorded_unchanged` already."""
         global _tracking_seconds
+        if read is _NO_KEY:
+            read = self.read_key(path, sys._getframe(1))
+            if read is not None and self.recorded_unchanged(read):
+                return True
         started = _perf_counter()
         try:
             # Untracked: deciding whether this read counts probes paths too
             # (the time zone directories, looked up on the first read in a
             # process), and through the same wrapped functions.
             with untracked():
-                return self._track_path_untimed(path)
+                return self._track_path_untimed(path, read)
         finally:
             _tracking_seconds += _perf_counter() - started
 
@@ -612,7 +748,7 @@ class FileAccessTracker:
             return True
         return any(abs_path.startswith(d) or abs_path + "/" == d for d in self.created_dirs)
 
-    def _track_path_untimed(self, path) -> bool:
+    def _track_path_untimed(self, path, read: tuple | None = None) -> bool:
         if not isinstance(path, (str, bytes, os.PathLike)):
             # ``open(3)`` opens a file DESCRIPTOR: joblib and loky do, and
             # ``str(3)`` was recorded as a read of ``<cwd>/3`` -- a directory
@@ -697,6 +833,8 @@ class FileAccessTracker:
         twin = self._unresolved_spelling(path, abs_path)
         if twin is not None:
             self.add_tracked(twin)
+        if read is not None:
+            self._note_recorded(read, abs_path, read_lstat)
         return found
 
     def _recent_reader(self, reader: tuple) -> tuple | None:
