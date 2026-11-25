@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from .._type_memo import class_dict, class_module, class_mro, class_name, mro_of
 from .._user_attrs import plain_getattr
+from ..kept_state import joblib_memory_state
 from ..rewrite_in_place import (
     ABSENT,
     AttrChange,
@@ -651,7 +652,9 @@ def _pickling_refusal(value: Any) -> str | None:
 
     A builtin container, an ``OrderedDict``, ``defaultdict`` or ``deque``
     or a NumPy, pandas or SciPy object pickles all it holds, as do scikit-learn's neighbour trees and distance metrics
-    (`_sklearn_refusal`). Any other object must pickle as a plain instance
+    (`_sklearn_refusal`), and joblib's ``Memory`` but for the clock read it
+    was built with, which a stored copy reads again
+    (`kept_state.joblib_memory_state`). Any other object must pickle as a plain instance
     does -- no ``__reduce__`` or ``__reduce_ex__`` of its own -- and a
     ``__getstate__`` of its own must hand back every attribute as it is
     (scikit-learn's adds its version and keeps the rest); one that leaves
@@ -664,6 +667,10 @@ def _pickling_refusal(value: Any) -> str | None:
     sklearn = _sklearn_refusal(value, kind)
     if sklearn is not False:
         return sklearn
+    if joblib_memory_state(value) is not None:
+        # Its pickle leaves out the clock read it was built with, which a
+        # stored copy reads again as it is rebuilt (`kept_state`).
+        return None
     if kind.__reduce_ex__ is not object.__reduce_ex__ or kind.__reduce__ is not object.__reduce__:
         return f"is a {class_name(kind)}, which pickles through its own __reduce__"
     getstate = plain_getattr(kind, "__getstate__", None)

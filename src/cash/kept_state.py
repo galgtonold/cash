@@ -31,6 +31,7 @@ import os
 import pickle
 import sys
 import threading
+import time
 import types
 import typing
 import uuid
@@ -1627,6 +1628,12 @@ class _KeepDict(dict):
         if t is typing.ForwardRef:
             return _reduce_forward_ref
         registered = copyreg.dispatch_table.get(t)
+        if not self._keyed and not self._unshared and registered is None and joblib_memory_type(t):
+            # Stored bytes, which are loaded: a ``Memory`` comes back with
+            # its build time read from the clock (`joblib_memory_state`).
+            return functools.partial(
+                _reduce_joblib_memory, reducer=_plain_reducer(t, self._protocol), watch=self._watch
+            )
         if self._watch is not None:
             reducer = _watched(self._store_reducer(t, registered), t, registered, self._watch)
             if class_name(t) in _GLOBAL_RNG_TYPE_NAMES:
@@ -1684,6 +1691,74 @@ class _KeepDict(dict):
         if cached_properties(t) and _leaves_views_out(t):
             reducer = functools.partial(_reduce_without_views, reducer=reducer, which=stored_views)
         return reducer
+
+
+def joblib_memory_type(t: type) -> bool:
+    """Is *t* exactly ``joblib.memory.Memory`` (not a subclass), pickled as
+    a plain instance is: no reduce or ``__setstate__`` of its own, its
+    ``__getstate__`` the one `joblib_memory_state` reads?"""
+    if class_qualname(t) != "Memory" or class_module(t) != "joblib.memory":
+        return False
+    if t is not getattr(sys.modules.get("joblib.memory"), "Memory", None):
+        return False
+    if t.__reduce_ex__ is not object.__reduce_ex__ or t.__reduce__ is not object.__reduce__:
+        return False
+    return plain_getattr(t, "__setstate__", None) is None
+
+
+def joblib_memory_state(obj: Any) -> dict | None:
+    """What joblib's ``Memory.__getstate__`` hands back for *obj* when it
+    is every attribute as *obj* holds it, in its order, but ``timestamp``,
+    a float there and None here; else None.
+
+    joblib's ``Memory.__getstate__`` is ``state = self.__dict__.copy();
+    state["timestamp"] = None`` ("we don't store the timestamp when
+    pickling, to avoid the hash depending from it"). ``timestamp`` is
+    ``time.time()`` read in ``__init__``; nothing reads it but
+    ``Memory.cache``, which hands it to the ``MemorizedFunc`` it builds,
+    whose log lines print the time since. Everything else -- location,
+    backend, mmap mode, compression, verbosity, backend options, the store
+    backend (a plain instance) -- is pickled as held. So a ``Memory``
+    rebuilt from that state with ``timestamp`` read from the clock as it
+    is rebuilt is what a plain run building it then holds
+    (`memory_stamped_now`). Checked on each object, not assumed of the
+    version installed."""
+    if not joblib_memory_type(type(obj)):
+        return None
+    attrs = plain_getattr(obj, "__dict__", None)
+    if type(attrs) is not dict or type(attrs.get("timestamp")) is not float:
+        return None
+    try:
+        state = obj.__getstate__()
+    except Exception:  # noqa: BLE001 - not read: not trusted
+        return None
+    if type(state) is not dict or list(state) != list(attrs) or state["timestamp"] is not None:
+        return None
+    if any(state[key] is not held for key, held in attrs.items() if key != "timestamp"):
+        return None
+    return state
+
+
+def _reduce_joblib_memory(obj: Any, reducer: Any, watch: list | None) -> Any:
+    """*obj*'s stored reduce: a ``joblib.Memory`` its state hands back
+    whole but for the clock (`joblib_memory_state`) is rebuilt with that
+    state and ``timestamp`` read again (`memory_stamped_now`); anything
+    else as *reducer* reduces it. *watch* is told, as a key reduces it
+    without the setter."""
+    state = joblib_memory_state(obj)
+    if state is None:
+        return reducer(obj)
+    if watch is not None:
+        watch.append(True)
+    return copyreg.__newobj__, (type(obj),), state, None, None, memory_stamped_now
+
+
+def memory_stamped_now(obj: Any, state: dict) -> None:
+    """Set a ``joblib.Memory``'s state, then its ``timestamp`` from the
+    clock, as its ``__init__`` sets it (`joblib_memory_state`). Named in
+    stored entries: keep its name."""
+    obj.__dict__.update(state)
+    obj.timestamp = time.time()
 
 
 def _plain_reducer(t: type, protocol: int) -> Any:
