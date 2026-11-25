@@ -75,7 +75,7 @@ the most cash takes; the 8 GiB minimum does not fit)`. A cap you set reads
 
 === "Decorator"
 
-    <!-- claim: cash/backends/file_eviction.py:FileEvictor.ensure_size_scanned @adb3043c, cash/decorator/run_summary.py:RunSummary._budget @b7ff011b -->
+    <!-- claim: cash/backends/file_eviction.py:FileEvictor.ensure_size_scanned @1b9288c8, cash/decorator/run_summary.py:RunSummary._budget @b7ff011b -->
     The first result a process writes to disk logs the line on the
     `cash.storage` logger when you ask for it: `verbose=True`, `debug=True` (or
     `CASH_VERBOSE=1`, `CASH_DEBUG=1`), or a level of INFO you set on the `cash`
@@ -207,7 +207,7 @@ keeps it in memory if it fits and warns once
 
 ## Cache size limit and eviction
 
-<!-- claim: cash/backends/file_backend.py:FileBackend._do_set_sync @820897ee, cash/backends/file_eviction.py:FileEvictor.evict @697d1c43 -->
+<!-- claim: cash/backends/file_backend.py:FileBackend._do_set_sync @820897ee, cash/backends/file_eviction.py:FileEvictor.evict @9bf87692 -->
 Only a write can start eviction. After each write to disk, the background
 writer adds the entry's size to a running total. If the total is over the cap,
 it deletes entries until the cache is under 90% of the cap, so the next few
@@ -262,9 +262,16 @@ The value just written is not protected. If it is the least valuable entry, it
 goes first; when that keeps happening, the cap is too small, and
 [`CACHE-THRASH`](../warnings.md#cache-thrash) warns once per session.
 
+<!-- claim: cash/backends/file_eviction.py:FileEvictor.recount_if_stale @33da6aed, cash/backends/file_eviction.py:FileEvictor.SIZE_RESCAN_INTERVAL == 60.0 -->
 Each process enforces the cap on its own writes, so several processes sharing
 one folder can together go over it before one of them evicts. A long-running
-process re-measures the disk about once a minute while it writes. A re-run
+process re-measures the disk about once a minute while it writes. Its running
+total follows only its own writes, so before it deletes anything it checks
+that the folder agrees: it counts the folder again when the cache was cleared
+since the last count, when the count is over a minute old, and whenever it
+ranks the entries or finds one already gone. After `cash clear`, or after
+another process has made room, a running process therefore lets the folder
+fill up again instead of evicting what it has just stored. A re-run
 notebook statement also drops its older versions when the new one is written.
 
 ## When a result reaches the disk

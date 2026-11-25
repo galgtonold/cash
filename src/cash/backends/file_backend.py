@@ -367,6 +367,7 @@ class FileBackend(CacheBackend):
             writes=self._writes,
             untracked=_untracked,
             chunks=self.chunks,
+            generation=self.stamp.token,
         )
 
         # Directory creation, the stamp check and the flusher wait for first use.
