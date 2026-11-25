@@ -211,6 +211,44 @@ def _scan(code: types.CodeType, keep: frozenset[int] | None) -> list[tuple[str, 
     return out
 
 
+#: The ``IMPORT_NAME`` opcode, as a byte string to look for.
+_IMPORT_NAME = bytes([dis.opmap["IMPORT_NAME"]])
+_CONSTANT_LOADS = ("LOAD_CONST", "LOAD_SMALL_INT")
+
+
+def imports_of(code: types.CodeType) -> list[tuple[int, str, tuple[str, ...]]]:
+    """``(level, module, from-list)`` for each import *code* makes, in
+    order: ``(0, "sklearn", ("linear_model",))`` for ``from sklearn import
+    linear_model``, ``(1, "helper", ("scale",))`` for ``from .helper import
+    scale``, ``(0, "os.path", ())`` for ``import os.path``. *code* only, not
+    its nested code. The one reading of an import for the decorator's key
+    and the notebook's.
+
+    ``IMPORT_NAME`` takes its level and from-list from the two constants
+    loaded just before it. Past 255 names or constants an ``EXTENDED_ARG``
+    prefix stands between them, its argument already folded into the
+    instruction after it: left in, the level and the from-list went unread,
+    a relative import read as absolute and its from-list was lost.
+    """
+    # Most code imports nothing: a scan of the opcode bytes (every other
+    # byte of ``co_code``, which holds no specialised or instrumented
+    # opcode) rules it out before the instructions are decoded.
+    if not code.co_names or _IMPORT_NAME not in code.co_code[::2]:
+        return []
+    ins = [i for i in instructions(code) if i[0] != "EXTENDED_ARG"]
+    found: list[tuple[int, str, tuple[str, ...]]] = []
+    for k, (opname, module) in enumerate(ins):
+        if opname != "IMPORT_NAME" or not isinstance(module, str):
+            continue
+        level: Any = 0
+        fromlist: Any = None
+        if k >= 2 and ins[k - 2][0].startswith(_CONSTANT_LOADS) and ins[k - 1][0].startswith(_CONSTANT_LOADS):
+            level, fromlist = ins[k - 2][1], ins[k - 1][1]
+        names = tuple(item for item in fromlist if isinstance(item, str)) if isinstance(fromlist, tuple) else ()
+        found.append((level if isinstance(level, int) else 0, module, names))
+    return found
+
+
 def opnames(code: types.CodeType) -> set[str]:
     """The names of the instructions *code* holds (not its nested code)."""
     raw = code.co_code
