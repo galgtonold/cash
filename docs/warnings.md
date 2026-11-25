@@ -1901,6 +1901,13 @@ it is nested too deeply to key: deeper than pickle follows, such as a long
 linked list. A value a cached `functools.partial` binds counts as an argument
 too. The call ran uncached.
 
+It is also shown for an argument that is an `object()` or an instance of an
+empty class that no module-level name or class attribute holds
+(`f(x, object())`). Such a value
+holds nothing, so only which one it is tells it from another, and cash keys
+it by the name that holds it. Assign it to a module-level name
+(`MISSING = object()`) and pass that, or pass a string or an enum member.
+
 **Why it matters.** Every call with that argument recomputes. Nothing stale
 is served.
 

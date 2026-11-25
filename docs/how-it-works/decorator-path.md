@@ -112,7 +112,7 @@ warning; `allow_random=True` accepts that on purpose.
 
 ## How arguments are hashed
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @95df02aa, cash/decorator/arg_hashing.py:ArgHasher._nested_hasher @1b6f7959 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @95df02aa, cash/decorator/arg_hashing.py:ArgHasher._nested_hasher @d8a24e36 -->
 Each argument is fingerprinted by the first rule that applies:
 
 1. A hasher you registered with `cash.register_hasher(T, fn, override=True)`.
@@ -131,7 +131,17 @@ Each argument is fingerprinted by the first rule that applies:
 6. For a lambda or a closure of yours, which pickle cannot write, its name;
    its code, the globals that code reads and the values its closure captured
    are keyed with the state, as code passed as an argument.
-7. The pickled value, in one canonical form: sets in sorted order, every
+7. For an `object()` or an instance of an empty marker class (a flag value
+   such as `MISSING = object()`), the name of the module global or class
+   attribute that holds it. Such a value holds nothing to read, and code
+   tells two of them apart with `is`, so pickled they would key alike. One
+   that no name holds, passed as an argument, makes the call run uncached
+   with [KEY-UNHASHABLE-ARG](../warnings.md#key-unhashable-arg); deeper, in
+   a list or in the state of another object (a private `self._token =
+   object()`), it is pickled as before, alike with any other. A class with
+   methods of its own is not a marker: its instances key by their class and
+   state.
+8. The pickled value, in one canonical form: sets in sorted order, every
    container tagged with its type. The numbers in a set (and tuples of
    them) also key by the order they iterate in, where that is not their
    sorted order, since `list(s)` and `s.pop()` read it; strings key alike in

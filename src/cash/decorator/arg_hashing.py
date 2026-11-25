@@ -24,6 +24,7 @@ from .._memo import ARGUMENTS, FRAMES, LruMemo
 from .._type_memo import TypeMemo, class_dict, class_module, class_name, class_qualname, type_key
 from .._user_attrs import from_family, instance_of, named_attr, plain_getattr
 from ..backends.frame_sharing import is_pin
+from ..bare_instances import NAMELESS_FIX, NamelessInstanceError, is_bare, may_be_bare, name_of
 from ..canonical_form import (
     NOT_HOOKED,
     ContentHashing,
@@ -282,6 +283,8 @@ def unhashable_arg_fix(value: Any, type_name: str) -> str:
     """The fix line for an argument of *type_name* that could not be hashed."""
     if instance_of(value, CODE_VALUE_TYPES):
         return CODE_ARG_FIX
+    if is_bare(value):
+        return NAMELESS_FIX
     if cash_key_method(value) is not None:
         return (
             f"fix {type_name}.__cash_key__(): it must return a value cash can hash, such as a "
@@ -301,6 +304,7 @@ def unhashable_arg_fix(value: Any, type_name: str) -> str:
 _PASS = "pass"
 _KEYED = "keyed"
 _JIT = "jit"
+_BARE = "bare"
 _HOOK_KINDS: TypeMemo[str] = TypeMemo()
 
 
@@ -313,7 +317,7 @@ def _hook_kind(t: type) -> str:
     elif is_jit_type(t):
         kind = _JIT
     else:
-        kind = _KEYED if cash_key_method_of_type(t) is not None else _PASS
+        kind = _KEYED if cash_key_method_of_type(t) is not None else _BARE if may_be_bare(t) else _PASS
     return _HOOK_KINDS.put(t, kind)
 
 
@@ -2097,6 +2101,19 @@ class ArgHasher:
                 ),
             )
             return
+        if isinstance(cause, NamelessInstanceError):
+            kind = class_qualname(type(cause.value))
+            self._notices.warn_once(
+                CashCacheIneffectiveWarning,
+                func_name,
+                "<nameless>",
+                f"@cash.cache on {func_name}: an argument is, or holds, an instance of {kind} that holds nothing "
+                "and that no module-level name or class attribute holds, so nothing tells it from another one "
+                "and this call and every call like it does not cache.",
+                code="KEY-UNHASHABLE-ARG",
+                fix=NAMELESS_FIX,
+            )
+            return
         arg_type_name = self.first_unhashable_arg_type(args, kwargs)
         if arg_type_name == "<unknown>":
             which = (
@@ -2323,6 +2340,15 @@ class ArgHasher:
             compiled = jit_python_function(value)
             if compiled is not None:
                 return _hooked(("__cash_jit__", f"{compiled.__module__}.{compiled.__qualname__}", jit_options(value)))
+        if kind is _BARE and is_bare(value):
+            # ``DROP = object()``: nothing in it to read, so it is keyed by
+            # the name that holds it, as a function is. One no name holds
+            # is refused as an argument (`key_part`); deeper, in a list or
+            # in the state of an object that keeps a private one, it is
+            # pickled as it was.
+            name = name_of(value, patient=False)
+            if name is not None:
+                return _hooked(("__cash_named__", name))
         return NOT_HOOKED
 
     def _memo_content_digest(self, value: Any) -> str | None:
@@ -2649,6 +2675,11 @@ class ArgHasher:
             (self.override_hashers or self.type_hashers) and self.keys_by_registration_only(arg)
         ):
             return self.cash_key_hash(arg, method), _NOT_CONTENT
+        if _hook_kind(type(arg)) is _BARE and is_bare(arg) and not self.keys_by_registration(arg):
+            # An ``object()`` handed over that no name holds: nothing tells
+            # it from the next one, so no key (`bare_instances`).
+            if name_of(arg) is None:
+                raise NamelessInstanceError(arg)
         lineage = self._trusted_lineage(arg)
         frozen_hash = self._frozen_digest(arg)
         if frozen_hash is not None:
