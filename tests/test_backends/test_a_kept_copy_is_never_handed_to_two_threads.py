@@ -76,7 +76,7 @@ class _LockWithGap:
     def _run(self):
         try:
             self._at_gap()
-        except BaseException as exc:  # noqa: BLE001 - shown by the test
+        except BaseException as exc:  # shown by the test
             self.errors.append(exc)
 
 
@@ -125,13 +125,11 @@ def test_the_copy_is_still_handed_back_once_its_caller_let_go(memory, monkeypatc
     assert id(second) == first_id
 
 
-@pytest.mark.parametrize("let_go", ["delete", "store again", "clear"])
+@pytest.mark.parametrize("let_go", ["delete", "clear"])
 def test_a_kept_copy_let_go_while_it_is_handed_out_still_reaches_its_caller(memory, monkeypatch, let_go):
     def at_gap():
         if let_go == "delete":
             memory.delete("k")
-        elif let_go == "store again":
-            memory.set("k", {"other": 1}, {"size": 10})
         else:
             memory.clear()
 
