@@ -371,6 +371,14 @@ def reaches_namespace_by_name(scopes: tuple, module_globals: dict[str, Any]) -> 
 #: The opcodes that read an attribute (``LOAD_METHOD`` before 3.12).
 _ATTR_OPS = frozenset({"LOAD_ATTR", "LOAD_METHOD"})
 
+#: The loads that can read a module global by name: ``LOAD_GLOBAL`` in a
+#: function, ``LOAD_NAME`` in a class body (``class Row: width =
+#: settings.WIDTH``, which looks in the class's own names first), and
+#: ``LOAD_FROM_DICT_OR_GLOBALS`` in the body of a generic class. A class body
+#: that shadows the name reads no global through it: the pair then names an
+#: attribute the code does not read, which only adds a part.
+GLOBAL_NAME_LOADS = frozenset({"LOAD_GLOBAL", "LOAD_NAME", "LOAD_FROM_DICT_OR_GLOBALS"})
+
 
 class GlobalReads:
     """The module data each function's code reads, worked out once per code
@@ -663,6 +671,8 @@ class GlobalReads:
         * A global followed by a chain of attribute loads
           (``LOAD_GLOBAL pkg; LOAD_ATTR conf; LOAD_ATTR RATE``) gives one
           pair per link: ``("pkg", "conf")`` and ``("pkg.conf", "RATE")``.
+          A class body in the code loads the global by another instruction
+          (`GLOBAL_NAME_LOADS`) and counts the same.
           `ModuleAttrFold.module_attr_parts` resolves the dotted path and folds
           the pairs whose path is a user module.
         * A module the code takes whole (bound to a local, passed on, or read
@@ -691,7 +701,7 @@ class GlobalReads:
             for i, (opname, argval) in enumerate(instrs):
                 if opname in _ATTR_OPS and isinstance(argval, str):
                     names.add(argval)
-                if opname != "LOAD_GLOBAL" or not isinstance(argval, str):
+                if opname not in GLOBAL_NAME_LOADS or not isinstance(argval, str):
                     continue
                 path = argval
                 value = g.get(path)

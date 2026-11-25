@@ -25,6 +25,7 @@ from ..jit_functions import jit_python_function
 from ..value_types import CODELESS_PRIMS
 from .call_state import held_by_name
 from .closure_fold import iter_code_scopes
+from .global_reads import GLOBAL_NAME_LOADS
 from .global_values import chain_end, keyed_by_chains
 from .key_values import iter_contained, plain_data_kind
 from .library_versions import library_import, library_owns
@@ -84,7 +85,7 @@ def written_module_attrs(code: types.CodeType) -> frozenset[tuple[str, str]]:
     for scope in iter_code_scopes(code):
         instrs = [ins for ins in instructions(scope) if ins[0] not in ("EXTENDED_ARG", "CACHE")]
         for i, (opname, argval) in enumerate(instrs):
-            if opname != "LOAD_GLOBAL" or not isinstance(argval, str):
+            if opname not in GLOBAL_NAME_LOADS or not isinstance(argval, str):
                 continue
             path, j = argval, i + 1
             while j < len(instrs):
