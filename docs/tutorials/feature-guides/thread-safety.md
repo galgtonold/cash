@@ -28,16 +28,17 @@ threads call cached functions, and what it does not.
   handed to another. The exception is `frozen=True`, where you promise not to
   change the result and every hit hands back
   [the same object](../../decorator.md#frozen-and-large-arguments).
-<!-- claim: cash/loaded_modules.py:loaded_module @efa9f227 -->
+<!-- claim: cash/loaded_modules.py:loaded_module @b27d18ff -->
 - **A call works while another thread imports a library.** While one thread
   is in the middle of `import numpy`, `import pandas` or `import torch`, a
   cached call on another thread treats that library as not loaded yet and
-  runs normally.
+  runs normally. The importing thread itself sees the library as plain
+  Python shows it.
 <!-- claim: cash/tracking/trace_recorder.py:Unit.detached @c3bd08a0 -->
 - **A call is judged by its own record.** cash records the code a call ran in
   order to check its entry later. Code that other threads run while the call
   finishes does not get into that record and does not make the call fail.
-<!-- claim: cash/tracking/process_registries.py:changed_by @cee9eb08 -->
+<!-- claim: cash/tracking/process_registries.py:changed_by @4e1146d2 -->
 - **A setting another thread writes is not blamed on your function** when the
   write can be traced to its thread. That holds for the environment
   (`os.environ`, `os.putenv`), `atexit.register`, `codecs.register` and
@@ -62,7 +63,7 @@ threads call cached functions, and what it does not.
   again during the next call that runs the function, cash takes the change as
   the function's and its calls run uncached. With no other thread running,
   the first change already counts as the function's.
-<!-- claim: cash/decorator/rng.py:RngWatch.maybe_another_threads @20f7bae2 -->
+<!-- claim: cash/decorator/rng.py:RngWatch.maybe_another_threads @6ffb844e -->
 - **The global random streams.** `random`, `np.random` and torch's default
   generator are shared by all threads, so a stream that moved during a call
   may have been moved by another thread. The first time this happens to a
@@ -70,7 +71,17 @@ threads call cached functions, and what it does not.
   changes. If a stream moves again during the next call that runs the
   function, in this process or the next, cash treats the function as drawing
   random numbers: its key follows the seed, and an unseeded draw warns with
-  [RANDOM-UNSEEDED](../../warnings.md#random-unseeded).
+  [RANDOM-UNSEEDED](../../warnings.md#random-unseeded). A function whose
+  own source shows the draw, or that has `allow_random=True`, is treated as
+  drawing at once.
+
+<!-- claim: cash/tracking/process_registries.py:beside_threads @58b500d3 -->
+"Other threads" here means threads that may be doing your program's work.
+cash's own threads and a Jupyter kernel's do not count. On Linux, neither
+does a thread that used no processor time while the call ran, such as an idle
+pool worker or a sleeping monitor: with only such threads around, a change
+counts as the function's at once, as it does with no other thread. On macOS
+and Windows every other live thread counts.
 
 **Not guaranteed:**
 

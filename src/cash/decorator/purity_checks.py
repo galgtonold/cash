@@ -767,15 +767,22 @@ def _held_elsewhere(result, held: bool | None) -> dict[int, Any]:
     return members
 
 
+def _a(value, kinds) -> bool:
+    """``isinstance(value, kinds)`` by the type alone: ``isinstance`` asks
+    a value that is not one for its ``__class__``, which on a class of the
+    user's runs its metaclass's ``__getattribute__``."""
+    return issubclass(type(value), kinds)
+
+
 def _note_members(value, depth: int, members: dict[int, Any], seen_in: dict[int, int]) -> None:
     """Add to *members* what *value* holds within *depth* levels that is
     not a plain immutable value, and to *seen_in* how many references to
     each the walk passed."""
-    if depth <= 0 or isinstance(value, enum.Enum):
+    if depth <= 0 or _a(value, enum.Enum) or _a(value, type):
         return
-    if isinstance(value, dict):
+    if _a(value, dict):
         held = value.values()
-    elif isinstance(value, (list, tuple, set, frozenset, collections.deque)):
+    elif _a(value, (list, tuple, set, frozenset, collections.deque)):
         held = value
     elif class_name(type(value)) == "ndarray" and getattr(getattr(value, "dtype", None), "kind", None) == "O":
         held = value.flat
@@ -824,7 +831,7 @@ def _shared_argument_item(result, supplied, held: bool | None) -> tuple[str, str
     `SHARED_ARGUMENT_ITEMS` in all; past that nothing is proved either
     way, and the answer says the result may hold an item of the argument
     that was not searched to its end."""
-    boxes = [(name, value) for name, value in supplied if isinstance(value, _ITEM_BOXES) and value]
+    boxes = [(name, value) for name, value in supplied if _a(value, _ITEM_BOXES) and value]
     if not boxes:
         return None
     wanted = _held_elsewhere(result, held)
@@ -869,7 +876,7 @@ def _shared_argument_item(result, supplied, held: bool | None) -> tuple[str, str
                         plain.add(kind)
                 if not kinds <= plain:
                     for item in held_here:
-                        if isinstance(item, boxed) and item and id(item) not in visited:
+                        if _a(item, boxed) and item and id(item) not in visited:
                             visited.add(id(item))
                             reached.append((item, at))
             at += 1

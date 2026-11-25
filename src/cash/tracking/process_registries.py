@@ -54,6 +54,7 @@ import os
 import signal
 import sys
 import threading
+import time
 import warnings
 from collections.abc import Callable
 from typing import Any
@@ -76,6 +77,7 @@ __all__ = [
     "register_env_waiver",
     "registering_imports",
     "snapshot",
+    "threads_beside",
     "stand_in_trace",
     "unregister_atexit",
     "waive_since",
@@ -574,27 +576,79 @@ def _compare(before: list[Any], into: set[str]) -> None:
             into.add(name)
 
 
+#: Whether the processor time of another thread can be read by its
+#: kernel thread id: Linux's per-thread clocks (`_cpu_clock`).
+_CPU_CLOCKS = sys.platform.startswith("linux") and has_attribute(time, "clock_gettime_ns")
+
+
+def _cpu_clock(native_id: int) -> int:
+    """The clock of the processor time thread *native_id* has used, as the
+    Linux kernel numbers it (what ``pthread_getcpuclockid`` answers, made
+    from the kernel's thread id: asking by a thread's handle reads memory
+    that is gone once the thread has ended). Reading it for a thread that
+    has ended raises OSError."""
+    return ((~native_id) << 3) | 6
+
+
+def _cpu_times(threads: list[Any]) -> dict[int, int] | None:
+    """``kernel thread id -> processor time used so far`` (ns) of each of
+    *threads*, or None where it cannot be read for all of them."""
+    if not _CPU_CLOCKS:
+        return None
+    times: dict[int, int] = {}
+    try:
+        for thread in threads:
+            times[thread.native_id] = time.clock_gettime_ns(_cpu_clock(thread.native_id))
+    except Exception:  # noqa: BLE001 - not read: no thread is proved idle
+        return None
+    return times
+
+
+class Beside:
+    """The threads alive beside a cached call as it begins
+    (`threads_beside`), for `beside_threads` and `changed_by`."""
+
+    __slots__ = ("clocks", "others", "thread", "threads")
+
+    def __init__(self) -> None:
+        #: The thread the call runs on.
+        self.thread = threading.get_ident()
+        #: The threads alive (``ident -> thread``), whether one of them may
+        #: do the program's work, and the processor time each of those had
+        #: used (None where it cannot be read: `_cpu_times`).
+        self.threads: dict[int | None, Any] = {}
+        self.others = False
+        self.clocks: dict[int, int] | None = None
+        if threading.active_count() > 1:
+            self.threads = {thread.ident: thread for thread in threading.enumerate()}
+            working = _working_threads()
+            self.others = working is None or bool(working)
+            if working:
+                self.clocks = _cpu_times(working)
+
+
+def threads_beside() -> Beside:
+    """The threads alive beside this one now: taken before the first thing
+    a cached call compares around its body (the random streams), and handed
+    to `snapshot`."""
+    return Beside()
+
+
 class Snapshot:
     """The registries as a statement or a call found them (`snapshot`),
     and those it changed outside an import so far."""
 
-    __slots__ = ("__weakref__", "before", "found", "imported", "others", "thread", "threads", "writes")
+    __slots__ = ("__weakref__", "before", "beside", "found", "imported", "writes")
 
-    def __init__(self, threads: bool = False) -> None:
-        #: The thread a cached call runs on, for `changed_by`; None for a
-        #: statement, which `changed` judges whole.
-        self.thread = threading.get_ident() if threads else None
-        #: Whether a thread running code of the user's was alive beside it,
-        #: the threads alive (``ident -> thread``) and the calls each had
-        #: made of the counted registries, all read before the registries:
-        #: a write in between is then counted and not compared.
-        self.others = False
-        self.threads: dict[int | None, Any] = {}
+    def __init__(self, threads: Beside | bool = False) -> None:
+        #: The threads beside the cached call this is taken for, for
+        #: `changed_by`; None for a statement, which `changed` judges whole.
+        self.beside: Beside | None = (Beside() if threads is True else threads) or None
+        #: The calls each thread had made of the counted registries, read
+        #: before the registries: a write in between is then counted and
+        #: not compared.
         self.writes: dict[str, dict[int, int]] = {}
-        if threads:
-            if threading.active_count() > 1:
-                self.threads = {thread.ident: thread for thread in threading.enumerate()}
-                self.others = _others_run()
+        if self.beside is not None:
             self.writes = {name: dict(counts) for name, counts in _WRITES.items()}
         self.before = _read()
         self.found: set[str] = set()
@@ -747,9 +801,10 @@ def _watch_imports() -> None:
         _open = WeakSet()
 
 
-def snapshot(threads: bool = False) -> Snapshot:
-    """Each registry as it is now, for `changed`; *threads*: and which
-    threads run beside this one, for `changed_by`."""
+def snapshot(threads: Beside | bool = False) -> Snapshot:
+    """Each registry as it is now, for `changed`; *threads* (True, or
+    `threads_beside` taken earlier): and which threads run beside this one,
+    for `changed_by`."""
     _count_calls()
     _watch_imports()
     taken = Snapshot(threads)
@@ -788,12 +843,51 @@ def _others_run() -> bool:
         return True
 
 
-def beside_threads(before: Snapshot) -> bool:
+def _working_threads() -> list[Any] | None:
+    """The threads that may do the program's work beside this one; None
+    when one of them cannot be listed, or they cannot be told."""
+    from .trace_recorder import working_threads
+
+    try:
+        return working_threads()
+    except Exception:  # noqa: BLE001 - not told alone
+        return None
+
+
+def beside_threads(before: Snapshot | Beside) -> bool:
     """Did a thread that may do the program's work run beside the call
-    *before* was taken for (``threads=True``), then or now? What the
-    process keeps (a registry here, a global random stream) may then have
-    been changed by it."""
-    return before.others or _others_run()
+    *before* was taken for, then or now? What the process keeps (a
+    registry here, a global random stream) may then have been changed by
+    it.
+
+    A thread that was alive but used no processor time since is proved
+    not to have: a pool's idle worker, a monitor asleep. Where every such
+    thread is (`_stayed_idle`), the call ran as good as alone."""
+    beside = before.beside if type(before) is Snapshot else before
+    if beside is None:
+        return False
+    if not beside.others:
+        return _others_run()
+    return not _stayed_idle(beside)
+
+
+def _stayed_idle(beside: Beside) -> bool:
+    """Has every thread that may do the program's work used no processor
+    time since *beside* was taken? Only where each one's time could be
+    read then and can be now, none has ended, none has been started and
+    none runs unlisted: anything else proves nothing."""
+    clocks = beside.clocks
+    if clocks is None:
+        return False
+    working = _working_threads()
+    if working is None:
+        return False
+    try:
+        if any(thread.native_id not in clocks for thread in working):
+            return False
+        return all(time.clock_gettime_ns(_cpu_clock(native_id)) == used for native_id, used in clocks.items())
+    except Exception:  # noqa: BLE001 - one ended, or not readable: not proved idle
+        return False
 
 
 def changed_by(before: Snapshot) -> tuple[list[str], list[str]]:
@@ -820,14 +914,14 @@ def changed_by(before: Snapshot) -> tuple[list[str], list[str]]:
       working directory, matplotlib's rcParams) cannot be told.
     """
     names = changed(before)
-    me = before.thread
-    if me is None or not names:
+    beside = before.beside
+    if beside is None or not names:
         return names, []
     others = beside_threads(before)
     mine: list[str] = []
     unsure: list[str] = []
     for name in names:
-        whose = _whose(name, before, me)
+        whose = _whose(name, before, beside)
         if whose is None:
             whose = not others or None
         if whose:
@@ -837,9 +931,10 @@ def changed_by(before: Snapshot) -> tuple[list[str], list[str]]:
     return mine, unsure
 
 
-def _whose(name: str, before: Snapshot, me: int) -> bool | None:
+def _whose(name: str, before: Snapshot, beside: Beside) -> bool | None:
     """Is the change of registry *name* the call's (True), another
     thread's (False), or not told by the registry itself (None)?"""
+    me = beside.thread
     if name == _DECIMAL:
         return True
     if name == _NUMPY:
@@ -864,7 +959,7 @@ def _whose(name: str, before: Snapshot, me: int) -> bool | None:
         return True
     now = {thread.ident: thread for thread in threading.enumerate()}
     for ident in writers:
-        there = before.threads.get(ident)
+        there = beside.threads.get(ident)
         # Not running before the call, or another thread under the number
         # of one that ended: started meanwhile, perhaps by the call.
         if there is None or now.get(ident, there) is not there:

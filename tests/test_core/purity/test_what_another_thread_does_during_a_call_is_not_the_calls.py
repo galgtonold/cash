@@ -21,12 +21,14 @@ import logging
 import os
 import random
 import threading
+import time
 import warnings
 
 import pytest
 
 from cash import Cash
 from cash.exceptions import CashCacheStoreFailedWarning, CashImpurityWarning
+from cash.tracking import process_registries
 from cash.tracking.randomness import CashRandomnessWarning, lineage
 
 _KEY = "ZZ_SET_BESIDE_A_CACHED_CALL"
@@ -242,7 +244,11 @@ def test_the_functions_own_change_is_found_on_its_next_call(inst):
     assert any("IMPURE-OBSERVED-EFFECTS" in text and "a logger's level" in text for text in said), said
 
 
-def test_a_change_made_with_no_other_thread_is_the_calls_at_once(inst):
+def test_a_change_made_with_no_other_thread_is_the_calls_at_once(inst, monkeypatch):
+    # Alone whatever else the test run left alive in this process.
+    monkeypatch.setattr(process_registries, "_working_threads", list)
+    monkeypatch.setattr(process_registries, "_others_run", lambda: False)
+
     @inst.cache
     def sets_a_level(x):
         logging.getLogger(_LOGGER).setLevel(10)
@@ -346,3 +352,117 @@ def _draw():
 
 def _pick():
     return random.random()
+
+
+class _Asleep:
+    """A thread of the user's that is alive and does nothing: a pool's
+    idle worker, a monitor between two looks."""
+
+    def __init__(self):
+        self._wake = threading.Event()
+        self._waiting = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="zz-asleep")
+        self._thread.start()
+        assert self._waiting.wait(20)
+
+    def _run(self):
+        self._waiting.set()
+        self._wake.wait()
+
+    def end(self):
+        self._wake.set()
+        self._thread.join(20)
+
+
+def _settled(asleep):
+    """Once *asleep*'s thread uses no more processor time: it is blocked."""
+    clock = process_registries._cpu_clock(asleep._thread.native_id)
+    last = -1
+    for _ in range(2000):
+        used = time.clock_gettime_ns(clock)
+        if used == last:
+            return
+        last = used
+        time.sleep(0.005)
+    raise AssertionError("the sleeping thread kept running")
+
+
+@pytest.fixture
+def only_this_tests_threads(monkeypatch):
+    """Whatever else the test run left alive in this process is not asked."""
+    real = process_registries._working_threads
+    monkeypatch.setattr(
+        process_registries, "_working_threads", lambda: [t for t in real() or () if t.name.startswith("zz-")]
+    )
+
+
+proved_idle = pytest.mark.skipif(not process_registries._CPU_CLOCKS, reason="per-thread processor time: Linux")
+
+
+@proved_idle
+def test_a_thread_that_used_no_processor_time_is_not_another_writer(inst, only_this_tests_threads):
+    asleep = _Asleep()
+
+    @inst.cache
+    def sets_a_level(x):
+        logging.getLogger(_LOGGER).setLevel(10)
+        return x * 2
+
+    @inst.cache
+    def helper_draws(x):
+        return x + _draw()
+
+    try:
+        _settled(asleep)
+        assert process_registries._working_threads(), "the sleeping thread does not count as another: nothing is tested"
+        with warnings.catch_warnings(record=True) as record:
+            warnings.simplefilter("always")
+            assert sets_a_level(1) == 2
+            helper_draws(1)
+    finally:
+        asleep.end()
+    assert "IMPURE-OBSERVED-EFFECTS" in _codes(record, CashImpurityWarning), "not the call's at once"
+    assert _codes(record, CashCacheStoreFailedWarning) == []
+    assert "RANDOM-UNSEEDED" in _codes(record, CashRandomnessWarning), "not the call's draw at once"
+
+
+@proved_idle
+def test_the_proof_needs_every_other_thread_idle_from_before_the_body(only_this_tests_threads):
+    asleep = _Asleep()
+    try:
+        _settled(asleep)
+        before = process_registries.threads_beside()
+        assert before.others and before.clocks
+        assert not process_registries.beside_threads(before), "an idle thread was counted as a writer"
+
+        # One that ran, however briefly.
+        ran = _Beside(lambda: None)
+        try:
+            before = process_registries.threads_beside()
+            ran.during()
+            assert process_registries.beside_threads(before)
+        finally:
+            ran.end()
+
+        # One started since, and one that ended since.
+        before = process_registries.threads_beside()
+        late = _Asleep()
+        try:
+            assert process_registries.beside_threads(before)
+            before = process_registries.threads_beside()
+        finally:
+            late.end()
+        assert process_registries.beside_threads(before)
+    finally:
+        asleep.end()
+
+
+def test_where_processor_time_cannot_be_read_an_idle_thread_still_counts(monkeypatch, only_this_tests_threads):
+    monkeypatch.setattr(process_registries, "_CPU_CLOCKS", False)
+    asleep = _Asleep()
+    try:
+        before = process_registries.threads_beside()
+        assert before.others and before.clocks is None
+        assert process_registries.beside_threads(before)
+    finally:
+        asleep.end()

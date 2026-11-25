@@ -329,7 +329,7 @@ stored, and the function runs every time from then on, with an
 [`IMPURE-OBSERVED-EFFECTS`](../warnings.md#impure-observed-effects) warning:
 a hit, or a new process, would leave the setting unmade.
 
-<!-- claim: cash/tracking/process_registries.py:changed_by @cee9eb08, cash/decorator/runtime.py:CallRunner._refuse_registries @631605a3 -->
+<!-- claim: cash/tracking/process_registries.py:changed_by @4e1146d2, cash/decorator/runtime.py:CallRunner._refuse_registries @631605a3 -->
 While other threads are running, cash first asks which thread made the
 change. A write to the environment, `atexit.register`, `codecs.register` or
 `sys.addaudithook` is counted per thread: one made by another thread is not

@@ -684,7 +684,7 @@ large frame of text columns hashes at about 0.2 s per million rows.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @af1e5f6d, cash/decorator/purity_checks.py:PurityChecks.warn_shared_on_hit @cdd6af30, cash/decorator/purity_checks.py:PurityChecks._shared_with @c1fd42b0, cash/decorator/purity_checks.py:_shared_argument_item @670d7aaa, cash/decorator/purity_checks.py:SHARED_ARGUMENT_ITEMS == 500000 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @af1e5f6d, cash/decorator/purity_checks.py:PurityChecks.warn_shared_on_hit @cdd6af30, cash/decorator/purity_checks.py:PurityChecks._shared_with @c1fd42b0, cash/decorator/purity_checks.py:_shared_argument_item @d1be9c9d, cash/decorator/purity_checks.py:SHARED_ARGUMENT_ITEMS == 500000 -->
 **What happened.** The result shares state with an object outside the
 call: an argument, or something the function reaches by name. On the first
 run, a write through one shows in the other. A cache hit returns a separate
@@ -3066,7 +3066,7 @@ functools.partial(setattr, points[7])` made in a cell above. Cash cannot
 tell which variable changes before the statement runs, so it takes every
 variable as changed: what reads any of them after it runs again.
 
-<!-- claim: cash/tracking/process_registries.py:snapshot @4475426d, cash/notebook/statement/processor.py:StatementProcessor._refuse_process_registries @69800c34, cash/tracking/process_registries.py:registering_imports @f4d937d7, cash/decorator/runtime.py:CallRunner._refuse_registries @631605a3 -->
+<!-- claim: cash/tracking/process_registries.py:snapshot @fd77ee11, cash/notebook/statement/processor.py:StatementProcessor._refuse_process_registries @69800c34, cash/tracking/process_registries.py:registering_imports @f4d937d7, cash/decorator/runtime.py:CallRunner._refuse_registries @631605a3 -->
 It names, too, a statement that registers something with the process, in
 its own text or in a function or library it calls: `atexit.register(flush)`,
 `signal.signal(...)`, `sys.excepthook = hook`, `sys.setprofile(...)`,
@@ -3776,7 +3776,7 @@ reloaded a config, say. The result was returned but not stored. The check
 runs only while other threads are running, not counting cash's own (or for
 a coroutine function).
 
-<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @631605a3, cash/tracking/process_registries.py:changed_by @cee9eb08 -->
+<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @631605a3, cash/tracking/process_registries.py:changed_by @4e1146d2 -->
 The same code is used when a setting the process keeps (a logger's level, a
 warnings filter, `sys.path`, the working directory, an interpreter hook)
 changed while the call was running and other threads were running too: cash

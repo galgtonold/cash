@@ -2516,6 +2516,9 @@ class CallRunner:
         run.observer.bound_before = self._purity.bound_state(func)
         # Watch the global RNG across the call: a draw inside the body is an
         # input the key cannot see statically.
+        # Before the first thing compared around the body: a thread proved
+        # idle from here on changed none of it (`beside_threads`).
+        beside = process_registries.threads_beside()
         run.rng_pre = capture_rng_pre_state()
         # And the generators it can reach through its globals and closure
         # (`rng = np.random.default_rng(42)` at module level, drawn from
@@ -2534,7 +2537,7 @@ class CallRunner:
         # would not set ``np.seterr`` or a logger's level again.
         # Read with the threads running beside this one: what one of them
         # sets meanwhile is not the call's (`_refuse_registries`).
-        run.registries = process_registries.snapshot(threads=True)
+        run.registries = process_registries.snapshot(threads=beside)
         run.observer.registries = run.registries
         # And what the user's classes it can reach bind: a hit would not
         # bind ``Cfg.items`` again (`class_writes`).
