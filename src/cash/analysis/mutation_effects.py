@@ -1985,6 +1985,11 @@ def classify_receivers(
             continue
         if method in RECEIVER_READONLY_WRITE_METHODS:
             continue  # df.to_csv reads the frame and writes a file
+        if base in calls.decorator_receivers and (type(receiver).__module__ or "").split(".", 1)[0] == "cash":
+            # ``@cache.cache`` on a ``Cash()`` of the notebook's: what it
+            # registers is cash's own bookkeeping. Counted as a change, each
+            # decorated ``def`` would be an input of the next.
+            continue
         if receiver_is_identity_coupled(receiver):
             # Any method on a Figure/Axes draws on it, whatever it returns
             # (ax.hist returns a data tuple). fig.savefig lands here too: a

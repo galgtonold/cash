@@ -490,10 +490,16 @@ class MutationClassifier:
         A large object -- a frame, an array, a collection of more than 200
         items or one holding a frame (`hashed_by_lineage`) -- has its lineage
         as its session hash, not its content, so there is nothing to compare
-        it with. Such receivers are excluded here and assume-mutated instead.
+        it with. Such receivers are excluded here and assume-mutated instead,
+        as is a plain function.
         """
         val = self.shell.user_ns.get(base)
         if val is None:
+            return False
+        if type(val) is types.FunctionType:
+            # What a method called on a function keeps (``show.register``
+            # of a ``functools.singledispatch`` function) is held by the
+            # function's closure, which its hash does not read.
             return False
         return not hashed_by_lineage(val)
 

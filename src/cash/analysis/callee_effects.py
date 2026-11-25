@@ -18,6 +18,7 @@ from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from .analysis_budget import check_analysis_budget
 from .ast_util import CallScope, called_names, handed_names, plain_statement, walk_tree
 from .mutations import MUTATING_METHODS, MutationVisitor, iter_store_targets
+from .scope_model import scope_model
 
 __all__ = [
     "all_param_names",
@@ -892,13 +893,12 @@ def source_global_rebinds(source: str) -> frozenset[str]:
     node = parse_function_source(source)
     if node is None:
         return frozenset()
-    declared = {name for sub in walk_tree(node) if isinstance(sub, ast.Global) for name in sub.names}
-    if not declared:
-        return frozenset()
-    stored = {
-        sub.id for sub in walk_tree(node) if isinstance(sub, ast.Name) and isinstance(sub.ctx, (ast.Store, ast.Del))
-    }
-    return frozenset(declared & stored)
+    # Which scope declares the name and which binds it is the scope model's
+    # answer: an import, a ``def``, a loop target or a ``match`` capture
+    # under ``global`` binds it like an assignment does.
+    return frozenset(
+        name for scope in scope_model(node).scopes for name in scope.stores if name in scope.declared_global
+    )
 
 
 @functools.lru_cache(maxsize=4096)

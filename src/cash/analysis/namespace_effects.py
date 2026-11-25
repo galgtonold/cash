@@ -74,6 +74,7 @@ from .read_only_callees import (
     reads_its_arguments_only,
     turns_on_a_write,
 )
+from .scope_model import bound_names
 
 __all__ = [
     "bound_to_state",
@@ -2854,9 +2855,7 @@ def proven_unchanged(
     if tree is None:
         return frozenset()
     parents = {id(child): node for node in walk_tree(tree) for child in ast.iter_child_nodes(node)}
-    bound = {
-        node.id for node in walk_tree(tree) if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del))
-    }
+    bound = bound_names(tree)
     proven: set[str] = set()
     for name in set(names) - bound:
         reads = [node for node in walk_tree(tree) if isinstance(node, ast.Name) and node.id == name]

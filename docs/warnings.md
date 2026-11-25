@@ -2277,8 +2277,16 @@ exception.
 **Why it matters.** The result is correct, but nothing from this cell was
 stored, and cells below lose the lineage they would have inherited.
 
+One cause is not a fault: a statement nested too deep for cash to analyse, such
+as a sum of several hundred terms, an `elif` chain of several hundred branches
+or as many chained method calls. Python runs it, and so does the cell; the
+message then says "nested too deep" instead of naming an exception. While
+such a statement is in the notebook, the cells that cash checks it for run
+uncached.
+
 **What to do.** Re-running is safe. Please report the exception as a bug.
-Restarting the kernel often clears it.
+Restarting the kernel often clears it. For a statement nested too deep, write
+the long expression in parts (a sum over a list, a loop, a lookup in a dict).
 
 **When it is safe to ignore.** When it happens once. If it repeats on the same
 cell, that cell is never cached.
@@ -2517,7 +2525,7 @@ such as a checkpoint read after a restart, never gives this warning.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/notebook/upstream/notebook_vetting.py:NotebookVetter._refuse_forward_references @a173133d, cash/notebook/ipython/upstream_phase.py:UpstreamResolution._step_aside @e62d3900 -->
+<!-- claim: cash/notebook/upstream/notebook_vetting.py:NotebookVetter._refuse_forward_references @a173133d, cash/notebook/ipython/upstream_phase.py:UpstreamResolution._step_aside @6a859690 -->
 **What happened.** The cell reads, at module level, a name that only a later
 cell binds (`y = x + 1` above `x = 10`). It works now because that cell already
 ran, so the cell runs as plain Jupyter runs it, on the value in memory, but
@@ -2839,7 +2847,7 @@ purpose and no cell reads it any more.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/notebook/upstream/replay.py:StatementReplay._failure @e96a67b5, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._unclosed_read @ea5b2914, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._overwritten_read @9c2c1ae1, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._reopen_drawn_inputs @9261f967, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._failing_import_left_out @8ffec13c, cash/notebook/upstream/checker.py:UpstreamChecker._put_back @38708141, cash/notebook/ipython/upstream_phase.py:UpstreamResolution._step_aside @e62d3900, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._writes_what_was_defined_again @11388d44, cash/notebook/upstream/replay.py:StatementReplay._defined_again_gap @e35826e2 -->
+<!-- claim: cash/notebook/upstream/replay.py:StatementReplay._failure @e96a67b5, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._unclosed_read @ea5b2914, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._overwritten_read @9c2c1ae1, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._reopen_drawn_inputs @9261f967, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._failing_import_left_out @8ffec13c, cash/notebook/upstream/checker.py:UpstreamChecker._put_back @38708141, cash/notebook/ipython/upstream_phase.py:UpstreamResolution._step_aside @6a859690, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._writes_what_was_defined_again @11388d44, cash/notebook/upstream/replay.py:StatementReplay._defined_again_gap @e35826e2 -->
 **What happened.** To give the cell what a run from the top gives, cash re-ran
 statements above it, and one of them failed because cash did not re-run first
 a statement above it that sets what it reads, or because it pickled a value
