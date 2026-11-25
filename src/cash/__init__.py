@@ -18,7 +18,6 @@ the ``assume_safe`` block are part of the public API; import them from
 from __future__ import annotations
 
 import contextlib
-import os
 import threading
 from collections.abc import Iterator
 from typing import Any
@@ -70,12 +69,9 @@ from .tracking.randomness import CashRandomnessWarning
 def _read_watch_on() -> bool:
     """Is file reading watched from ``import cash`` on? Not with
     ``CASH_DISABLE`` set: caching off promises nothing is watched."""
-    from .config.schema import validate_value
+    from .config.schema import disabled_by_environment
 
-    try:
-        return not validate_value("disable", os.environ.get("CASH_DISABLE", "").strip() or "0")
-    except ValueError:
-        return True  # the config load reports the bad value
+    return not disabled_by_environment()
 
 
 def _watch_reads_from_import() -> None:
@@ -122,7 +118,10 @@ def _watch_seeds_from_import() -> None:
     returns, so it is part of the key. The watch began at the first
     decoration, so ``np.random.seed(int(sys.argv[1]))`` at module level, above
     the decorated function, went unseen: every seed got the first seed's value.
+    Not with ``CASH_DISABLE`` set: caching off promises nothing is replaced.
     """
+    if not _read_watch_on():
+        return
     from .tracking.randomness.lineage import start_seed_watch
 
     try:
