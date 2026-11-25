@@ -1203,6 +1203,18 @@ class KeyBuilder:
             return None
 
 
+def _held_at_return(run: BodyRun, result: Any) -> bool | None:
+    """Did something besides the call hold *result* when the body returned
+    it (`call_state.result_held`)? None when that was not read: a result
+    that is not the one the body returned, or a body run another way."""
+    if getattr(run, "res", _NO_RESULT) is not result:
+        return None
+    return getattr(run, "res_held", None)
+
+
+_NO_RESULT = object()
+
+
 class CallRunner:
     """The steps of a cached call, shared by the sync and async wrappers: the
     lookup, the body's scope, what a miss does after it, and the locked and
@@ -2060,7 +2072,9 @@ class CallRunner:
                         if not (value is obj and any(held is obj for _, held in bound_values(func)))
                     ],
                 ),
-                lambda result: self._purity.warn_shared_result(func, func_name, result, call.args, call.kwargs),
+                lambda result: self._purity.warn_shared_result(
+                    func, func_name, result, call.args, call.kwargs, held=_held_at_return(run, result)
+                ),
             )
         except Exception:  # not judged: the change refuses the store, as without it
             logger.debug("[ATTRS] %s: attribute changes not judged", func_name, exc_info=True)
@@ -2707,7 +2721,7 @@ class CallRunner:
             # an attribute the call bound comes back with the result.
             shared = attrs.result_shared
         else:
-            shared = self._purity.warn_shared_result(func, func_name, res, args, kwargs)
+            shared = self._purity.warn_shared_result(func, func_name, res, args, kwargs, held=_held_at_return(run, res))
         # The stream comparison above, read for a draw no seed stands behind:
         # one the source scan could not see (a library a helper calls).
         self._rng.warn_observed_draw(func_name, run.rng_drew, res)

@@ -16,7 +16,7 @@ from .._active import ACTIVE_CONFIG
 from ..kept_state import reducers_run
 from . import hit_memo
 from .cached_function import new_stats
-from .call_state import CACHE_MISS, CALL_ENTRY, enter_cached_call, exit_cached_call
+from .call_state import CACHE_MISS, CALL_ENTRY, enter_cached_call, exit_cached_call, result_held
 from .script_pickling import expose_script_function, refuse_pickling_by_value
 
 if TYPE_CHECKING:
@@ -141,6 +141,7 @@ class Wrappers:
                 with runner.body_scope(spec, call) as run:
                     # call.args: a ``key=`` call's iterators are copies (`split_for_key`).
                     run.res = await func(*call.args, **call.kwargs)
+                    run.res_held = result_held(run)
                 with reducers_run():
                     return runner.finish_miss(spec, call, run)
 
@@ -169,6 +170,7 @@ class Wrappers:
                     with runner.body_scope(spec, call) as run:
                         # call.args: a ``key=`` call's iterators are copies (`split_for_key`).
                         run.res = func(*call.args, **call.kwargs)
+                        run.res_held = result_held(run)
                     return runner.finish_miss(spec, call, run)
 
                 if locking():

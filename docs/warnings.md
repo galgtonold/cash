@@ -658,7 +658,7 @@ large frame of text columns hashes at about 0.2 s per million rows.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @692eb80f, cash/decorator/purity_checks.py:PurityChecks.warn_shared_on_hit @cdd6af30, cash/decorator/purity_checks.py:PurityChecks._shared_with @7b72550c -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @af1e5f6d, cash/decorator/purity_checks.py:PurityChecks.warn_shared_on_hit @cdd6af30, cash/decorator/purity_checks.py:PurityChecks._shared_with @c1fd42b0, cash/decorator/purity_checks.py:_shared_argument_item @670d7aaa, cash/decorator/purity_checks.py:SHARED_ARGUMENT_ITEMS == 500000 -->
 **What happened.** The result shares state with an object outside the
 call: an argument, or something the function reaches by name. On the first
 run, a write through one shows in the other. A cache hit returns a separate
@@ -673,13 +673,16 @@ attributes and object array, for:
 - an argument, an attribute of an argument that is an object of your class
   (`return self.rows`, `{"rows": t.rows}`), or memory shared with an array
   argument;
+- an item of a list, tuple, dict, set or deque argument, at any depth of
+  such containers (`[r for r in records if r["k"] == k]`, `cfg["section"]`,
+  `rows[0]`, `cfg["a"]["b"]`); the warning names it (`records[0]`);
 - a closure variable, a module global the body names, a default argument,
   or an attribute of the function itself;
 - an attribute of a class or a module of yours the body names
   (`Holder.ROWS`), or of an object of your class it names
   (`REGISTRY.entries`);
-- one of the first 256 items of any of those containers (`CONFIG["sub"]`,
-  `Holder.CFG["sub"]`, a list inside a global tuple);
+- one of the first 256 items of a container among the last two groups
+  (`CONFIG["sub"]`, `Holder.CFG["sub"]`, a list inside a global tuple);
 - memory shared with any of those arrays, at the top of the result or
   inside it (`return ARR[1:4]`, `{"train": X[:8], "test": X[8:]}`), or,
   without pandas copy-on-write (pandas 2 by default), with most columns of
@@ -692,6 +695,15 @@ attributes and object array, for:
   `.values` of an `Int64`, time-zone or category column), with
   copy-on-write too: it is the frame's own, or one over its memory, and a
   write through it reaches the frame.
+
+The items of the arguments are searched only for an object that something
+besides the result holds when the call returns, so a result built of new
+objects costs no look at the arguments, however long they are. For such an
+object cash compares up to 500,000 items of the arguments' containers, all
+levels together. When that is not enough to search them to the end, the
+warning says the result "holds an object something else holds too, possibly
+an item of the argument" and names the argument: it may be a false alarm
+there, and `assume_safe=True` waives it.
 
 Not reported: a result that IS an argument the call changed in place and
 a hit writes back (`stft(y, out=buf)` filling and returning `buf`, where
