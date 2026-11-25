@@ -33,6 +33,7 @@ from ._types import (
     CellCheck,
     ClassificationResult,
     SimulationResult,
+    TraceEntry,
     cell_holds_statement,
     normalize_stmt,
     statements_of,
@@ -1158,7 +1159,7 @@ class MismatchClassifier:
         normalized_inp_code = strip_markers(inp_producing_code).strip()
         return (
             normalized_inp_code not in result.trace_codes
-            and self._ran_the_notebook_version(inp, result.trace_codes)
+            and self._ran_the_notebook_version(inp, sim.trace)
             and not self._bound_not_above(inp, normalized_inp_code, result)
         )
 
@@ -1283,8 +1284,11 @@ class MismatchClassifier:
         logger.debug("[UPSTREAM] Tainted stmt, inputs missing, cascading: %s...", stmt_code[:60])
         return False
 
-    def _ran_the_notebook_version(self, inp: str, simulation_trace_codes: set[str]) -> bool:
-        """Whether the kernel has run, for *inp*, a statement the notebook holds now.
+    def _ran_the_notebook_version(self, inp: str, trace: list[TraceEntry]) -> bool:
+        """Whether the value *inp* holds, built by code that is not in the
+        notebook, can be an edit the user ran and has not saved: the kernel
+        has run the statement of the notebook that writes *inp* last above
+        the cell, and the value is not one the upstream check built.
 
         A value built by code that is not in the notebook is trusted as an
         unsaved edit: the user changed a cell, ran it and has not saved. Then
@@ -1294,11 +1298,37 @@ class MismatchClassifier:
         ``models = {...}`` and ran a cell that needed only the edited function,
         then one whose back-test loop reads ``models``: the loop re-ran on the
         dict the old statement had built (silent; old and new code agreed).
+
+        The saved version is the notebook's last writer of the name, not
+        any statement that writes it. With ``x = 1`` / ``x = x + 100`` and
+        the second edited to ``x = x + 200`` and saved, ``x = 1`` is in the
+        history of ``x`` and the edited statement is not: taken as the
+        saved version having run, the ``x`` the old code left was trusted
+        and the cell below computed from it. A loop or branch that changes
+        the name in place leaves no record of its own (the name's history
+        holds what its body statements bind), so the writer above it
+        answers for it.
+
+        A value the upstream check itself ran again or restored
+        (`TrackingState.rebuilt_by_check`) came from the notebook's text as
+        it was then, so it is never an unsaved edit.
         """
-        history = self.tracking_state.executed_cell_hashes.get(inp)
+        state = self.tracking_state
+        history = state.executed_cell_hashes.get(inp)
         if not history:
             return False
-        return any(statement_source_hash(code) in history for code in simulation_trace_codes)
+        built = state.rebuilt_by_check.get(inp)
+        if built is not None and built == state.variable_lineage.get(inp):
+            return False
+        for entry in reversed(trace):
+            if inp not in entry.outputs:
+                continue
+            codes = statement_trace_codes(entry.stmt_code)
+            if any(statement_source_hash(code) in history for code in codes):
+                return True
+            if len(codes) == 1:
+                return False  # a plain statement: it has not run
+        return False
 
     def _check_inp_lineage_skip(self, inp: str, sim: SimulationResult, result: ClassificationResult) -> bool:
         """Return True if *inp* should be skipped based on lineage/unsaved-edit checks."""
@@ -1321,7 +1351,7 @@ class MismatchClassifier:
         norm_code = strip_markers(inp_prod_code).strip()
         if (
             norm_code not in result.trace_codes
-            and self._ran_the_notebook_version(inp, result.trace_codes)
+            and self._ran_the_notebook_version(inp, sim.trace)
             and not self._bound_not_above(inp, norm_code, result)
         ):
             logger.debug(

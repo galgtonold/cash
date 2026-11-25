@@ -1245,14 +1245,24 @@ class UpstreamChecker:
                 rebuilt, bindings_before, codes_before, notebook_cells, current_cell_idx, cells_before, bound_by_before
             )
 
-            # Put the random streams the cell draws from where a run from the
-            # top has them before it. After the re-runs above, so it is the
-            # last thing to touch them before the cell.
+            # What the repair ran again or restored holds a value the
+            # notebook's text gave it: the next check takes none of it for
+            # an edit run and not saved (`TrackingState.rebuilt_by_check`).
+            # Not a name left, or put back, at the lineage it came in with
+            # (`_keep_live_bindings`): that value is not the repair's.
+            lineage_now = self.tracking_state.variable_lineage
+            for name in records_before.rerecorded(lineage_now, self.tracking_state.executed_input_lineages):
+                if lineages_before.get(name) != lineage_now[name]:
+                    self.tracking_state.rebuilt_by_check[name] = lineage_now[name]
+
             # A stream it names holds that lineage from the cell that leaves
             # it there on: no snapshot above takes it (read before the
             # restore, which ends the plan).
             for var, cell in self.rng.named_from().items():
                 written_in[var] = max(written_in.get(var, cell), cell)
+            # Put the random streams the cell draws from where a run from the
+            # top has them before it. After the re-runs above, so it is the
+            # last thing to touch them before the cell.
             self.rng.restore_position_rng_state(cell_code, notebook_cells, current_cell_idx)
 
             self.simulator.resync_after_replay(records_before, written_in)
