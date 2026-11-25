@@ -44,6 +44,7 @@ from ._own_work import own_work
 from ._type_memo import class_dict, class_dictoffset, class_flags, class_mro, class_name, class_qualname, mro_of
 from ._user_attrs import attribute_or, class_attr, from_family, instance_of, named_attr, own_lookup, plain_getattr
 from .live_state import is_live_stream, live_reduce
+from .loaded_modules import loaded_module
 from .unnamed_code import library_code_override, refused_unnamed
 from .value_types import WEAK_PROXY_TYPES, class_module, is_dead_proxy
 
@@ -1149,7 +1150,7 @@ def _identityless(t: type) -> bool:
         pass
     except TypeError:
         return False
-    numpy = sys.modules.get("numpy")
+    numpy = loaded_module("numpy")
     found = numpy is not None and (
         issubclass(t, numpy.dtype) or (issubclass(t, numpy.generic) and t not in (numpy.object_, numpy.void))
     )
@@ -1451,7 +1452,7 @@ _WHOLE: frozenset[type] = frozenset(
 def _flat_array(obj: Any) -> bool:
     """A numpy array of plain values: pickled as it is in a `FlatValue`,
     its data out of band as ever."""
-    if "numpy" not in sys.modules:
+    if loaded_module("numpy") is None:
         return False
     ndarray = sys.modules["numpy"].ndarray
     # ``isinstance`` asks an object that is not an array for its
@@ -1639,7 +1640,7 @@ class _KeepDict(dict):
             if class_name(t) in _GLOBAL_RNG_TYPE_NAMES:
                 reducer = functools.partial(_watched_rng, reducer=reducer, watch=self._watch)
             return reducer
-        if self._keyed and class_name(t) == "ndarray" and t is getattr(sys.modules.get("numpy"), "ndarray", None):
+        if self._keyed and class_name(t) == "ndarray" and t is getattr(loaded_module("numpy"), "ndarray", None):
             # A record array's padding bytes are whatever memory held:
             # keyed without them (`packed_records`).
             return functools.partial(_reduce_array_for_key, protocol=self._protocol)
@@ -1670,7 +1671,7 @@ class _KeepDict(dict):
         if self._keyed and class_name(t) in _GLOBAL_RNG_TYPE_NAMES:
             # One instance of the class may be a module's global RNG.
             reducer = functools.partial(_reduce_rng_for_key, reducer=reducer)
-        if self._keyed and class_name(t) == "vectorize" and t is getattr(sys.modules.get("numpy"), "vectorize", None):
+        if self._keyed and class_name(t) == "vectorize" and t is getattr(loaded_module("numpy"), "vectorize", None):
             reducer = functools.partial(_reduce_vectorize_for_key, reducer=reducer)
         if self._keyed and registered is None and library_chooses_its_state(t):
             reducer = functools.partial(_reduce_names_sorted, reducer=reducer)
@@ -1699,7 +1700,7 @@ def joblib_memory_type(t: type) -> bool:
     ``__getstate__`` the one `joblib_memory_state` reads?"""
     if class_qualname(t) != "Memory" or class_module(t) != "joblib.memory":
         return False
-    if t is not getattr(sys.modules.get("joblib.memory"), "Memory", None):
+    if t is not getattr(loaded_module("joblib.memory"), "Memory", None):
         return False
     if t.__reduce_ex__ is not object.__reduce_ex__ or t.__reduce__ is not object.__reduce__:
         return False
@@ -1989,7 +1990,7 @@ def _names_apart_of(names: dict[str, str]) -> Callable[[Any], Any]:
 def _holds_dtype(t: type) -> bool:
     """Does a *t* instance reduce to its numpy dtype (an array, a numpy
     scalar)?"""
-    numpy = sys.modules.get("numpy")
+    numpy = loaded_module("numpy")
     if numpy is None:
         return False
     try:
@@ -2001,7 +2002,7 @@ def _holds_dtype(t: type) -> bool:
 def _numpy_scalar_type(t: type) -> bool:
     """Is *t* one of numpy's own scalar types (``numpy.float64``), not a
     subclass of one?"""
-    numpy = sys.modules.get("numpy")
+    numpy = loaded_module("numpy")
     return numpy is not None and class_module(t) == "numpy" and isinstance(t, type) and issubclass(t, numpy.generic)
 
 
@@ -2066,7 +2067,7 @@ def _parts_apart(parts: Any, dtypes: dict[Any, Any]) -> tuple | None:
     None when it holds none."""
     if type(parts) is not tuple:
         return None
-    numpy = sys.modules.get("numpy")
+    numpy = loaded_module("numpy")
     dtype = getattr(numpy, "dtype", None)
     if dtype is None:
         return None
@@ -2132,9 +2133,9 @@ def global_rng_module(obj: object) -> str | None:
     ``_random_state``) could not be keyed by it: it missed in every new
     process.
     """
-    if obj is getattr(sys.modules.get("random"), "_inst", None):
+    if obj is getattr(loaded_module("random"), "_inst", None):
         return "random"
-    if obj is getattr(sys.modules.get("numpy.random.mtrand"), "_rand", None):
+    if obj is getattr(loaded_module("numpy.random.mtrand"), "_rand", None):
         return "numpy.random"
     return None
 
@@ -2170,7 +2171,7 @@ def without_filled_caches(value: Any, state: dict) -> dict:
     one could not be keyed at all once it had been called (that ufunc has
     no pickle). What the ufunc does is the function it was built from,
     which the state still holds."""
-    if state.get("_ufunc") is not None and type(value) is getattr(sys.modules.get("numpy"), "vectorize", None):
+    if state.get("_ufunc") is not None and type(value) is getattr(loaded_module("numpy"), "vectorize", None):
         return {k: v for k, v in state.items() if k != "_ufunc"}
     return state
 
@@ -2252,7 +2253,7 @@ def _watched(reducer: Any, t: type, registered: Any, watch: list) -> Any:
     would reduce otherwise (`_KeepDict.__missing__` with *keyed*): what
     `dumps_also_keyed` answers from. Each check is the one the keyed
     reducer makes to decide whether it changes anything."""
-    if class_name(t) == "ndarray" and t is getattr(sys.modules.get("numpy"), "ndarray", None):
+    if class_name(t) == "ndarray" and t is getattr(loaded_module("numpy"), "ndarray", None):
 
         def array(obj: Any) -> Any:
             try:
@@ -3309,7 +3310,7 @@ def _pandas_index(t: type) -> bool:
     filled by the first ``df["x"]``), not state. Keyed, a lookup changed
     the key of an object holding the frame on pandas 2, and a call reading
     a column was taken to change its argument and never stored."""
-    pd = sys.modules.get("pandas")
+    pd = loaded_module("pandas")
     index = getattr(pd, "Index", None) if pd is not None else None
     return isinstance(index, type) and issubclass(t, index)
 

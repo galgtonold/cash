@@ -48,6 +48,7 @@ from . import _weak as cash_weak
 from ._native import cwatch
 from ._type_memo import class_dict, class_dictoffset, class_flags, class_mro
 from ._user_attrs import class_attr, plain_getattr
+from .loaded_modules import loaded_module
 
 __all__ = [
     "ABSENT",
@@ -93,7 +94,7 @@ def _numpy_array(obj: Any) -> bool:
 
 def _pandas_kind(obj: Any) -> str | None:
     """``"frame"`` or ``"series"`` for an exact pandas DataFrame or Series."""
-    pd = sys.modules.get("pandas")
+    pd = loaded_module("pandas")
     if pd is None:
         return None
     kind = type(obj)
@@ -115,7 +116,7 @@ def _leaves_only(items: Any) -> bool:
 
 
 def _plain_numpy_dtype(dtype: Any) -> bool:
-    np = sys.modules.get("numpy")
+    np = loaded_module("numpy")
     return np is not None and isinstance(dtype, np.dtype) and not dtype.hasobject
 
 
@@ -123,7 +124,7 @@ def _column_refusal(values: Any, dtype: Any, frame: bool) -> str | None:
     """Why a column (or a Series) of *dtype* cannot be rewritten, or None."""
     if _plain_numpy_dtype(dtype):
         return None
-    np = sys.modules.get("numpy")
+    np = loaded_module("numpy")
     if np is not None and isinstance(dtype, np.dtype):
         # An object column: its cells are copies after a restore, which is
         # the same only for values nothing changes in place.
@@ -375,7 +376,7 @@ class FrameState(NamedTuple):
 
 
 def _same(a: Any, b: Any) -> bool:
-    pd = sys.modules.get("pandas")
+    pd = loaded_module("pandas")
     if pd is not None and isinstance(a, pd.Index):
         return isinstance(b, pd.Index) and _same_axis(a, b)
     if type(a) is tuple:

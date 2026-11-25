@@ -43,6 +43,7 @@ from ..analysis.mutations import MUTATING_METHODS
 from ..diagnostics import warn_diagnostic
 from ..effects import ENVIRON_NAMES, dotted_name
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
+from ..loaded_modules import loaded_module
 from ..source_reading import getsource
 from ..tracking.function_tracker import is_local_module
 from ..tracking.randomness import get_seeding_rng_modules
@@ -950,7 +951,7 @@ def _parts_held(value: Any, kind: type) -> Iterable[Any] | None:
     if dtype is not None:
         if not attribute_or(dtype, "hasobject", False):
             return ()
-        masked = sys.modules.get("numpy.ma")
+        masked = loaded_module("numpy.ma")
         if masked is not None and isinstance(value, masked.MaskedArray):
             # Its own ``ravel`` hands back ``masked`` for a masked item: the
             # item is there all the same, in its data.

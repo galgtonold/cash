@@ -47,6 +47,7 @@ from ._native import REASON
 from ._native import cwatch as _cw
 from ._type_memo import class_dict, class_flags, class_module, class_name, class_qualname
 from ._user_attrs import plain_getattr
+from .loaded_modules import loaded_module
 
 __all__ = [
     "KIND_HANDED",
@@ -343,7 +344,7 @@ def _anchors() -> tuple:
     ns = plain_getattr(main, "__dict__", None)
     if isinstance(ns, dict) and all(ns is not other for other in found):
         found.append(ns)
-    ipython = sys.modules.get("IPython")
+    ipython = loaded_module("IPython")
     if ipython is not None:
         try:
             shell = ipython.get_ipython()

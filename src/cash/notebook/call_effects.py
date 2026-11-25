@@ -47,6 +47,7 @@ from cash.tracking.tracker_context import active_tracker
 from cash.value_hash import compute_hash, is_identity_fallback_hash
 
 from .. import _weak
+from ..loaded_modules import loaded_module
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +147,7 @@ def _displays_counted():
     and the count stays 0. Cash's own progress badge, published by cash code
     while a long call runs, is not the call's and is not counted."""
     displays = [0]
-    ipython = sys.modules.get("IPython")
+    ipython = loaded_module("IPython")
     shell = ipython.get_ipython() if ipython is not None else None
     pub = attribute_or(shell, "display_pub", None)
     own = attribute_or(pub, "__dict__", None)

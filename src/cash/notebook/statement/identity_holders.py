@@ -72,6 +72,7 @@ from cash.notebook.shared_objects import library_exact_values, walk_budget, walk
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
 from ..._type_memo import class_dict, class_flags, class_mro, class_name
+from ...loaded_modules import loaded_module
 
 __all__ = [
     "ID_KIND",
@@ -163,7 +164,7 @@ def _value_kinds() -> tuple[frozenset[type], frozenset[type]]:
     global _VALUE_KINDS
     values = library_exact_values()
     if _VALUE_KINDS[0] is not values:
-        numpy = sys.modules.get("numpy")
+        numpy = loaded_module("numpy")
         extra = frozenset(kind for kind in values if not issubclass(kind, (str, bytes)))
         ints = frozenset(
             kind
@@ -775,11 +776,11 @@ def library_parts(value: Any) -> list[Any] | None:
         return array.array.tolist(value) if value.typecode in "lLqQ" else []
     if _numpy_array(kind) and value.dtype.names:
         return [value[field] for field in value.dtype.names]
-    argparse = sys.modules.get("argparse")
+    argparse = loaded_module("argparse")
     if argparse is not None and isinstance(value, argparse.Namespace):
         state = own_dict(value)
         return list(state.values()) if state else []
-    pandas = sys.modules.get("pandas")
+    pandas = loaded_module("pandas")
     if pandas is not None and isinstance(value, (pandas.DataFrame, pandas.Series, pandas.Index)):
         return _pandas_parts(pandas, value)
     if pandas is not None and isinstance(value, pandas.api.extensions.ExtensionArray):
@@ -790,7 +791,7 @@ def library_parts(value: Any) -> list[Any] | None:
 def _pandas_object(kind: type) -> bool:
     """Whether *kind* is a pandas frame or series class (a user's subclass
     of one, read attribute by attribute, `_state_held`)."""
-    pandas = sys.modules.get("pandas")
+    pandas = loaded_module("pandas")
     return pandas is not None and issubclass(kind, (pandas.DataFrame, pandas.Series))
 
 
@@ -841,7 +842,7 @@ def _pandas_array_parts(values: Any) -> list[Any]:
         return spelled
     dtype = values.dtype
     kind = attribute_or(dtype, "kind")
-    pandas = sys.modules.get("pandas")
+    pandas = loaded_module("pandas")
     if kind == "O" and pandas is not None and isinstance(dtype, pandas.CategoricalDtype):
         return [dtype.categories]  # every value is one of them (`_pandas_column`)
     if kind == "O":
@@ -919,7 +920,7 @@ def _pandas_column(column: Any, dtype: Any) -> Any:
     one *dtype*) as a NumPy array when they could keep an ``id()`` or a
     weak reference: 8-byte integers, or objects. None otherwise."""
     kind = attribute_or(dtype, "kind")
-    pandas = sys.modules.get("pandas")
+    pandas = loaded_module("pandas")
     if kind == "O" and pandas is not None and isinstance(dtype, pandas.CategoricalDtype):
         # Every value is one of its categories, the very object: read
         # those, not a million values made objects one by one.
@@ -943,7 +944,7 @@ def _pandas_column(column: Any, dtype: Any) -> Any:
             return values.to_numpy(dtype=object)
         return column.to_numpy(dtype=object)
     if kind in ("i", "u") and attribute_or(dtype, "itemsize") == 8:
-        numpy = sys.modules.get("numpy")
+        numpy = loaded_module("numpy")
         if numpy is not None and isinstance(dtype, numpy.dtype):
             return column.to_numpy()
         return column.to_numpy(dtype="int64", na_value=0)  # a nullable Int64 column
@@ -985,8 +986,8 @@ def _arrow_text_numbers(values: Any) -> list[Any] | None:
     """`_arrow_text_spelling_numbers` of a column's own array (*values*):
     None unless it is Arrow-backed text."""
     chunked = attribute_or(values, "_pa_array", None)
-    pyarrow = sys.modules.get("pyarrow")
-    compute = sys.modules.get("pyarrow.compute")
+    pyarrow = loaded_module("pyarrow")
+    compute = loaded_module("pyarrow.compute")
     if chunked is None or pyarrow is None or compute is None:
         return None
     # Read as every spelling is (`reading_every_spelling`): not the memo's.
@@ -1238,7 +1239,7 @@ def _could_spell(pyarrow: Any, chunked: Any) -> Any:
     candidates is kept whole rather than copied (2 million digit strings):
     its other values spell nothing, which Arrow's patterns find as well,
     so the numbers found are the same."""
-    numpy = sys.modules.get("numpy")
+    numpy = loaded_module("numpy")
     if numpy is None:
         return None
     if isinstance(chunked, pyarrow.ChunkedArray):

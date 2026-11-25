@@ -41,6 +41,7 @@ from ...analysis.callee_effects import free_vars_mutated_in_function, scope_loca
 from ...analysis.mutations import MUTATING_METHODS
 from ...exceptions import SOURCE_RETRIEVAL_ERRORS
 from ...install_paths import is_user_code_file
+from ...loaded_modules import loaded_module
 from ...source_reading import getsource
 from ...tracking import process_registries
 
@@ -604,10 +605,10 @@ def _array_kind(kind: type) -> str | None:
     ``"extension"`` for *kind*, a subclass of the user's included (``class
     S(pd.Series)``, a masked array); None for anything else. Asked only of
     numpy and pandas as they are loaded."""
-    np = sys.modules.get("numpy")
+    np = loaded_module("numpy")
     if np is not None and issubclass(kind, np.ndarray):
         return "ndarray"
-    pd = sys.modules.get("pandas")
+    pd = loaded_module("pandas")
     if pd is None or not has_attribute(pd, "Series"):
         return None
     if issubclass(kind, pd.DataFrame):

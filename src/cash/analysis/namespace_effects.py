@@ -17,7 +17,6 @@ import inspect
 import itertools
 import os
 import pathlib
-import sys
 import textwrap
 import types
 from collections.abc import Callable, Iterable, Iterator, Mapping
@@ -33,6 +32,7 @@ from ..diagnostics import warn_diagnostic
 from ..effects import is_open_write_mode
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..install_paths import is_user_code_file
+from ..loaded_modules import loaded_module
 from ..purity import is_pure
 from ..source_reading import own_source, wrapper_layers
 from ..tracking.randomness.state import rng_carrier_kind
@@ -431,7 +431,7 @@ def user_callee_using_pyplot(func: Any) -> str | None:
     like the call written in the statement. Followed as
     :func:`user_callee_writing_files` follows a call; ``@pure`` is taken.
     """
-    if "matplotlib.pyplot" not in sys.modules:
+    if loaded_module("matplotlib.pyplot") is None:
         # No figure exists for a helper to read before pyplot is imported;
         # one it makes itself is seen by the before-and-after check.
         return None
@@ -471,7 +471,7 @@ def statement_user_pyplot_call(
     """``(callee as spelled, function calling pyplot)`` for the first call in
     *code* into user code that calls pyplot (:func:`user_callee_using_pyplot`),
     or None."""
-    if not namespace or "(" not in code or "matplotlib.pyplot" not in sys.modules:
+    if not namespace or "(" not in code or loaded_module("matplotlib.pyplot") is None:
         return None
     calls = _calls(code) if tree is None else tuple(n for n in walk_tree(tree) if isinstance(n, ast.Call))
     bound = _bindings(code) if tree is None else iteration_bindings(tree)
@@ -530,7 +530,7 @@ def statement_calls_through_ctypes(
     reports. A call made through a ctypes library, one of its functions, a
     ctypes library class or the ctypes module itself is taken for a write.
     """
-    ctypes = sys.modules.get("ctypes")
+    ctypes = loaded_module("ctypes")
     if ctypes is None or not namespace or "(" not in code:
         return None
     calls = _calls(code) if tree is None else tuple(n for n in walk_tree(tree) if isinstance(n, ast.Call))

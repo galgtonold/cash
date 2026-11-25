@@ -19,6 +19,7 @@ from typing import Any
 from .. import _cash_views, _weak, kept_state
 from .._type_memo import class_module, class_name
 from .._user_attrs import plain_getattr
+from ..loaded_modules import loaded_module
 from . import block_digests, text_columns
 from .datetime_columns import reduce_datetime_objects
 from .no_file_writes import NoFileWrites, import_what_it_imported, no_file_writes
@@ -41,7 +42,7 @@ _DATETIME_OBJECTS = kept_state.Ahead(reduce_datetime_objects)
 def _numpy_frombuffer() -> Callable[..., Any] | None:
     """numpy's own rebuild of an array pickled out of band (what
     ``ndarray.__reduce_ex__(5)`` names), or None when it names another."""
-    np = sys.modules.get("numpy")
+    np = loaded_module("numpy")
     try:
         rebuild = np.zeros(1).__reduce_ex__(5)[0]
     except Exception:  # noqa: BLE001 - an older numpy: arrays as before
@@ -64,7 +65,7 @@ def reduce_datetime64(array: Any) -> tuple | None:
     result for 900k rows). The same bytes go out of band as 8-byte integers
     and come back through numpy's own rebuild with the array's dtype: the
     array numpy would have loaded."""
-    np = sys.modules.get("numpy")
+    np = loaded_module("numpy")
     try:
         if (
             array.dtype.kind not in "mM"
@@ -112,7 +113,7 @@ def reduce_text_objects(array: Any) -> tuple | None:
     Pickled as numpy does, each string is an object of its own in the
     stream: a column of a million strings took longer to write than to
     read from its CSV."""
-    np = sys.modules.get("numpy")
+    np = loaded_module("numpy")
     try:
         if (
             np is None
@@ -303,23 +304,23 @@ def stored_reducers(*, for_write: bool = False) -> dict | None:
     pickles a digest is taken over (`stored_pickle`): how an entry is
     written changes no key."""
     reducers: dict = {}
-    pl = sys.modules.get("polars")
+    pl = loaded_module("polars")
     frame, series = getattr(pl, "DataFrame", None), getattr(pl, "Series", None)
     if isinstance(frame, type) and isinstance(series, type):  # else no polars, or one still importing
         reducers[frame] = reducers[series] = _reduce_polars
     for arrow_class in _arrow_array_classes():
         reducers[arrow_class] = _reduce_arrow_array
-    pd = sys.modules.get("pandas")
+    pd = loaded_module("pandas")
     string_array = getattr(getattr(pd, "arrays", None), "StringArray", None)
     if isinstance(string_array, type):
         reducers[string_array] = _reduce_text_for_write if for_write else _reduce_string_array
-    ndarray = getattr(sys.modules.get("numpy"), "ndarray", None)
+    ndarray = getattr(loaded_module("numpy"), "ndarray", None)
     if isinstance(ndarray, type):
         reducers[ndarray] = _ARRAYS_FOR_WRITE if for_write else _DATETIME_OBJECTS
-    chunked = getattr(sys.modules.get("pyarrow"), "ChunkedArray", None)
+    chunked = getattr(loaded_module("pyarrow"), "ChunkedArray", None)
     if for_write and isinstance(chunked, type):
         reducers[chunked] = _reduce_chunked_array
-    geometry_array = getattr(sys.modules.get("geopandas.array"), "GeometryArray", None)
+    geometry_array = getattr(loaded_module("geopandas.array"), "GeometryArray", None)
     if for_write and isinstance(geometry_array, type):
         reducers[geometry_array] = _reduce_geometry_array
     return reducers or None
@@ -712,7 +713,7 @@ def _blocks_known(value: Any) -> dict[tuple[int, int], tuple[Any, tuple]]:
     """`_Known.arrays` of *value*: the blocks of the big pandas tables in it
     (or in the dicts, lists and tuples around them) whose bytes the frame
     memo vouches for now (`shared_blocks.content_keys`)."""
-    pd = sys.modules.get("pandas")
+    pd = loaded_module("pandas")
     frame_type = getattr(pd, "DataFrame", None)
     if not isinstance(frame_type, type):
         return {}
@@ -780,7 +781,7 @@ def _address(buffer: Any) -> int:
 def _over_bytes(raw: memoryview) -> bool:
     """Is *raw* memory of a ``bytes`` object (a text column's buffers,
     `text_columns`), which nothing can write, so needs no copy?"""
-    np = sys.modules.get("numpy")
+    np = loaded_module("numpy")
     obj = raw.obj
     for _depth in range(8):
         if np is None or not isinstance(obj, np.ndarray):
@@ -861,9 +862,9 @@ def _arrow_array_classes() -> tuple[type, ...]:
     for; empty before pandas loaded them."""
     if _ARROW_CLASSES:
         return _ARROW_CLASSES[0]
-    module = sys.modules.get("pandas.core.arrays.arrow.array")
+    module = loaded_module("pandas.core.arrays.arrow.array")
     base = getattr(module, "ArrowExtensionArray", None)
-    if not isinstance(base, type) or "pyarrow" not in sys.modules:
+    if not isinstance(base, type) or loaded_module("pyarrow") is None:
         return ()
     found: list[type] = []
     pending = [base]

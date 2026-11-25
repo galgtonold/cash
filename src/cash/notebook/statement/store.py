@@ -13,7 +13,6 @@ from __future__ import annotations
 import ast
 import logging
 import pickle
-import sys
 import time
 import types
 from collections.abc import Callable, Iterable, Mapping
@@ -59,6 +58,7 @@ from cash.value_hash import known_size
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
 from ..._type_memo import class_name
+from ...loaded_modules import loaded_module
 from ..call_key import TooMuchToLookThrough, holds_a_closure_with_state
 from ..call_refs import DECORATOR_ENTRY, REF_BYTES_FIELD, REFS_FIELD, CallRef
 from ..closed_stream import ClosedStream, stored_form
@@ -1206,7 +1206,7 @@ class StatementStore:
             helper_memos=run.helper_memos,
             holders=run.holders or None,
             holders_moved=True if run.holders and run.moves_holders else None,
-            scalar_identity=scalar_identity() if "pandas" in sys.modules else None,
+            scalar_identity=scalar_identity() if loaded_module("pandas") is not None else None,
             anchors=run.anchors or None,
             restored_into=sorted(run.restored_into & run.outputs) or None,
             bound_copies=sorted(run.bound_copies & run.outputs) or None,

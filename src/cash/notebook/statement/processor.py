@@ -173,6 +173,7 @@ from ...analysis.namespace_effects import (
     statement_starting_workers,
 )
 from ...analytics import AnalyticsManager
+from ...loaded_modules import loaded_module
 from ...tracking import lookups_seen, process_registries, reference_states
 from ...tracking.env_reads import environment_digests
 from ...tracking.env_reads import recording as recording_env_reads
@@ -5175,7 +5176,7 @@ class StatementProcessor:
         budget. Those it holds only read-only views of are linked one way
         here (`read_only_view_homes`), whether or not the statement is
         stored."""
-        if "numpy" not in sys.modules:
+        if loaded_module("numpy") is None:
             return [], True
         user_ns = self.shell.user_ns
         hidden = attribute_or(self.shell, "user_ns_hidden", None) or {}

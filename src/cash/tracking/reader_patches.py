@@ -52,6 +52,7 @@ from cash.tracking.tracker_context import active_tracker
 
 from .. import _weak
 from .._user_attrs import plain_getattr
+from ..loaded_modules import loaded_module
 
 __all__ = ["FileDependencyRegistry", "PostImportHook", "file_registry", "install_patches", "remove_patches"]
 
@@ -1223,7 +1224,7 @@ def _patch_process_pool_submit() -> None:
     loaded multiprocessing and subprocess, 9-12 ms of every process that
     caches a call, for a pool most of them never make.
     """
-    cf_process = sys.modules.get("concurrent.futures.process")
+    cf_process = loaded_module("concurrent.futures.process")
     if cf_process is not None:
         _patch_attribute(cf_process.ProcessPoolExecutor, "submit", _make_relaying_submit)
     # joblib vendors loky; loky also ships on its own. Only once imported: a
@@ -1251,7 +1252,7 @@ def _patch_multiprocessing_pool() -> None:
     # `multiprocessing.Pool()` imports the module only when called -- inside
     # the cached call, after this ran: the import hook patches it then
     # (`_POOL_MODULES`).
-    module = sys.modules.get("multiprocessing.pool")
+    module = loaded_module("multiprocessing.pool")
     if module is None:
         return
 

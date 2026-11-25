@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import itertools
 import logging
-import sys
 import uuid
 import weakref
 from collections.abc import Callable, Container, Mapping
@@ -25,6 +24,7 @@ from cash.notebook.lineage_store import restore_frozen_tag
 from cash.value_hash import budgeted_hash, is_costly, note_size
 
 from .. import _weak
+from ..loaded_modules import loaded_module
 
 if TYPE_CHECKING:
     from cash.notebook.statement._metadata import StatementCacheMetadata
@@ -148,7 +148,7 @@ def _artist_class() -> type | None:
     of cash's own time in a plot cell. Hashed by lineage like a frame:
     a check that would compare its content reads it as changed.
     """
-    module = sys.modules.get("matplotlib.artist")
+    module = loaded_module("matplotlib.artist")
     artist = attribute_or(module, "Artist", None)
     return artist if isinstance(artist, type) else None
 

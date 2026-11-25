@@ -22,6 +22,7 @@ from pathlib import Path
 from ._paths import is_pseudo_filename
 from ._user_attrs import plain_getattr
 from .install_paths import is_installed_path
+from .loaded_modules import loaded_module
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ def interactive_shell_is_running() -> bool:
     A running shell has imported IPython, so a process that has not is not in
     one: a plain script is answered without importing IPython (50-160 ms).
     """
-    ipython = sys.modules.get("IPython")
+    ipython = loaded_module("IPython")
     if ipython is None:
         return False
     try:
@@ -115,7 +116,7 @@ def _running_script_dir() -> Path | None:
         if raw and not os.path.isabs(raw):
             # Relative to where the parent started, which multiprocessing
             # and loky both hand their workers (the cwd may have moved since).
-            original = getattr(sys.modules.get("multiprocessing.process"), "ORIGINAL_DIR", None)
+            original = getattr(loaded_module("multiprocessing.process"), "ORIGINAL_DIR", None)
             if original:
                 raw = os.path.join(original, raw)
         if not raw or not str(raw).endswith(".py") or not os.path.isfile(raw):
@@ -177,7 +178,7 @@ def _multiprocessing_parent_pid() -> int | None:
 
     Read only if multiprocessing is already imported: a worker always has it.
     """
-    process = sys.modules.get("multiprocessing.process")
+    process = loaded_module("multiprocessing.process")
     if process is None:
         return None
     try:
@@ -365,7 +366,7 @@ def _running_pytest() -> bool:
     plain subprocess that merely inherited the variable from a test; and an
     interactive shell is never pytest, whatever it has imported.
     """
-    if "pytest" not in sys.modules or interactive_shell_is_running():
+    if loaded_module("pytest") is None or interactive_shell_is_running():
         return False
     argv0 = sys.argv[0] if sys.argv else ""
     if argv0 == "-c" and os.environ.get("PYTEST_XDIST_WORKER"):

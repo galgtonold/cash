@@ -26,7 +26,6 @@ import concurrent.futures
 import logging
 import os
 import queue
-import sys
 import threading
 import time
 import weakref
@@ -42,6 +41,7 @@ from .. import _weak
 from .._type_memo import class_name
 from ..config.resolve import get_config
 from ..config.schema import CashConfig
+from ..loaded_modules import loaded_module
 from . import write_cost
 
 logger = logging.getLogger(__name__)
@@ -253,7 +253,7 @@ def in_multiprocessing_child() -> bool:
     pid = os.getpid()
     if _CHILD_ANSWER[0] == pid:
         return _CHILD_ANSWER[1]
-    mp = sys.modules.get("multiprocessing")
+    mp = loaded_module("multiprocessing")
     try:
         answer = mp is not None and mp.parent_process() is not None
     except Exception:  # noqa: BLE001 - an odd embedding must not break writes

@@ -12,6 +12,7 @@ from itertools import compress, repeat
 from typing import Any
 
 from ._type_memo import TypeMemo, class_dict, class_mro, mro_mark, mro_of, per_type, same_mro, type_key, type_lookup
+from .loaded_modules import loaded_module
 
 
 def attribute_or(obj: Any, name: str, default: Any = None, *, asked: bool = False) -> Any:
@@ -474,7 +475,7 @@ def _passable(kinds: type | tuple[type, ...]) -> tuple[tuple[type, ...], bool]:
     if found is None:
         if len(_PASSABLE) >= _PASSABLE_MAX:
             _PASSABLE.clear()
-        np = sys.modules.get("numpy")
+        np = loaded_module("numpy")
         layouts = (*_LAYOUT_KINDS, np.ndarray) if np is not None else _LAYOUT_KINDS
         every = _flat(kinds)
         found = (
@@ -725,7 +726,7 @@ def _pydantic_private(obj: Any, cls: type, name: str) -> Any:
     ``__private_attributes__`` whose default is no descriptor. Only for a
     class whose ``__getattr__`` is pydantic's own, so the read runs no
     other code; `NOT_HELD` for anything else."""
-    pydantic = sys.modules.get("pydantic")
+    pydantic = loaded_module("pydantic")
     base = getattr(pydantic, "BaseModel", None) if pydantic is not None else None
     if base is None or not isinstance(obj, base):
         return NOT_HELD

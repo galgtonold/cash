@@ -60,6 +60,7 @@ from typing import Any
 
 from .._location import LAUNCH_ENV
 from .._user_attrs import attribute_or, has_attribute
+from ..loaded_modules import loaded_module
 
 __all__ = [
     "IMPORT_FINALIZERS",
@@ -353,7 +354,7 @@ _NEW_LOGGER = (0, True, False, (), ())
 
 
 def _loggers() -> tuple[int, dict[str, tuple[Any, ...]]] | None:
-    logging = sys.modules.get("logging")
+    logging = loaded_module("logging")
     if logging is None:
         return None
     manager = logging.Logger.manager
@@ -417,20 +418,20 @@ def _same_environment(old: tuple[dict[Any, Any], int], new: tuple[dict[Any, Any]
 
 
 def _matplotlib() -> dict[str, Any] | None:
-    matplotlib = sys.modules.get("matplotlib")
+    matplotlib = loaded_module("matplotlib")
     params = attribute_or(matplotlib, "rcParams", None) if matplotlib is not None else None
     return dict(dict.items(params)) if isinstance(params, dict) else None
 
 
 def _numpy() -> tuple[Any, ...] | None:
-    numpy = sys.modules.get("numpy")
+    numpy = loaded_module("numpy")
     if numpy is None or not has_attribute(numpy, "geterr"):
         return None
     return (numpy.geterr(), numpy.get_printoptions())
 
 
 def _decimal() -> tuple[Any, ...] | None:
-    decimal = sys.modules.get("decimal")
+    decimal = loaded_module("decimal")
     if decimal is None:
         return None
     context = decimal.getcontext()

@@ -40,6 +40,7 @@ from cash import _plain_data
 from cash._type_memo import TypeMemo, type_key
 from cash._user_attrs import attribute_or, has_attribute, instance_of
 
+from ..loaded_modules import loaded_module
 from .shared_objects import (
     EXACT_CONTAINER_TYPES,
     VALUE_TYPES,
@@ -106,8 +107,8 @@ def _family_of_type(kind: type) -> str | None:
 
 
 def _library_family(kind: type) -> str | None:
-    np, pd = sys.modules.get("numpy"), sys.modules.get("pandas")
-    pl, pa = sys.modules.get("polars"), sys.modules.get("pyarrow")
+    np, pd = loaded_module("numpy"), loaded_module("pandas")
+    pl, pa = loaded_module("polars"), loaded_module("pyarrow")
     if np is not None and issubclass(kind, np.ndarray):
         return _NUMPY
     if pd is not None and issubclass(kind, (pd.Series, pd.DataFrame, pd.Index)):
@@ -187,7 +188,7 @@ def _pandas_writes_shared_blocks() -> bool:
     """Does pandas write in place into a block two of its objects share:
     before pandas 3, unless copy-on-write was opted into. Asked each time,
     since a notebook can turn the option on part way."""
-    pd = sys.modules.get("pandas")
+    pd = loaded_module("pandas")
     if pd is None:
         return False
     try:
@@ -483,7 +484,7 @@ def borrowed_memory_names(
     outputs' buffers. Walks the outputs under the walk budget in progress
     (`check_walk_budget`).
     """
-    if "numpy" not in sys.modules:
+    if loaded_module("numpy") is None:
         return set()
     borrowers = _borrowers_in(values)
     if not borrowers:
@@ -531,7 +532,7 @@ def lazy_frame_sources(values: Iterable[Any], inputs: Iterable[str], user_ns: Ma
     a numpy array, a pandas, polars or Arrow object, or another lazy frame,
     is taken as a source: a write to ``arr`` reaches ``lf`` directly, one
     to the array under ``df`` through ``df``'s own link."""
-    pl = sys.modules.get("polars")
+    pl = loaded_module("polars")
     if pl is None or not any(instance_of(value, pl.LazyFrame) for value in values):
         return set()
     return {
@@ -623,7 +624,7 @@ def memory_home(array: Any, variables: Mapping[str, Any]) -> MemoryHome | None:
     through: a write through it would change the variable, which a restore
     cannot tell from the variable's own (``y.to_numpy()`` under pandas'
     copy-on-write is read-only, ``X[:100]`` is not)."""
-    np = sys.modules.get("numpy")
+    np = loaded_module("numpy")
     if np is None or type(array) is not np.ndarray or array.base is None or array.dtype.hasobject or not array.size:
         return None
     if array.flags.writeable:

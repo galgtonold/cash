@@ -66,6 +66,7 @@ from cash.source_reading import getsourcelines
 from ... import _weak
 from ..._type_memo import class_dict
 from ..._user_attrs import static_attr
+from ...loaded_modules import loaded_module
 
 __all__ = ["Writer", "reach", "refused_since", "refuses", "runs_now", "unwatch", "watch", "writers", "writes_into"]
 
@@ -1030,7 +1031,7 @@ def _holds_atoms_only(g: Mapping[str, Any], name: str) -> bool:
 
 def _is_numpy_array(callee: Any) -> bool:
     """Is *callee* ``numpy.array``, which copies what it is handed?"""
-    np = sys.modules.get("numpy")
+    np = loaded_module("numpy")
     return np is not None and callee is attribute_or(np, "array", None)
 
 
@@ -1045,7 +1046,7 @@ def _never_changed(value: Any) -> bool:
         return True
     if type(value) in (tuple, frozenset):
         return len(value) <= 64 and all(_never_changed(item) for item in value)
-    np = sys.modules.get("numpy")
+    np = loaded_module("numpy")
     return np is not None and isinstance(value, np.generic) and type(value) is not np.void
 
 

@@ -35,6 +35,7 @@ import textwrap
 from types import ModuleType
 
 from ..._paths import is_pseudo_filename
+from ...loaded_modules import loaded_module
 from .detect import get_value_seeding_rng_modules
 
 #: The modules whose global stream cash keys, and their import names.
@@ -98,7 +99,7 @@ def _user_frames():
 
 def _ipython_history_seeds() -> set[str]:
     """Modules seeded with a value by a cell run before the current one."""
-    ipython = sys.modules.get("IPython")
+    ipython = loaded_module("IPython")
     get = getattr(ipython, "get_ipython", None) if ipython is not None else None
     shell = get() if callable(get) else None
     namespace = getattr(shell, "user_ns", None)
@@ -138,7 +139,7 @@ def seeded_before_watch(modules: set[str]) -> set[str]:
     unknown: set[str] = set()
     for module in modules:
         if module == "numpy.random":
-            np_random = sys.modules.get("numpy.random")
+            np_random = loaded_module("numpy.random")
             dropped = _numpy_seed_sequence_dropped(np_random) if np_random is not None else False
             if dropped:
                 seeded.add(module)

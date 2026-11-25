@@ -39,6 +39,7 @@ from .._lazy_module import LazyModule
 from .._type_memo import class_module, class_name, class_qualname, module_of_class
 from .._user_attrs import class_attr, plain_getattr
 from ..cost_model import GENERIC_FAMILY
+from ..loaded_modules import loaded_module
 from ..sizing import memory_footprint, pickled_size_estimate, slot_values
 from ..source_reading import read_code_file
 from ..value_types import IMMUTABLE_PRIMS
@@ -897,7 +898,7 @@ class InMemoryBackend(CacheBackend):
                 return InMemoryBackend._copy_frame(value, known_cells, record_cells)
             if value_type is _TableWithBytes:
                 return value.read_out(known_cells)
-            if value_type.__name__ == "ndarray" and value_type is getattr(sys.modules.get("numpy"), "ndarray", None):
+            if value_type.__name__ == "ndarray" and value_type is getattr(loaded_module("numpy"), "ndarray", None):
                 if not value.dtype.hasobject:
                     return _copy_array(value)
                 copied = _copy_object_array(value)
@@ -1165,7 +1166,7 @@ class InMemoryBackend(CacheBackend):
         *by_deepcopy*, when given, gets True.
         """
         frames = _frame_types()
-        ndarray = getattr(sys.modules.get("numpy"), "ndarray", None)
+        ndarray = getattr(loaded_module("numpy"), "ndarray", None)
         #: Every object copied here, kept alive until the copy is done: *memo*
         #: is keyed by ``id``, and an array or frame that a ``__getstate__``
         #: builds for the pickle is freed once written, so the next one could
@@ -1318,7 +1319,7 @@ class InMemoryBackend(CacheBackend):
         """
         before = dict(memo)
         copied = copy.deepcopy(value, memo)
-        if "pandas" not in sys.modules:
+        if loaded_module("pandas") is None:
             return copied
         frames = [item for item in memo.get(id(memo), ()) if _is_pandas_frame(type(item))]
         if not frames:
@@ -2847,7 +2848,7 @@ def _of_immutable_cells(items: list | tuple) -> bool:
     copied through a pickle round trip for the RAM tier: 16 s after a 2.9 s
     statement. Asked of the exact types at C speed, and only once pandas is
     imported: before that, no such scalar exists."""
-    if "pandas" not in sys.modules:
+    if loaded_module("pandas") is None:
         return False
     return _immutable_cell_types().issuperset(map(type, items))
 
@@ -2886,7 +2887,7 @@ def _cheap_to_keep(value: Any, depth: int = 0) -> bool:
         # buffers: no copy. Not with an Object column, whose Python objects
         # are copied.
         return not _has_object_column(value)
-    if class_name(kind) == "ndarray" and kind is getattr(sys.modules.get("numpy"), "ndarray", None):
+    if class_name(kind) == "ndarray" and kind is getattr(loaded_module("numpy"), "ndarray", None):
         return not value.dtype.hasobject and value.nbytes <= _CHEAP_ARRAY_BYTES
     if kind in (dict, list, tuple) and depth < _CHEAP_DEPTH and len(value) <= _CHEAP_ITEMS:
         items = value.values() if kind is dict else value
@@ -2905,7 +2906,7 @@ def _write_copyable(value: Any, depth: int = 0) -> bool:
         return True
     if _is_pandas_frame(kind):
         return _copies_in_full(value)
-    if class_name(kind) == "ndarray" and kind is getattr(sys.modules.get("numpy"), "ndarray", None):
+    if class_name(kind) == "ndarray" and kind is getattr(loaded_module("numpy"), "ndarray", None):
         return not value.dtype.hasobject
     if kind in (dict, list, tuple):
         if _of_atoms(value):
@@ -3211,7 +3212,7 @@ def _copy_object_array(array: Any) -> Any | None:
     other array. ``df['action_time'].unique()`` over 1.9 million Timestamps
     was copied through a pickle round trip for the RAM tier: 17 s after a
     4 s statement. Not timed: sharing cells is no measure of copy speed."""
-    if array.dtype.kind != "O" or "pandas" not in sys.modules:
+    if array.dtype.kind != "O" or loaded_module("pandas") is None:
         return None
     if not immutable_cells(array.ravel(order="K")):
         return None
@@ -3328,7 +3329,7 @@ def store_copy_seconds(value: Any) -> float | None:
             if _STORE_COPY_SPEED:
                 return nbytes / max(_STORE_COPY_SPEED)
             return copy_seconds(nbytes)
-        if class_name(kind) == "ndarray" and kind is getattr(sys.modules.get("numpy"), "ndarray", None):
+        if class_name(kind) == "ndarray" and kind is getattr(loaded_module("numpy"), "ndarray", None):
             if not value.dtype.hasobject:
                 return copy_seconds(value.nbytes)
     except Exception:
@@ -3355,7 +3356,7 @@ def hit_seconds(value: Any, size_bytes: int) -> float | None:
             if frame_sharing.enabled() and frame_sharing.freezable(value):
                 return SHARED_HIT_SECONDS
             return copy_seconds(size_bytes)
-        if class_name(kind) == "ndarray" and kind is getattr(sys.modules.get("numpy"), "ndarray", None):
+        if class_name(kind) == "ndarray" and kind is getattr(loaded_module("numpy"), "ndarray", None):
             if not value.dtype.hasobject:
                 return copy_seconds(size_bytes)
     except Exception:
@@ -3729,7 +3730,7 @@ def _still_as_stored(checked: list[tuple[Any, Any]]) -> bool:
 def _is_polars_frame(value_type: type) -> bool:
     """Exactly a polars DataFrame, Series or LazyFrame: a subclass may hold
     state of its own that a clone shares. Never imports polars."""
-    pl = sys.modules.get("polars")
+    pl = loaded_module("polars")
     return pl is not None and value_type in (
         getattr(pl, "DataFrame", None),
         getattr(pl, "Series", None),
@@ -3756,7 +3757,7 @@ def _frame_types() -> tuple[type, ...]:
     Never imports either: a value cannot hold a frame of a library that
     is not imported.
     """
-    modules = (sys.modules.get("pandas"), sys.modules.get("polars"))
+    modules = (loaded_module("pandas"), loaded_module("polars"))
     if _FRAME_TYPES and _FRAME_TYPES[0] == modules:
         return _FRAME_TYPES[1]
     found: list[type] = []
@@ -3814,7 +3815,7 @@ def _is_pandas_frame(value_type: type) -> bool:
     shares the lists in its cells just the same. Never imports pandas: a
     value cannot hold a frame before pandas is imported.
     """
-    pd = sys.modules.get("pandas")
+    pd = loaded_module("pandas")
     try:
         return issubclass(value_type, (pd.DataFrame, pd.Series))  # type: ignore[union-attr]
     except (AttributeError, TypeError):  # no pandas, or one still importing
@@ -3873,7 +3874,7 @@ def _object_dtype(dtype: Any) -> bool:
 
 
 def _numpy_dtype(dtype: Any) -> bool:
-    numpy = sys.modules.get("numpy")
+    numpy = loaded_module("numpy")
     return numpy is not None and isinstance(dtype, numpy.dtype)
 
 

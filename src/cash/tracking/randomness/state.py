@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from cash._user_attrs import instance_of
 
 from ..._user_attrs import plain_getattr
+from ...loaded_modules import loaded_module
 from .detect import KIND_NP_GENERATOR, KIND_NP_RANDOMSTATE, KIND_PY_RANDOM
 
 if TYPE_CHECKING:
@@ -58,14 +59,14 @@ def capture_rng_state() -> dict:
     state = {}
 
     # Standard library random
-    if "random" in sys.modules:
+    if loaded_module("random") is not None:
         try:
             state["random"] = unwatched(random.getstate)()
         except (TypeError, AttributeError) as e:
             logger.debug("[RANDOMNESS] Failed to capture random state: %s", e)
 
     # NumPy random
-    if "numpy" in sys.modules or "numpy.random" in sys.modules:
+    if loaded_module("numpy") is not None or loaded_module("numpy.random") is not None:
         try:
             import numpy as np
 
@@ -74,7 +75,7 @@ def capture_rng_state() -> dict:
             logger.debug("[RANDOMNESS] Failed to capture numpy random state: %s", e)
 
     # PyTorch (if available)
-    if "torch" in sys.modules:
+    if loaded_module("torch") is not None:
         try:
             import torch
 
@@ -123,14 +124,14 @@ def restore_rng_state(state: dict, displaced: dict | None = None) -> None:
 def _restore_global_streams(state: dict) -> None:
     """Put each global stream of *state* where it holds it."""
     # Standard library random
-    if "random" in state and "random" in sys.modules:
+    if "random" in state and loaded_module("random") is not None:
         try:
             random.setstate(state["random"])
         except (TypeError, ValueError) as e:
             logger.debug("[RANDOMNESS] Failed to restore random state: %s", e)
 
     # NumPy random
-    if "numpy.random" in state and ("numpy" in sys.modules or "numpy.random" in sys.modules):
+    if "numpy.random" in state and (loaded_module("numpy") is not None or loaded_module("numpy.random") is not None):
         try:
             import numpy as np
 
@@ -139,7 +140,7 @@ def _restore_global_streams(state: dict) -> None:
             logger.debug("[RANDOMNESS] Failed to restore numpy random state: %s", e)
 
     # PyTorch
-    if "torch" in state and "torch" in sys.modules:
+    if "torch" in state and loaded_module("torch") is not None:
         try:
             import torch
 
@@ -186,7 +187,7 @@ def rng_carrier_kind(obj: object) -> str | None:
     with the authoritative global state.
     """
 
-    if "numpy" in sys.modules or "numpy.random" in sys.modules:
+    if loaded_module("numpy") is not None or loaded_module("numpy.random") is not None:
         try:
             import numpy as np
 

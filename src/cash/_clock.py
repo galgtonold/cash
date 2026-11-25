@@ -15,18 +15,19 @@ imported under a frozen clock, freezegun's own saved original is used.
 from __future__ import annotations
 
 import functools
-import sys
 import threading
 import time
 import types
 from collections.abc import Callable
+
+from .loaded_modules import loaded_module
 
 
 def _real_perf_counter():
     current = time.perf_counter
     if type(current) is types.BuiltinFunctionType:
         return current
-    saved = getattr(sys.modules.get("freezegun.api"), "real_perf_counter", None)
+    saved = getattr(loaded_module("freezegun.api"), "real_perf_counter", None)
     return saved if callable(saved) else current
 
 
