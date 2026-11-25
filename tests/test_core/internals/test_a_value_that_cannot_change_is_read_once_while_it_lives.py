@@ -157,7 +157,9 @@ def test_a_frozenset_holding_an_object_that_can_change_is_walked_every_time(monk
 
 def test_a_set_is_walked_every_time(monkeypatch):
     sorts = _sorted_calls(monkeypatch)
-    value = set(range(1000))
+    # Of two kinds, so each item is placed by its pickle, which the spy
+    # counts (a set of ints alone is sorted by value, pickling none).
+    value = set(range(1000)) | {"a"}
     first = canonical_bytes(value, BUILTIN_CONTENT)
     once = len(sorts)
     value.add(5000)
