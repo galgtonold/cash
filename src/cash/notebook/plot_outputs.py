@@ -26,13 +26,13 @@ import ast
 import hashlib
 import logging
 import re
-import sys
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 from cash._user_attrs import attribute_or
 
+from ..loaded_modules import loaded_module
 from .pyplot_state import CHANGED_PYPLOT_REASON
 
 logger = logging.getLogger(__name__)
@@ -180,7 +180,7 @@ def _drawing_file(path: str) -> bool:
     a font, or a file of its own (its style sheets, its font cache)."""
     if str(path).lower().endswith(_FONT_SUFFIXES):
         return True
-    matplotlib = sys.modules.get("matplotlib")
+    matplotlib = loaded_module("matplotlib")
     if matplotlib is None:
         return False
     try:
@@ -207,8 +207,8 @@ def inline_backend_closes_figures() -> bool:
     """Whether pyplot draws through the inline backend, which renders the
     open figures into the cell's output and closes them after it shows
     them. Nothing else is taken to end a plot."""
-    matplotlib = sys.modules.get("matplotlib")
-    if matplotlib is None or "matplotlib.pyplot" not in sys.modules:
+    matplotlib = loaded_module("matplotlib")
+    if matplotlib is None or loaded_module("matplotlib.pyplot") is None:
         return False
     try:
         # Read past ``RcParams.__getitem__``, which resolves a backend not yet chosen.
@@ -223,7 +223,7 @@ def inline_backend_closes_figures() -> bool:
 
 def _inline_settings() -> Any:
     """The inline backend's settings object, when it is loaded."""
-    module = sys.modules.get("matplotlib_inline.config")
+    module = loaded_module("matplotlib_inline.config")
     config = attribute_or(module, "InlineBackend", None)
     if config is None:
         return None
@@ -238,7 +238,7 @@ def figure_settings_digest(shell: Any) -> str | None:
     settings (``rcParams``, a style, a seaborn theme), the inline backend's
     formats, and which formats the notebook shows. None when they cannot be
     read: nothing is kept or served then."""
-    matplotlib = sys.modules.get("matplotlib")
+    matplotlib = loaded_module("matplotlib")
     if matplotlib is None:
         return None
     try:

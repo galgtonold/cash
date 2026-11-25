@@ -850,7 +850,7 @@ entry. That holds whenever the seed was set: before the function was
 decorated, or before `import cash` in the same script. A function
 whose own body seeds the stream is not keyed by where the caller left it.
 
-<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @90ed4e94 -->
+<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @c7827cae -->
 The same holds for a generator in a module global that the body draws from
 (`rng = np.random.default_rng(42)` at module level, `rng.normal()` inside): the
 key includes where `rng` stands, and a hit moves `rng` on to where the computed
@@ -1018,7 +1018,7 @@ did (a file written, a request sent, a line printed) does not happen again. On
 the first call, cash reads the function and its helpers and reports what a hit
 would skip or get wrong:
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @045afef4, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/analysis/purity_report.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep", cash/decorator/runtime.py:CallRunner._refuse_registries @1938b99d, cash/decorator/runtime.py:CallRunner._refuse_class_writes @1376edfd -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @045afef4, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/analysis/purity_report.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep", cash/decorator/runtime.py:CallRunner._refuse_registries @631605a3, cash/decorator/runtime.py:CallRunner._refuse_class_writes @1376edfd -->
 | The body... | cash |
 |---|---|
 | Writes, posts, prints to stdout, or changes state outside the function | Warns ([`IMPURE-SIDE-EFFECTS`](warnings.md#impure-side-effects)) and caches |
@@ -1295,7 +1295,7 @@ another function in the same `.pyx` keeps the entries. When cash cannot
 match the `.pyx` to the built module (no `.pyx`, or one newer than the
 build), it keys the whole built file instead: any edit then reruns.
 
-<!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @9fac5b09 -->
+<!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @e9ba11bf -->
 **Can I use cached functions in a process pool?** Yes: map the cached
 function itself, or a plain function that calls cached ones. Workers share
 the cache folder with the parent. See

@@ -60,11 +60,14 @@ from typing import Any
 
 from .._location import LAUNCH_ENV
 from .._user_attrs import attribute_or, has_attribute
+from ..loaded_modules import loaded_module
 
 __all__ = [
     "IMPORT_FINALIZERS",
     "IMPORT_STEP_CODE",
+    "beside_threads",
     "changed",
+    "changed_by",
     "drop_trace_stand_in",
     "finalizers_made",
     "importing",
@@ -98,6 +101,24 @@ def unregister_atexit(fn: Callable[..., object]) -> None:
     before = atexit._ncallbacks()
     _atexit_unregister(fn)
     _OWN_ATEXIT[0] -= before - atexit._ncallbacks()
+
+
+#: The registries whose every change is a call counted here, as the
+#: warning calls them.
+_ATEXIT = "atexit's callbacks (atexit.register)"
+_CODEC_SEARCH = "the codec search functions (codecs.register)"
+_AUDIT = "the audit hooks (sys.addaudithook)"
+_ENVIRONMENT = "the environment (os.environ, os.putenv, os.unsetenv)"
+#: ``registry -> thread ident -> its counted calls``: who made a change
+#: that is a counted call, for a cached call run while other threads are
+#: (`changed_by`). Each thread writes its own entry alone.
+_WRITES: dict[str, dict[int, int]] = {_ATEXIT: {}, _CODEC_SEARCH: {}, _AUDIT: {}, _ENVIRONMENT: {}}
+
+
+def _wrote(registry: str) -> None:
+    writes = _WRITES[registry]
+    ident = threading.get_ident()
+    writes[ident] = writes.get(ident, 0) + 1
 
 
 #: Calls of ``codecs.register`` and audit hooks added, by anyone but cash.
@@ -158,6 +179,7 @@ def _count_atexit() -> None:
         if _library_called(sys._getframe(1)):
             _ATEXIT_LIBRARY[0] += made
             return result
+        _wrote(_ATEXIT)
         try:
             _ATEXIT_REGISTERED[func] = _ATEXIT_REGISTERED.get(func, 0) + made
         except TypeError:  # unhashable: never taken back as far as the count goes
@@ -168,6 +190,7 @@ def _count_atexit() -> None:
         before = atexit._ncallbacks()
         unregister(func)
         removed = before - atexit._ncallbacks()
+        _wrote(_ATEXIT)
         try:
             registered = _ATEXIT_REGISTERED.pop(func, 0)
         except TypeError:
@@ -234,6 +257,7 @@ def _count_calls() -> None:
 
     def counted_register(search_function: Callable[[str], object]) -> None:
         _CODECS[0] += 1
+        _wrote(_CODEC_SEARCH)
         return register(search_function)
 
     counted_register.__module__ = "codecs"
@@ -245,6 +269,7 @@ def _count_calls() -> None:
 
     def added(_args: tuple) -> None:
         _AUDIT_HOOKS[0] += 1
+        _wrote(_AUDIT)
 
     from . import io_watch
 
@@ -257,6 +282,7 @@ def _count_calls() -> None:
             _WAIVED_ENVIRONMENT.add(_environment_key(args[0]))
             return
         _NATIVE_ENVIRONMENT[0] += 1
+        _wrote(_ENVIRONMENT)
 
     io_watch.subscribe_always(("os.putenv", "os.unsetenv"), set_natively)
 
@@ -353,7 +379,7 @@ _NEW_LOGGER = (0, True, False, (), ())
 
 
 def _loggers() -> tuple[int, dict[str, tuple[Any, ...]]] | None:
-    logging = sys.modules.get("logging")
+    logging = loaded_module("logging")
     if logging is None:
         return None
     manager = logging.Logger.manager
@@ -417,20 +443,20 @@ def _same_environment(old: tuple[dict[Any, Any], int], new: tuple[dict[Any, Any]
 
 
 def _matplotlib() -> dict[str, Any] | None:
-    matplotlib = sys.modules.get("matplotlib")
+    matplotlib = loaded_module("matplotlib")
     params = attribute_or(matplotlib, "rcParams", None) if matplotlib is not None else None
     return dict(dict.items(params)) if isinstance(params, dict) else None
 
 
 def _numpy() -> tuple[Any, ...] | None:
-    numpy = sys.modules.get("numpy")
+    numpy = loaded_module("numpy")
     if numpy is None or not has_attribute(numpy, "geterr"):
         return None
     return (numpy.geterr(), numpy.get_printoptions())
 
 
 def _decimal() -> tuple[Any, ...] | None:
-    decimal = sys.modules.get("decimal")
+    decimal = loaded_module("decimal")
     if decimal is None:
         return None
     context = decimal.getcontext()
@@ -477,9 +503,13 @@ def _same_display(old: tuple[Any, ...], new: tuple[Any, ...]) -> bool:
     return old[0] is not new[0] or all(a is b for a, b in zip(old[1:], new[1:], strict=True))
 
 
+_SIGNAL_HANDLERS = "a signal's handler (signal.signal)"
+_NUMPY = "NumPy's error handling or print options (np.seterr, np.set_printoptions)"
+_DECIMAL = "decimal's context"
+
 _REGISTRIES: tuple[tuple[str, Callable[[], Any], Callable[[Any, Any], bool] | None], ...] = (
-    ("atexit's callbacks (atexit.register)", _atexit_callbacks, None),
-    ("a signal's handler (signal.signal)", _signals, None),
+    (_ATEXIT, _atexit_callbacks, None),
+    (_SIGNAL_HANDLERS, _signals, None),
     (
         "a hook or limit of the interpreter's (sys.excepthook, sys.displayhook, threading.excepthook, "
         "sys.settrace, sys.setprofile, sys.setrecursionlimit and the like)",
@@ -494,14 +524,14 @@ _REGISTRIES: tuple[tuple[str, Callable[[], Any], Callable[[Any, Any], bool] | No
     ("how warnings are shown (warnings.formatwarning, warnings.showwarning)", _warning_display, _same_display),
     ("a logger's level, handlers or filters (logging)", _loggers, _same_loggers),
     ("pickle's reducers (copyreg.pickle)", lambda: dict(_copyreg().dispatch_table), None),
-    ("the codec search functions (codecs.register)", lambda: _CODECS[0], None),
-    ("the audit hooks (sys.addaudithook)", lambda: _AUDIT_HOOKS[0], None),
+    (_CODEC_SEARCH, lambda: _CODECS[0], None),
+    (_AUDIT, lambda: _AUDIT_HOOKS[0], None),
     ("where imports are found (sys.path, sys.meta_path, sys.path_hooks)", _imports, None),
-    ("the environment (os.environ, os.putenv, os.unsetenv)", _environment, _same_environment),
+    (_ENVIRONMENT, _environment, _same_environment),
     ("the working directory (os.chdir)", os.getcwd, None),
     ("matplotlib's rcParams", _matplotlib, None),
-    ("NumPy's error handling or print options (np.seterr, np.set_printoptions)", _numpy, None),
-    ("decimal's context", _decimal, None),
+    (_NUMPY, _numpy, None),
+    (_DECIMAL, _decimal, None),
 )
 
 
@@ -548,9 +578,24 @@ class Snapshot:
     """The registries as a statement or a call found them (`snapshot`),
     and those it changed outside an import so far."""
 
-    __slots__ = ("__weakref__", "before", "found", "imported")
+    __slots__ = ("__weakref__", "before", "found", "imported", "others", "thread", "threads", "writes")
 
-    def __init__(self) -> None:
+    def __init__(self, threads: bool = False) -> None:
+        #: The thread a cached call runs on, for `changed_by`; None for a
+        #: statement, which `changed` judges whole.
+        self.thread = threading.get_ident() if threads else None
+        #: Whether a thread running code of the user's was alive beside it,
+        #: the threads alive (``ident -> thread``) and the calls each had
+        #: made of the counted registries, all read before the registries:
+        #: a write in between is then counted and not compared.
+        self.others = False
+        self.threads: dict[int | None, Any] = {}
+        self.writes: dict[str, dict[int, int]] = {}
+        if threads:
+            if threading.active_count() > 1:
+                self.threads = {thread.ident: thread for thread in threading.enumerate()}
+                self.others = _others_run()
+            self.writes = {name: dict(counts) for name, counts in _WRITES.items()}
         self.before = _read()
         self.found: set[str] = set()
         #: The modules first imported meanwhile that registered something
@@ -575,7 +620,8 @@ def _load_unlocked(spec: Any) -> Any:
     after is where it starts from."""
     if not _open or attribute_or(_importing, "depth", 0):
         return _original_load(spec)
-    watching = list(_open)
+    with _open_lock:
+        watching = list(_open)
     pre = _read()
     _importing.depth = 1
     first = finalizers_made()
@@ -671,26 +717,46 @@ def finalizers_made() -> int | None:
 _original_load: Callable[[Any], Any] | None = None
 
 
+#: Held while the open snapshots are added to, taken from or listed, and
+#: while the import step is put in place: snapshots are taken on every
+#: thread that runs a cached call, and a set changed by one thread while
+#: another lists it raises. Re-entrant: listing can start a collection,
+#: whose finalizers may import.
+_open_lock = threading.RLock()
+
+
 def _watch_imports() -> None:
     global _open, _original_load
     if _open is not None:
         return
     from .._weak import WeakSet
 
-    _open = WeakSet()
-    bootstrap = sys.modules["importlib._bootstrap"]
-    _original_load = bootstrap._load_unlocked
-    bootstrap._load_unlocked = _load_unlocked
+    with _open_lock:
+        if _open is not None:
+            return
+        bootstrap = sys.modules["importlib._bootstrap"]
+        current = bootstrap._load_unlocked
+        # Never this module's own step as the one it calls on: two threads
+        # taking their first snapshot at once each put it in place, the
+        # second over the first, and every import after that called itself
+        # until the stack ran out.
+        if current is not _load_unlocked:
+            _original_load = current
+            bootstrap._load_unlocked = _load_unlocked
+        # Last: the step passes straight through until there is a set.
+        _open = WeakSet()
 
 
-def snapshot() -> Snapshot:
-    """Each registry as it is now, for `changed`."""
+def snapshot(threads: bool = False) -> Snapshot:
+    """Each registry as it is now, for `changed`; *threads*: and which
+    threads run beside this one, for `changed_by`."""
     _count_calls()
     _watch_imports()
-    if not _open:
-        IMPORT_FINALIZERS.clear()
-    taken = Snapshot()
-    _open.add(taken)
+    taken = Snapshot(threads)
+    with _open_lock:
+        if not _open:
+            IMPORT_FINALIZERS.clear()
+        _open.add(taken)
     return taken
 
 
@@ -707,6 +773,100 @@ def registering_imports(before: Snapshot) -> list[str]:
 def changed(before: Snapshot) -> list[str]:
     """The registries not as *before* (`snapshot`) found them, by name,
     but for what an import made in between did to them."""
-    _open.discard(before)
+    with _open_lock:
+        _open.discard(before)
     _compare(before.before, before.found)
     return [name for name, _read_it, _same in _REGISTRIES if name in before.found]
+
+
+def _others_run() -> bool:
+    from .trace_recorder import other_thread_alive
+
+    try:
+        return other_thread_alive(None, working=True)
+    except Exception:  # noqa: BLE001 - not told alone
+        return True
+
+
+def beside_threads(before: Snapshot) -> bool:
+    """Did a thread that may do the program's work run beside the call
+    *before* was taken for (``threads=True``), then or now? What the
+    process keeps (a registry here, a global random stream) may then have
+    been changed by it."""
+    return before.others or _others_run()
+
+
+def changed_by(before: Snapshot) -> tuple[list[str], list[str]]:
+    """`changed`, told apart by who made the change: ``(the call's, cannot
+    be told)``, for *before* taken with ``threads=True`` on the thread the
+    call runs on.
+
+    The registries belong to the process, so a comparison around a call
+    also sees what another thread did meanwhile: a heartbeat thread writing
+    ``os.environ``, a server thread setting a logger's level. Alone in the
+    process (but for cash's own threads and the kernel's), every change is
+    the call's. Beside other threads:
+
+    - a registry whose every change is a counted call (the environment, the
+      audit hooks, the codec search functions, ``atexit``) is the call's
+      when its thread made one, or a thread started since did (one the call
+      started, as far as can be told), and nobody's here when only threads
+      that were running before made them;
+    - one Python keeps per thread (decimal's context, NumPy's settings from
+      NumPy 2 on) is the call's;
+    - a signal's handler, which only the main thread can set, is the call's
+      on the main thread and another's elsewhere;
+    - any other (a hook, the warnings filters, a logger, ``sys.path``, the
+      working directory, matplotlib's rcParams) cannot be told.
+    """
+    names = changed(before)
+    me = before.thread
+    if me is None or not names:
+        return names, []
+    others = beside_threads(before)
+    mine: list[str] = []
+    unsure: list[str] = []
+    for name in names:
+        whose = _whose(name, before, me)
+        if whose is None:
+            whose = not others or None
+        if whose:
+            mine.append(name)
+        elif whose is None:
+            unsure.append(name)
+    return mine, unsure
+
+
+def _whose(name: str, before: Snapshot, me: int) -> bool | None:
+    """Is the change of registry *name* the call's (True), another
+    thread's (False), or not told by the registry itself (None)?"""
+    if name == _DECIMAL:
+        return True
+    if name == _NUMPY:
+        numpy = loaded_module("numpy")
+        version = attribute_or(numpy, "__version__", "") if numpy is not None else ""
+        # Print options are one per process before NumPy 2.
+        return (
+            True
+            if isinstance(version, str) and version.split(".")[0].isdigit() and int(version.split(".")[0]) >= 2
+            else None
+        )
+    if name == _SIGNAL_HANDLERS:
+        return me == threading.main_thread().ident
+    counts = _WRITES.get(name)
+    if counts is None:
+        return None
+    was = before.writes.get(name, {})
+    writers = [ident for ident, count in dict(counts).items() if count != was.get(ident, 0)]
+    if not writers:
+        return None
+    if me in writers:
+        return True
+    now = {thread.ident: thread for thread in threading.enumerate()}
+    for ident in writers:
+        there = before.threads.get(ident)
+        # Not running before the call, or another thread under the number
+        # of one that ended: started meanwhile, perhaps by the call.
+        if there is None or now.get(ident, there) is not there:
+            return True
+    return False

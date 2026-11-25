@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import logging
 import os
-import sys
 import threading
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -36,6 +35,7 @@ from cash._user_attrs import attribute_or
 
 from .._plain_data import is_plain
 from ..analysis.namespace_effects import is_estimator
+from ..loaded_modules import loaded_module
 from ..tracking.tracker_context import untracked
 from ..value_hash import digest_via_pickle, is_identity_fallback_hash
 from ..value_types import IMMUTABLE_LEAF_TYPES
@@ -119,7 +119,7 @@ def _read_only(value: Any) -> str:
     otherwise (``arr[arr < 2] = 0`` raises), so it is not the same value.
     One flag per array: ``"1"`` read-only, ``"0"`` writeable, ``"?"`` not
     told."""
-    numpy = sys.modules.get("numpy")
+    numpy = loaded_module("numpy")
     if numpy is None or class_name(type(value)) in _GRAPHS:
         return ""
     if isinstance(value, numpy.ndarray):

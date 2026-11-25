@@ -59,6 +59,7 @@ from cash.value_types import IMMUTABLE_LEAF_TYPES
 
 from ... import _weak
 from ..._type_memo import class_dict, class_dictoffset, class_flags, class_module, class_mro, class_name
+from ...loaded_modules import loaded_module
 from .identity_holders import IdentityHeld, library_parts
 
 __all__ = [
@@ -352,7 +353,7 @@ def _columns_fit(live: Any, stored: Any) -> bool:
     both have in the same order, ahead of the added ones. A frame of these
     is never walked for what holds it by identity, which next to a big
     heap cost every hit seconds."""
-    pd = sys.modules.get("pandas")
+    pd = loaded_module("pandas")
     if pd is None or type(live) is not pd.DataFrame or type(stored) is not pd.DataFrame:
         return False
     try:
@@ -934,7 +935,7 @@ def memory_refusal(name: str, obj: Any, values: Mapping[str, Any]) -> str | None
     array sharing its memory (its base, or a view of it), which a restore
     would hand a copy, so that writes to one no longer reach the other.
     Looked for through what the values hold, up to `_MAX_SEEN` objects."""
-    numpy = sys.modules.get("numpy")
+    numpy = loaded_module("numpy")
     if numpy is None or not isinstance(obj, numpy.ndarray):
         return None
     module_dicts = {id(vars(m)) for m in list(sys.modules.values()) if isinstance(m, types.ModuleType)}
@@ -1004,7 +1005,7 @@ def _reaches(
     cells = [_MAX_CELLS]
     modes: dict[type, int] = {}
     streams = (type(sys.__stdout__), type(sys.__stderr__))
-    pandas = sys.modules.get("pandas")
+    pandas = loaded_module("pandas")
     weakcount = weakref.getweakrefcount
     add = seen.add
     while level:
@@ -1145,7 +1146,7 @@ def _static_class(kind: type) -> Any:
 
 
 def _pandas_index(item: Any) -> bool:
-    pd = sys.modules.get("pandas")
+    pd = loaded_module("pandas")
     return pd is not None and isinstance(item, pd.Index)
 
 
@@ -1158,7 +1159,7 @@ def ready(restored: Mapping[str, Any], names: Iterable[str], user_ns: Mapping[st
 def _columns_changed(live: Any, restored: Any) -> bool:
     """Whether *restored* is a frame whose columns are not those of the
     frame *live* (`_columns_fit`)."""
-    pd = sys.modules.get("pandas")
+    pd = loaded_module("pandas")
     return (
         pd is not None
         and type(live) is pd.DataFrame

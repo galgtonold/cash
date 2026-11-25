@@ -31,6 +31,7 @@ import warnings
 from typing import Any
 
 from ._paths import CELL_NAME_PREFIX
+from .loaded_modules import loaded_module
 
 #: The name a cell's line is shown under (``<cash>:N``), as cash's notebook
 #: warnings name it.
@@ -704,7 +705,7 @@ def _blames_user_code(level: int | None) -> bool:
 def _running_cell() -> tuple[str, int] | None:
     """The cell IPython runs now, as cash's notebook warnings name it
     (``<cash>:N``), or None outside IPython."""
-    ipython = sys.modules.get("IPython")
+    ipython = loaded_module("IPython")
     try:
         shell = ipython.get_ipython() if ipython is not None else None
     except Exception:  # noqa: BLE001 - a half-imported IPython: blamed as before

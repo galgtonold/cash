@@ -25,12 +25,12 @@ or pandas under copy-on-write (``return df, df["y"].to_numpy()``).
 
 from __future__ import annotations
 
-import sys
 import types
 from typing import Any
 
 from .._type_memo import class_dict, class_name, mro_of
 from .._user_attrs import plain_getattr
+from ..loaded_modules import loaded_module
 
 __all__ = ["split_by_a_hit"]
 
@@ -53,7 +53,7 @@ def split_by_a_hit(result: Any) -> tuple[str, str] | None:
     """``(part, other)``, the paths of two parts of *result*
     (``"result[0]"``) whose memory overlaps, where a write through one would
     show in the other; else None."""
-    np = sys.modules.get("numpy")
+    np = loaded_module("numpy")
     if np is None:
         return None
     parts = _collect(result, np)
@@ -194,14 +194,14 @@ def _render(path: Any) -> str:
 
 
 def _is_polars(kind: type) -> bool:
-    pl = sys.modules.get("polars")
+    pl = loaded_module("polars")
     return pl is not None and kind in (getattr(pl, "DataFrame", None), getattr(pl, "Series", None))
 
 
 def _is_frame(kind: type) -> bool:
     if _is_polars(kind):
         return True
-    pd = sys.modules.get("pandas")
+    pd = loaded_module("pandas")
     try:
         return pd is not None and issubclass(kind, (pd.DataFrame, pd.Series))
     except (AttributeError, TypeError):  # pandas still importing
@@ -210,7 +210,7 @@ def _is_frame(kind: type) -> bool:
 
 def _pandas_copies_on_write() -> bool:
     """Does pandas copy before it writes memory two frames share?"""
-    pd = sys.modules.get("pandas")
+    pd = loaded_module("pandas")
     if pd is None:
         return True
     try:

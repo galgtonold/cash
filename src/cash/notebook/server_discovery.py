@@ -30,6 +30,7 @@ from cash._user_attrs import has_attribute
 
 from ..diagnostics import log_diagnostic, warn_diagnostic
 from ..exceptions import CashWarning
+from ..loaded_modules import loaded_module
 from . import live_cells
 from .file_stamps import COARSE_STAMP_NS, COARSE_TICK_NS, STAMP_TICK_NS, a_write_now_moves_the_stamps, changed_ns
 from .live_cells import latest_cells
@@ -568,7 +569,7 @@ def get_notebook_path() -> str | None:
     if result := _try_vscode_path():
         return _cache_and_return(result)
 
-    if "ipykernel" not in sys.modules:
+    if loaded_module("ipykernel") is None:
         # A Jupyter kernel imported ipykernel to start: this process is not
         # one (a terminal IPython, a script driving a shell), so no server
         # runs a notebook on it. Importing it to ask cost about 0.1 s of
@@ -849,7 +850,7 @@ _COLAB_FAIL_TTL = 30.0  # back off after a failure (no frontend / timeout)
 
 def in_colab() -> bool:
     """True when running inside a Google Colab runtime."""
-    return "google.colab" in sys.modules
+    return loaded_module("google.colab") is not None
 
 
 # --- VS Code hot-exit backup cell source -------------------------------------

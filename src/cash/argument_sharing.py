@@ -36,6 +36,7 @@ from typing import Any
 
 from ._type_memo import class_dict, class_name
 from ._user_attrs import from_family, module_file, plain_getattr
+from .loaded_modules import loaded_module
 from .value_types import IMMUTABLE_LEAF_TYPES, class_module
 
 __all__ = ["Unknown", "Targets", "memory_of", "reads_of", "read_values", "shared_in"]
@@ -66,7 +67,7 @@ def _bounds(array: Any) -> tuple[int, int] | None:
 
 
 def _ndarray(obj: Any) -> bool:
-    np = sys.modules.get("numpy")
+    np = loaded_module("numpy")
     return np is not None and isinstance(obj, np.ndarray)
 
 
@@ -90,7 +91,7 @@ def _arrow_ranges(obj: Any) -> list[tuple[int, int]] | None:
 
 def _buffer_range(obj: Any) -> tuple[int, int] | None:
     """The address range of the buffer *obj* exports, or None."""
-    np = sys.modules.get("numpy")
+    np = loaded_module("numpy")
     if np is None or (sys.version_info >= (3, 12) and not hasattr(type(obj), "__buffer__")):
         return None
     try:

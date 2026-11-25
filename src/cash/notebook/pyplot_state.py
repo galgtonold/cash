@@ -23,10 +23,11 @@ while pyplot is not imported.
 from __future__ import annotations
 
 import logging
-import sys
 from typing import Any
 
 from cash._user_attrs import attribute_or
+
+from ..loaded_modules import loaded_module
 
 logger = logging.getLogger(__name__)
 
@@ -84,9 +85,9 @@ def pyplot_state() -> tuple[Any, ...] | object:
     cannot be read, a fresh object, which equals no other reading: a
     statement is then taken to have changed it.
     """
-    if "matplotlib.pyplot" not in sys.modules:
+    if loaded_module("matplotlib.pyplot") is None:
         return _NO_FIGURES
-    helpers = sys.modules.get("matplotlib._pylab_helpers")
+    helpers = loaded_module("matplotlib._pylab_helpers")
     gcf = attribute_or(helpers, "Gcf", None)
     if gcf is None:
         return _NO_FIGURES

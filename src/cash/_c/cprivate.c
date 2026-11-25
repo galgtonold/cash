@@ -24,10 +24,14 @@
  * (a weak reference adds no count, and one can find the object later):
  * the caller tells cash's own from the user's (`_weak.is_cash_ref`).
  *
- * `held_still` asks again after the watchers proved the value unchanged
- * (`cwatch.peek`): the same objects with the same references between them,
- * so the sum of their counts alone says whether anything outside took one
- * -- a pass over the recorded addresses, not a walk.
+ * `held_still` asks again while the watchers prove the value unchanged:
+ * the same objects with the same references between them, so the sum of
+ * their counts alone says whether anything outside took one -- a pass over
+ * the recorded addresses, not a walk. It asks the watchers itself
+ * (`cwatch_holds_token`), in the same call: a thread that still holds the
+ * value may change it, or free parts of it, between any two bytecodes of
+ * the asking thread, so a proof read by an earlier call says nothing about
+ * the addresses read here. `clone_held` copies under the same rule.
  *
  * Runs no Python code: the holder keeps every object it reads alive.
  */
@@ -307,22 +311,26 @@ done:
     return result;
 }
 
-/* held_still(holder, index, objects, weakable, count): the value
-   `held_alone(..., record=True)` recorded, ONLY while the watchers prove
-   it unchanged since (so `objects` names the very objects it holds, all
-   alive): None when the sum of their reference counts is not `count` any
-   more (something outside took a reference), else the weak references to
+/* held_still(holder, index, objects, weakable, count, kind, token): the
+   value `held_alone(..., record=True)` recorded, while the watchers keep
+   `token` for it under `kind` and prove it unchanged since (so `objects`
+   names the very objects it holds, all alive): None when they do not, or
+   when the sum of their reference counts is not `count` any more
+   (something outside took a reference), else the weak references to
    them. */
 static PyObject *py_held_still(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
     (void)self;
-    if (nargs != 5 || !PyList_CheckExact(args[0]) || !PyBytes_CheckExact(args[2]) || !PyBytes_CheckExact(args[3])) {
-        PyErr_SetString(PyExc_TypeError, "held_still(holder: list, index, objects: bytes, weakable: bytes, count)");
+    if (nargs != 7 || !PyList_CheckExact(args[0]) || !PyBytes_CheckExact(args[2]) || !PyBytes_CheckExact(args[3])) {
+        PyErr_SetString(PyExc_TypeError,
+                        "held_still(holder: list, index, objects: bytes, weakable: bytes, count, kind, token)");
         return NULL;
     }
     Py_ssize_t index = PyLong_AsSsize_t(args[1]);
     if (index == -1 && PyErr_Occurred()) return NULL;
     Py_ssize_t count = PyLong_AsSsize_t(args[4]);
     if (count == -1 && PyErr_Occurred()) return NULL;
+    long kind = PyLong_AsLong(args[5]);
+    if (kind == -1 && PyErr_Occurred()) return NULL;
     if (index < 0 || index >= PyList_GET_SIZE(args[0])) {
         PyErr_SetString(PyExc_IndexError, "held_still: index out of range");
         return NULL;
@@ -330,6 +338,8 @@ static PyObject *py_held_still(PyObject *self, PyObject *const *args, Py_ssize_t
     PyObject *const *objs = (PyObject *const *)PyBytes_AS_STRING(args[2]);
     size_t n = (size_t)PyBytes_GET_SIZE(args[2]) / sizeof(PyObject *);
     if (n == 0 || objs[0] != PyList_GET_ITEM(args[0], index)) Py_RETURN_NONE;
+    /* the proof and the read of the recorded addresses: nothing between */
+    if (!cwatch_holds_token(objs[0], kind, args[6])) Py_RETURN_NONE;
     size_t sum = 0;
     for (size_t i = 0; i < n; i++) sum += (size_t)Py_REFCNT(objs[i]);
     if (sum != (size_t)count) Py_RETURN_NONE;
@@ -542,17 +552,24 @@ static int clone_fill(PyObject *o, PyObject *copy, Clone *C) {
 
 static PyObject *py_clone_held(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
     (void)self;
-    if (nargs != 2 || !PyList_CheckExact(args[0])) {
-        PyErr_SetString(PyExc_TypeError, "clone_held(holder: list, index)");
+    if ((nargs != 2 && nargs != 4) || !PyList_CheckExact(args[0])) {
+        PyErr_SetString(PyExc_TypeError, "clone_held(holder: list, index[, kind, token])");
         return NULL;
     }
     Py_ssize_t index = PyLong_AsSsize_t(args[1]);
     if (index == -1 && PyErr_Occurred()) return NULL;
+    long kind = nargs == 4 ? PyLong_AsLong(args[2]) : 0;
+    if (kind == -1 && PyErr_Occurred()) return NULL;
     if (index < 0 || index >= PyList_GET_SIZE(args[0])) {
         PyErr_SetString(PyExc_IndexError, "clone_held: index out of range");
         return NULL;
     }
     PyObject *root = PyList_GET_ITEM(args[0], index);   /* borrowed: the holder keeps it */
+    /* With a token: only a value the watchers prove unchanged now. Whoever
+       holds it may write it between any two bytecodes of this thread, and
+       the copy of a value changed since an earlier proof would hand its
+       holder's edit to the next caller. */
+    if (nargs == 4 && !cwatch_holds_token(root, kind, args[3])) Py_RETURN_NONE;
     if (is_shared(root, 0)) Py_RETURN_NONE;
     int gc_was_on = PyGC_Disable();
     Clone C = {{0}, {0}, 0};
@@ -579,11 +596,11 @@ static PyMethodDef cprivate_methods[] = {
      "held_alone(holder, index) -> the weak references to holder[index]'s objects, or None when anything "
      "outside it holds part of it (or that cannot be told)"},
     {"held_still", (PyCFunction)(void (*)(void))py_held_still, METH_FASTCALL,
-     "held_still(holder, index, objects, weakable, count) -> held_alone's answer again, for a value the "
-     "watchers prove unchanged since held_alone(record=True) recorded it"},
+     "held_still(holder, index, objects, weakable, count, kind, token) -> held_alone's answer again, "
+     "while the watchers keep token for the value: unchanged since held_alone(record=True) recorded it"},
     {"clone_held", (PyCFunction)(void (*)(void))py_clone_held, METH_FASTCALL,
-     "clone_held(holder, index) -> a new copy of holder[index] as pickle would make it, or None when it "
-     "holds an object that cannot be copied so"},
+     "clone_held(holder, index[, kind, token]) -> a new copy of holder[index] as pickle would make it, or "
+     "None when it holds an object that cannot be copied so, or the watchers do not keep token for it"},
     {NULL, NULL, 0, NULL}};
 
 int cprivate_add_functions(PyObject *m) { return PyModule_AddFunctions(m, cprivate_methods); }

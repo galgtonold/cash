@@ -16,6 +16,7 @@ import textwrap
 from collections.abc import Iterable, Mapping
 
 from ..._user_attrs import plain_getattr
+from ...loaded_modules import loaded_module
 from ...source_norm import exact_source_digest
 from .detect import get_drawing_rng_modules, get_seeding_rng_modules
 
@@ -352,7 +353,7 @@ def watch_seeds() -> None:
     `prior_seeds.seeded_before_watch` judges it, and a stream it takes as
     seeded counts as seeded from then on.
     """
-    if "numpy.random" not in _WATCHED and "numpy" in sys.modules and "numpy.random" not in sys.modules:
+    if "numpy.random" not in _WATCHED and loaded_module("numpy") is not None and loaded_module("numpy.random") is None:
         # numpy loads `numpy.random` on first attribute access, which is the
         # user's `np.random.seed(...)` itself: load it now to watch that call.
         try:
@@ -495,7 +496,7 @@ def _stream_position(module: str) -> str | None:
 
             payload = repr(unwatched(random.getstate)()).encode("utf-8")
         elif module == "numpy.random":
-            np_random = sys.modules.get("numpy.random")
+            np_random = loaded_module("numpy.random")
             if np_random is None:
                 return None
             name, keys, pos, has_gauss, cached = unwatched(np_random.get_state)()

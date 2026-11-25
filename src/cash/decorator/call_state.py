@@ -217,12 +217,14 @@ class BodyRun:
         "arg_carriers_pre",
         "arg_carriers_moved",
         "res",
+        "res_held",
         "body_seconds",
         "nested_cash_seconds",
         "saves_seconds",
         "first_call",
         "rng_new",
         "rng_drew",
+        "rng_unsure",
         "env_reads",
         "lib_reads",
         "warned",
@@ -231,6 +233,32 @@ class BodyRun:
         "registries",
         "class_state",
     )
+
+
+def _slot_references(run: Any) -> int:
+    return sys.getrefcount(run.res)
+
+
+class _OneSlot:
+    __slots__ = ("res",)
+
+    def __init__(self) -> None:
+        self.res = object()
+
+
+#: `_slot_references` of a result nothing but its run holds. Measured, not
+#: assumed: it depends on the interpreter.
+_ONE_SLOT = _slot_references(_OneSlot())
+
+
+def result_held(run: BodyRun) -> bool:
+    """Does anything besides *run* hold the result its body just returned
+    (``run.res``, bound that moment)? An object the body made and handed
+    back has no other holder then: its frame is gone. One taken out of an
+    argument, a global or a memo still has that holder, which is how a
+    result that shares with the caller is told from a new one without a
+    search (`PurityChecks.warn_shared_result`)."""
+    return _slot_references(run) > _ONE_SLOT
 
 
 def run_to_completion(make_coroutine: Callable[[], Any]) -> Any:

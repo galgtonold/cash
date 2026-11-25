@@ -25,6 +25,7 @@ from .._type_memo import class_dict, class_name, class_qualname, module_of_class
 from .._user_attrs import hooked_class, plain_getattr, plain_hasattr
 from ..install_paths import in_own_package, top_package
 from ..jit_functions import jit_python_function
+from ..loaded_modules import loaded_module
 from ..tracking.function_tracker import is_local_module
 
 
@@ -309,7 +310,7 @@ def is_mock(obj: Any) -> bool:
     every attribute truthily, so ``_cash_cached`` or a purity marker would
     read as set. Never imports ``unittest.mock`` itself.
     """
-    module = sys.modules.get("unittest.mock")
+    module = loaded_module("unittest.mock")
     if module is None:
         return False
     if instance_of(obj, module.NonCallableMock):

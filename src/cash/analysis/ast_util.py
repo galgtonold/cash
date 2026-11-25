@@ -18,7 +18,6 @@ import ast
 import builtins
 import functools
 import itertools
-import sys
 import types
 import weakref
 from collections.abc import Iterator, Mapping
@@ -29,6 +28,7 @@ from cash.control_markers import neutral_markers
 
 from .. import _weak
 from .._user_attrs import plain_getattr, static_attr
+from ..loaded_modules import loaded_module
 
 __all__ = [
     "CallScope",
@@ -296,7 +296,7 @@ def _in_instance_dict(obj: Any, attr: str) -> bool:
 
 def _is_mock(obj: Any) -> bool:
     """A ``unittest.mock`` object; never imports ``unittest.mock`` itself."""
-    module = sys.modules.get("unittest.mock")
+    module = loaded_module("unittest.mock")
     return module is not None and instance_of(obj, module.NonCallableMock)
 
 

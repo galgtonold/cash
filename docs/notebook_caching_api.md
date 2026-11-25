@@ -106,7 +106,7 @@ Some statements always run, because a cache hit would skip something that has to
 happen or would freeze a value that has to change. Others are cached although
 they talk to the outside world.
 
-<!-- claim: cash/notebook/pyplot_state.py:pyplot_state @2ff00995, cash/analysis/file_effects.py:NOTEBOOK_POLICY @5ffd29f3, cash/notebook/consumables.py:drawn_stream_inputs @4b74ed91, cash/notebook/shared_objects.py:shared_names @f3939b22, cash/notebook/shared_objects.py:share_group @120f06ea, cash/notebook/lineage_formula.py:keep_held_lineage @85b3ea17, cash/notebook/shared_objects.py:output_history @5816a6e5, cash/analysis/mutation_effects.py:captured_call_receivers @976a2a6a, cash/notebook/consumables.py:watched_call_receivers @1fefab60, cash/analysis/namespace_effects.py:user_callee_using_pyplot @4fba2d2a, cash/notebook/anchors.py:resolve_anchors @7b88094e -->
+<!-- claim: cash/notebook/pyplot_state.py:pyplot_state @292c8807, cash/analysis/file_effects.py:NOTEBOOK_POLICY @5ffd29f3, cash/notebook/consumables.py:drawn_stream_inputs @4b74ed91, cash/notebook/shared_objects.py:shared_names @f3939b22, cash/notebook/shared_objects.py:share_group @120f06ea, cash/notebook/lineage_formula.py:keep_held_lineage @85b3ea17, cash/notebook/shared_objects.py:output_history @5816a6e5, cash/analysis/mutation_effects.py:captured_call_receivers @976a2a6a, cash/notebook/consumables.py:watched_call_receivers @1fefab60, cash/analysis/namespace_effects.py:user_callee_using_pyplot @cbad0b9f, cash/notebook/anchors.py:resolve_anchors @7b88094e -->
 | A statement that... | What cash does |
 |---|---|
 | writes a file (`open(p, "w")`, `df.to_csv`, `fig.savefig`), directly or through a function you wrote (in the notebook or your own module) | runs every time |

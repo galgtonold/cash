@@ -12,18 +12,19 @@ scipy's own ``sum_duplicates``.
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Iterable, Mapping
 from typing import Any
 
 from cash._user_attrs import from_family, has_attribute
+
+from ...loaded_modules import loaded_module
 
 __all__ = ["put_in_order", "unordered_sparse", "were_put_in_order"]
 
 
 def _unordered(value: Any) -> bool:
     """Is *value* a scipy sparse matrix or array not in canonical form?"""
-    if "scipy.sparse" not in sys.modules or not from_family(type(value), "scipy.sparse"):
+    if loaded_module("scipy.sparse") is None or not from_family(type(value), "scipy.sparse"):
         return False
     try:
         return has_attribute(value, "sum_duplicates") and not value.has_canonical_format

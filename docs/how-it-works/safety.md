@@ -315,7 +315,7 @@ draws are reproducible and do not warn. A generator object
 (`rng = np.random.default_rng()`) counts as seeded only if it was built with a
 seed; seeding `np.random` says nothing about it.
 
-<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @6e1e1f8a -->
+<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @cdfa39c0 -->
 A draw too cheap to cache is held too when it comes from the `random`,
 `numpy.random` or `torch` module stream: before a re-run, cash rewinds those
 streams to where the cell started, so the draw repeats. cash does not rewind a
@@ -330,7 +330,7 @@ The badge marks the row `seed`, `random` (a seeded draw) or `unseeded`. A cached
 
 ### Values that cannot survive a round trip
 
-<!-- claim: cash/notebook/statement/derivation_edges.py:is_uncacheable_alias @03635f4a, cash/analysis/cacheability_decision.py:identity_coupled_reason @77bfb1cc, cash/notebook/borrowed_memory.py:borrowed_memory_names @d988c657 -->
+<!-- claim: cash/notebook/statement/derivation_edges.py:is_uncacheable_alias @03635f4a, cash/analysis/cacheability_decision.py:identity_coupled_reason @77bfb1cc, cash/notebook/borrowed_memory.py:borrowed_memory_names @ce6d2942 -->
 Three kinds of value are refused after the statement runs, because restoring
 a copy would break them: a view of another variable (a numpy slice, a pandas
 `groupby` object), which would come back detached from its base; a frame or

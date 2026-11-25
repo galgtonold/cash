@@ -684,7 +684,7 @@ large frame of text columns hashes at about 0.2 s per million rows.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @692eb80f, cash/decorator/purity_checks.py:PurityChecks.warn_shared_on_hit @cdd6af30, cash/decorator/purity_checks.py:PurityChecks._shared_with @7b72550c -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @af1e5f6d, cash/decorator/purity_checks.py:PurityChecks.warn_shared_on_hit @cdd6af30, cash/decorator/purity_checks.py:PurityChecks._shared_with @c1fd42b0, cash/decorator/purity_checks.py:_shared_argument_item @670d7aaa, cash/decorator/purity_checks.py:SHARED_ARGUMENT_ITEMS == 500000 -->
 **What happened.** The result shares state with an object outside the
 call: an argument, or something the function reaches by name. On the first
 run, a write through one shows in the other. A cache hit returns a separate
@@ -699,13 +699,16 @@ attributes and object array, for:
 - an argument, an attribute of an argument that is an object of your class
   (`return self.rows`, `{"rows": t.rows}`), or memory shared with an array
   argument;
+- an item of a list, tuple, dict, set or deque argument, at any depth of
+  such containers (`[r for r in records if r["k"] == k]`, `cfg["section"]`,
+  `rows[0]`, `cfg["a"]["b"]`); the warning names it (`records[0]`);
 - a closure variable, a module global the body names, a default argument,
   or an attribute of the function itself;
 - an attribute of a class or a module of yours the body names
   (`Holder.ROWS`), or of an object of your class it names
   (`REGISTRY.entries`);
-- one of the first 256 items of any of those containers (`CONFIG["sub"]`,
-  `Holder.CFG["sub"]`, a list inside a global tuple);
+- one of the first 256 items of a container among the last two groups
+  (`CONFIG["sub"]`, `Holder.CFG["sub"]`, a list inside a global tuple);
 - memory shared with any of those arrays, at the top of the result or
   inside it (`return ARR[1:4]`, `{"train": X[:8], "test": X[8:]}`), or,
   without pandas copy-on-write (pandas 2 by default), with most columns of
@@ -718,6 +721,15 @@ attributes and object array, for:
   `.values` of an `Int64`, time-zone or category column), with
   copy-on-write too: it is the frame's own, or one over its memory, and a
   write through it reaches the frame.
+
+The items of the arguments are searched only for an object that something
+besides the result holds when the call returns, so a result built of new
+objects costs no look at the arguments, however long they are. For such an
+object cash compares up to 500,000 items of the arguments' containers, all
+levels together. When that is not enough to search them to the end, the
+warning says the result "holds an object something else holds too, possibly
+an item of the argument" and names the argument: it may be a false alarm
+there, and `assume_safe=True` waives it.
 
 Not reported: a result that IS an argument the call changed in place and
 a hit writes back (`stft(y, out=buf)` filling and returning `buf`, where
@@ -1054,7 +1066,7 @@ mutation, return a modified copy instead. If the effect is incidental (a log
 file, a temp file), put `# @cash:assume-safe` on the line the message names, or
 run the code in `with cash.assume_safe():`.
 
-<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @1938b99d -->
+<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @631605a3 -->
 A call that changes a process setting (`np.seterr`, a logger's level,
 `atexit.register`, `os.environ`) is not stored, and runs every time. Make
 the setting outside the cached function if you can. If a hit may skip it,
@@ -1063,7 +1075,9 @@ line or on the `def` line, or `with cash.assume_safe():` around it. A
 waiver around the call of the cached function does not reach into it
 ([details](how-it-works/decorator-path.md#side-effects)). In a notebook,
 `# @cash:assume-safe` on the statement that changes a process setting
-caches it.
+caches it. While other threads are running, a setting another thread
+changed is not blamed on the function
+([Threads and processes](tutorials/feature-guides/thread-safety.md#what-threads-share-and-what-each-call-keeps)).
 
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @987ecb33 -->
 **When it is safe to ignore.** When everything listed is bookkeeping nobody
@@ -3014,7 +3028,7 @@ functools.partial(setattr, points[7])` made in a cell above. Cash cannot
 tell which variable changes before the statement runs, so it takes every
 variable as changed: what reads any of them after it runs again.
 
-<!-- claim: cash/tracking/process_registries.py:snapshot @bdd98c66, cash/notebook/statement/processor.py:StatementProcessor._refuse_process_registries @69800c34, cash/tracking/process_registries.py:registering_imports @f4d937d7, cash/decorator/runtime.py:CallRunner._refuse_registries @1938b99d -->
+<!-- claim: cash/tracking/process_registries.py:snapshot @4475426d, cash/notebook/statement/processor.py:StatementProcessor._refuse_process_registries @69800c34, cash/tracking/process_registries.py:registering_imports @f4d937d7, cash/decorator/runtime.py:CallRunner._refuse_registries @631605a3 -->
 It names, too, a statement that registers something with the process, in
 its own text or in a function or library it calls: `atexit.register(flush)`,
 `signal.signal(...)`, `sys.excepthook = hook`, `sys.setprofile(...)`,
@@ -3187,7 +3201,7 @@ random source.
 first result is returned from then on, and clearing the cache or running on
 another machine gives a different frozen value.
 
-<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @6e1e1f8a, cash/tracking/randomness/detect.py:RandomnessDetector.analyze_code @4890c3ec -->
+<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @cdfa39c0, cash/tracking/randomness/detect.py:RandomnessDetector.analyze_code @4890c3ec -->
 In a notebook, a draw too cheap to cache is frozen too when it comes from the
 `random`, `numpy.random` or `torch` stream, because cash rewinds those streams
 before a re-run. A cheap draw from a generator held in a variable
@@ -3362,7 +3376,7 @@ The call succeeded, but its result was not written. Every code here starts `STOR
 | [STORE-PARTS-UNCHECKED](#store-parts-unchecked) | both | the result was too big to look through in time for a function sharing a part of it; not stored |
 | [STORE-REF-UNSUPPORTED](#store-ref-unsupported) | notebook | the value holds a variable's object in a form cash cannot keep as a reference (a bound method); not stored |
 | [STORE-RESULT-WRITTEN](#store-result-written) | both | a table kept uncopied was written past pandas after its store; entry dropped |
-| [STORE-STATE-CHANGED](#store-state-changed) | decorator | a global the key read changed during the call; not stored |
+| [STORE-STATE-CHANGED](#store-state-changed) | decorator | a global the key read, or a process setting, changed during the call beside other threads; not stored |
 | [STORE-WORK-RUNNING](#store-work-running) | both | work it handed to a thread or thread pool still ran when it returned; not stored |
 | [STORE-UNTRACKED-SOURCE](#store-untracked-source) | decorator | a cached function it calls has a dynamic source that cannot be pickled; kept in RAM only |
 
@@ -3607,7 +3621,7 @@ interrupted write.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/result_parts.py:split_by_a_hit @0ed503f3, cash/closure_sharing.py:closures_sharing @dd301eb1 -->
+<!-- claim: cash/decorator/result_parts.py:split_by_a_hit @9b1fd97b, cash/closure_sharing.py:closures_sharing @dd301eb1 -->
 **What happened.** The result holds two parts over the same memory: two
 numpy arrays whose data overlap, such as `return a, a[2:5]`, a numpy
 array and a polars or pandas frame made over it, such as
@@ -3716,15 +3730,27 @@ reloaded a config, say. The result was returned but not stored. The check
 runs only while other threads are running, not counting cash's own (or for
 a coroutine function).
 
+<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @631605a3, cash/tracking/process_registries.py:changed_by @cee9eb08 -->
+The same code is used when a setting the process keeps (a logger's level, a
+warnings filter, `sys.path`, the working directory, an interpreter hook)
+changed while the call was running and other threads were running too: cash
+cannot tell whether the function or one of those threads changed it. That
+call is not stored. If the setting changes again during the next call that
+runs the function, cash takes the change as the function's own and reports
+[IMPURE-OBSERVED-EFFECTS](#impure-observed-effects).
+
 **Why it matters.** The key was built from the old value and the body may have
 used the new one, so storing it could serve the wrong result to every later
-call with the old value.
+call with the old value. A setting the function itself makes would be skipped
+by a hit.
 
 **What to do.** Nothing, if the state was changed on purpose: the next call
 keys on the new value and caches normally. If calls overlap a writer all the
-time, pass the value in as an argument.
+time, pass the value in as an argument. If the function makes the setting
+itself, make it outside the cached function.
 
-**When it is safe to ignore.** Once, after a reload.
+**When it is safe to ignore.** Once, after a reload, or when another thread
+made the setting.
 
 ### STORE-WORK-RUNNING {#store-work-running}
 

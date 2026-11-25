@@ -303,7 +303,7 @@ changing it.
 
 ## Reads cash cannot see
 
-<!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @9fac5b09, cash/tracking/reader_patches.py:_patch_process_pool_submit @a7865b21, cash/tracking/reader_patches.py:_patch_thread_start @1b59e2a1, cash/tracking/reader_patches.py:_NATIVE_READERS @41501bff -->
+<!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @e9ba11bf, cash/tracking/reader_patches.py:_patch_process_pool_submit @89b877f9, cash/tracking/reader_patches.py:_patch_thread_start @1b59e2a1, cash/tracking/reader_patches.py:_NATIVE_READERS @41501bff -->
 cash does not record a file opened by a subprocess, and on macOS one a C
 extension opens itself (on Linux and Windows the [native
 file hook](known-limitations.md#reads-through-a-loader-cash-cannot-see), on by
@@ -524,7 +524,7 @@ paths from the project root or pass absolute paths.
   the result holds it. Elsewhere a `for` loop may meet the items in another
   order than in the call that made it, and so may a set of strings in a new
   process, as in plain Python. Use `sorted(s)` where the order matters.
-<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @1938b99d -->
+<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @631605a3 -->
 - A call that changes a setting the process keeps outside any variable
   (`np.seterr`, a library logger's level, `warnings.simplefilter`,
   `os.environ`, `sys.path`) is not stored, and runs every time: a hit, or a
