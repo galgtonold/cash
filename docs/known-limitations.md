@@ -280,6 +280,16 @@ statement calling it runs every time so the change really happens, while the
 call inside it is served from the cache together with its effect on the
 global. Nothing to do.
 
+<!-- claim: cash/notebook/effects_record.py:EffectsRecord.changed @a4c3936b, cash/notebook/effects_record.py:RUNS_KEPT == 16 -->
+The same holds after a kernel restart when you run only a cell below: the
+statements that change the global run again first, so the cell sees what a
+run from the top gives it. That includes a change made through a variable
+that holds the function (`add = LOG.append` then `add(v)`, a
+`functools.partial`, a closure a factory returned such as `inc = make()`):
+cash keeps, for each statement, which variables a run of it changed, for
+its last 16 runs with different inputs. A statement edited to such a call
+and not run before the restart has no such record: run the notebook once.
+
 A change to a variable inside one of your modules that the notebook does not
 import is not seen: a function that imports the module itself and writes to it
 (`import registry; registry.REG["n"] = 1`) is served without the write, so

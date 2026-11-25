@@ -20,7 +20,7 @@ import pathlib
 import sys
 import textwrap
 import types
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Container, Iterable, Iterator, Mapping
 from typing import Any
 
 from cash._user_attrs import attribute_or, instance_of, is_routine
@@ -1391,7 +1391,7 @@ def statement_saves_current_pyplot_figure(
     return False
 
 
-def capturable_globals(names, namespace: Mapping[str, Any]) -> frozenset[str]:
+def capturable_globals(names, namespace: Mapping[str, Any], simulated: Container[str] = frozenset()) -> frozenset[str]:
     """The *names* that are real notebook variables in *namespace*.
 
     A name a callee's source mutates is only a variable of the caller's when it
@@ -1399,11 +1399,23 @@ def capturable_globals(names, namespace: Mapping[str, Any]) -> frozenset[str]:
     closure cell that never appears in any namespace, and declaring it would
     invent a variable (reconstruction then tries to produce it and re-runs the
     statement). A module is never a value to capture either.
+
+    *simulated* are the variables the upstream simulation has bound above
+    the statement that the kernel may not hold (after a restart it holds
+    none): bound there, a name is the notebook's variable as much as one the
+    kernel holds.
     """
-    return frozenset(n for n in names if n in namespace and not instance_of(namespace[n], types.ModuleType))
+    return frozenset(
+        n
+        for n in names
+        if (n in namespace and not instance_of(namespace[n], types.ModuleType))
+        or (n in simulated and n not in namespace)
+    )
 
 
-def notebook_global_rebinds(tree: ast.AST | None, resolve_source, namespace: Mapping[str, Any]) -> frozenset[str]:
+def notebook_global_rebinds(
+    tree: ast.AST | None, resolve_source, namespace: Mapping[str, Any], simulated: Container[str] = frozenset()
+) -> frozenset[str]:
     """Names a function defined in the notebook binds under ``global`` when
     *tree* calls it, directly or through other notebook functions.
 
@@ -1411,6 +1423,10 @@ def notebook_global_rebinds(tree: ast.AST | None, resolve_source, namespace: Map
     the function's globals are the namespace (*namespace* itself). The first
     run of ``def setw(): global w; w = ...`` + ``setw()`` is the one that
     creates ``w``, which :func:`capturable_globals` cannot see.
+
+    A function the kernel does not hold that the upstream simulation bound
+    above the statement (*simulated*) is the notebook's too: its ``def`` is
+    one of the notebook's statements.
     """
     out: set[str] = set()
     seen: set[str] = set()
@@ -1420,8 +1436,10 @@ def notebook_global_rebinds(tree: ast.AST | None, resolve_source, namespace: Map
         if name in seen:
             continue
         seen.add(name)
-        func = namespace.get(name)
-        if plain_getattr(func, "__globals__", None) is not namespace:
+        if name in namespace:
+            if plain_getattr(namespace[name], "__globals__", None) is not namespace:
+                continue
+        elif name not in simulated:
             continue
         try:
             source = resolve_source(name)

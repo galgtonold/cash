@@ -23,10 +23,11 @@ from ..cache_key import (
     import_bindings_key,
     module_state_key,
     mutation_verdict_key,
-    process_state_key,
     pyplot_draws_key,
     share_edges_key,
+    statement_effects_key,
 )
+from ..effects_record import EffectsRecord
 from ..file_records import entry_file_records
 from ..loop_split import is_split_half, loop_source_hash, store_for_backend
 from ..run_memo import file_state_this_run, known_fresh_entry, note_fresh_entry, note_fresh_snapshot, stat_keys_this_run
@@ -56,7 +57,7 @@ class CacheProbe:
         self._carrier_advances_memo: dict[str, frozenset[str] | None] = {}
         #: :meth:`module_state` answers by statement; cleared by :meth:`reset`.
         self._module_state_memo: dict[str, tuple[frozenset[str], frozenset[str]] | None] = {}
-        self._process_state_memo: dict[str, frozenset[str] | None] = {}
+        self._effects_memo: dict[str, EffectsRecord | None] = {}
         self._share_edges_memo: dict[str, frozenset[tuple[str, str]] | None] = {}
         self._pyplot_draws_memo: dict[str, frozenset[str] | None] = {}
 
@@ -65,7 +66,7 @@ class CacheProbe:
         self._import_bindings_memo.clear()
         self._carrier_advances_memo.clear()
         self._module_state_memo.clear()
-        self._process_state_memo.clear()
+        self._effects_memo.clear()
         self._share_edges_memo.clear()
         self._pyplot_draws_memo.clear()
 
@@ -166,22 +167,23 @@ class CacheProbe:
         memo[source_hash] = found
         return found
 
-    def process_state(self, source_hash: str) -> frozenset[str] | None:
-        """What of the process a statement changed when an earlier kernel ran
-        it, or None when nothing was recorded. See ``process_state_key``.
-        Memoized until :meth:`reset`, as :meth:`module_state`."""
-        memo = self._process_state_memo
+    def effects(self, source_hash: str) -> EffectsRecord | None:
+        """What the runs of a statement were seen to change when an earlier
+        kernel ran it, or None when nothing was recorded. See
+        ``statement_effects_key``. Memoized until :meth:`reset`, as
+        :meth:`module_state`."""
+        memo = self._effects_memo
         if source_hash in memo:
             return memo[source_hash]
-        found = None
-        record = self.record(process_state_key(source_hash))
-        if record and record.get("process_state"):
-            try:
-                found = frozenset(str(kind) for kind in record.get("kinds") or ())
-            except TypeError:
-                found = None
+        found = EffectsRecord.from_dict(self.record(statement_effects_key(source_hash)))
         memo[source_hash] = found
         return found
+
+    def process_state(self, source_hash: str) -> frozenset[str] | None:
+        """What of the process a statement changed when an earlier kernel ran
+        it, or None when nothing was recorded (:meth:`effects`)."""
+        found = self.effects(source_hash)
+        return found.process if found is not None and found.process else None
 
     def pyplot_draws(self, source_hash: str) -> frozenset[str] | None:
         """The names a statement changed by drawing through pyplot when an

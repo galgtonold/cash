@@ -175,16 +175,20 @@ def module_state_key(source_hash: str) -> str:
     return "modstate:" + source_hash
 
 
-def process_state_key(source_hash: str) -> str:
-    """Backend key for what of the process (the environment, the working
-    directory) a statement changed when it last ran.
+def statement_effects_key(source_hash: str) -> str:
+    """Backend key for what a statement's runs were seen to change besides
+    the names its text binds (``effects_record.EffectsRecord``): the
+    notebook's variables it changed through what it called, and what of the
+    process (the environment, the working directory, a registry).
 
-    ``TrackingState.process_state_writers`` holds it for the session. After
-    a restart ``setup()`` doing ``os.environ["MODE"] = "b"`` reads as a call
-    of a function not defined yet, and the environment the cell below runs
-    in is the one the shell started the kernel with.
+    ``TrackingState.effects_records`` holds it for the session. After a
+    restart the objects that told the runtime are gone: ``f(4)`` reads as a
+    call of a name bound to nothing, ``setup()`` doing ``os.environ["MODE"]
+    = "b"`` as a call of a function not defined yet, and a cell run alone
+    read the list without the item, in the environment the shell started
+    the kernel with.
     """
-    return "procstate:" + source_hash
+    return "effects:" + source_hash
 
 
 def pyplot_draws_key(source_hash: str) -> str:

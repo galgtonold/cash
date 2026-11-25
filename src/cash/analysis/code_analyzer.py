@@ -18,7 +18,7 @@ import textwrap
 import types
 import weakref
 from collections import ChainMap
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Container, Mapping
 from typing import Any
 
 from .. import _weak
@@ -1146,6 +1146,7 @@ class CodeAnalyzer:
         tree: ast.Module | None = None,
         resolve_source: Callable[[str], str | None] | None = None,
         user_ns: dict[str, Any] | None = None,
+        simulated: Container[str] = frozenset(),
     ) -> tuple[set[str], set[str]]:
         """
         Analyze a block of code to find input (read) and output (written) variables.
@@ -1153,6 +1154,10 @@ class CodeAnalyzer:
         Args:
             code: The source code to analyze.
             tree: Optional pre-parsed AST to avoid redundant parsing.
+            simulated: The variables the upstream simulation has bound above
+                the statement, which *user_ns* may not hold (after a restart
+                it holds none). A global a callee changes is the notebook's
+                variable when either binds it.
             resolve_source: Optional ``name -> source`` for called functions.
                 When supplied, a global that a CALLEE mutates in place is
                 declared as an OUTPUT of the calling statement, so
@@ -1200,7 +1205,9 @@ class CodeAnalyzer:
             if user_ns is not None:
                 handed = handed_callables(tree, user_ns)
                 extra = callee_global_mutations(tree, resolve_source, extra_sources=handed.sources) | handed.receivers
-                extra = capturable_globals(extra, user_ns) | notebook_global_rebinds(tree, resolve_source, user_ns)
+                extra = capturable_globals(extra, user_ns, simulated) | notebook_global_rebinds(
+                    tree, resolve_source, user_ns, simulated
+                )
             else:
                 extra = callee_global_mutations(tree, resolve_source)
             if extra:

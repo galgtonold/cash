@@ -806,8 +806,27 @@ class VirtualLineage:
             # usually gives it an output, but that record dies with the
             # kernel, so after a restart the call vanished from the trace and
             # a figure was rebuilt without it.
-            if statement_writes_files(stmt_code) or (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
+            #
+            # And for a statement a run of which changed the process (the
+            # environment, the working directory, a registry): a restart's
+            # rebuild runs it again before the cell
+            # (``ReexecutionPlanner.unrun_process_writers``), which looks
+            # for it here. ``getcontext().prec = 6`` and ``del
+            # os.environ['K']`` bind no name and are no call.
+            if (
+                statement_writes_files(stmt_code)
+                or (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call))
+                or self._changed_the_process(stmt_code)
+            ):
                 sim.trace.append(TraceEntry(stmt_code, outputs, inputs, input_hashes, {}, files_stale))
+
+    def _changed_the_process(self, stmt_code: str) -> bool:
+        """Whether a run of *stmt_code* changed the process, in this kernel
+        or on record from an earlier one."""
+        if self.tracking_state.process_state_writers.get(statement_source_hash(stmt_code)):
+            return True
+        record = self.statements.effects_record(stmt_code)
+        return record is not None and bool(record.process)
 
     def simulate_one_cell(
         self,
