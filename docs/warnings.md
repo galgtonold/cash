@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @3b2080e7 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @97ebd651 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -152,6 +152,7 @@ Caching happened, or refused to, and it is worth saying. Every code here starts 
 | [CACHE-DIR-NEW](#cache-dir-new) | decorator | cash created its default cache folder, and says where |
 | [CACHE-DIR-UNWRITABLE](#cache-dir-unwritable) | both | the cache directory cannot be written |
 | [CACHE-EVICTED-RECOMPUTE](#cache-evicted-recompute) | both | the size cap had evicted a costly result, so it was computed again |
+| [CACHE-FORMAT-NEWER](#cache-format-newer) | both | the cache was written by a newer cash, so it is left alone |
 | [CACHE-FRESHNESS-COST](#cache-freshness-cost) | decorator | checking tracked files costs much of what a hit saves |
 | [CACHE-IDENTITY-COUPLED](#cache-identity-coupled) | decorator | a live matplotlib figure is never stored |
 | [CACHE-IDENTITY-UNCHECKED](#cache-identity-unchecked) | decorator | a result was stored without being checked for a live object's `id()` |
@@ -293,6 +294,31 @@ use a shorter path or enable long paths (`LongPathsEnabled`).
 
 **When it is safe to ignore.** When the directory is read-only on purpose: a
 shared cache you only read from.
+
+### CACHE-FORMAT-NEWER {#cache-format-newer}
+
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
+
+<!-- claim: cash/backends/cache_dir.py:CacheDirStamp.check @5ae84fb2, cash/backends/cache_dir.py:warn_newer_format @b94ee668 -->
+**What happened.** The cache was written by a newer cash than the one running:
+its format number is higher than the one this version reads and writes. The
+message names the cache and both numbers. It appears when two environments
+with different cash versions share one cache, or after going back to an older
+release.
+
+**Why it matters.** This version cannot trust entries in a format it does not
+know, and deleting them would throw away the newer version's results. So it
+leaves the cache as it is and stores nothing on disk for the rest of the run:
+every new process recomputes. Results are still correct, and in-process
+repeats still hit the RAM tier.
+
+**What to do.** Upgrade cash in this environment to the version that wrote the
+cache. To keep both versions, give this environment a cache of its own with
+`CASH_CACHE_DIR` or `cache_dir` under `[tool.cash]`. To start over with this
+version, delete the cache named in the message.
+
+**When it is safe to ignore.** For a one-off run in the older environment,
+when computing everything once is acceptable.
 
 ### CACHE-EVICTED-RECOMPUTE {#cache-evicted-recompute}
 

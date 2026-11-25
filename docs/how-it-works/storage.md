@@ -453,10 +453,13 @@ stored a new result under the same entry meanwhile, the next read takes the
 new entry as it is on disk, and the counts are dropped rather than written over
 it.
 
-<!-- claim: cash/backends/cache_dir.py:CACHE_FORMAT_VERSION == 11, cash/backends/cache_dir.py:CacheDirStamp.check @7bdce11c -->
+<!-- claim: cash/backends/cache_dir.py:CACHE_FORMAT_VERSION == 11, cash/backends/cache_dir.py:CacheDirStamp.check @5ae84fb2 -->
 The cache folder records the storage format it was written in. When cash opens
-a folder written in a different format, by an older or newer cash, it logs a
-warning and deletes the old entries, so the first run afterwards recomputes.
+a folder written in an older format, it logs a warning and deletes the old
+entries, so the first run afterwards recomputes. A folder written in a newer
+format, by a newer cash, is left as it is: cash warns
+([CACHE-FORMAT-NEWER](../warnings.md#cache-format-newer)) and stores nothing
+on disk for that run.
 Within one format, entry metadata tolerates fields it does not know.
 
 ## Related

@@ -21,14 +21,20 @@ change in any release.
 
 ## The cache format
 
-<!-- claim: cash/backends/cache_dir.py:CacheDirStamp.check @7bdce11c -->
+<!-- claim: cash/backends/cache_dir.py:CacheDirStamp.check @5ae84fb2 -->
 The on-disk cache format is not part of the public API and can change in any
 minor release. For a cache folder (the default) you do not need to do
 anything when it changes: cash clears a folder written in an incompatible
 format when it opens it, logs how many entries it removed, and treats any
 entry it cannot read as a miss. The first run afterwards computes everything
-again. Going back to an older version clears the folder the same way, so
-upgrade every machine that shares a folder together.
+again.
+
+An older cash never clears a folder written in a newer format. It leaves the
+folder as it is, warns once
+([CACHE-FORMAT-NEWER](warnings.md#cache-format-newer)) and writes nothing to
+disk for that run, so two environments on different versions do not delete
+each other's results. Give each its own `cache_dir`, or upgrade every
+environment that shares a folder together.
 
 SQLite, Redis and S3 caches carry no format stamp and are not cleared. Clear
 them yourself after a minor upgrade: a SQLite cache with `cash clear <dir>`,
