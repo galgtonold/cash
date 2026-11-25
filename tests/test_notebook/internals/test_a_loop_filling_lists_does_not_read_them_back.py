@@ -27,14 +27,18 @@ LOOP = (
 def _read_the_classes_alive(namespace):
     """What the measured loop reads once a process, read first. A statement
     reading a container too big to look through asks whether a class alive
-    has a special method (`special_classes_exist`) and reads the source of
-    those it finds -- in a test process, other tests' classes. The first
-    read of a file in a process digests its text (`_kept_block`), which the
-    counter takes for hashing: 87 KB to 1 MB, by what ran before in that
-    worker. Read here, the count is the loop's own."""
-    from cash.analysis.handed_callables import special_classes_exist
+    has a special method (`special_classes_exist`, which stops at the first
+    it finds) and, when one has, reads the special methods of every class
+    alive (`unseen_writes._live_writing_classes`) -- in a test process,
+    other tests' classes, all of them once the whole suite is collected. The
+    first read of a file in a process digests its text (`_kept_block`), which
+    the counter takes for hashing: 87 KB to 1 MB, by what ran before in that
+    worker and what was collected. Read here, the count is the loop's own."""
+    from cash.analysis import handed_callables as hc
+    from cash.notebook.statement.unseen_writes import _live_writing_classes
 
-    special_classes_exist(namespace)
+    if hc.special_classes_exist(namespace):
+        _live_writing_classes(namespace, hc)
 
 
 def test_the_lists_are_not_hashed(cash_magics):
