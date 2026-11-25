@@ -176,6 +176,9 @@ def read_code_text(path: str) -> str:
 
 #: `getsourcelines` answers: (path, *file_version, what) -> (lines, first line).
 _SOURCE_LINES: LruMemo[tuple, tuple[tuple[str, ...], int]] = LruMemo(CODE_OBJECTS)
+#: `getsource` answers, under the same key: the block's text, joined once
+#: per object and file version instead of on every read.
+_SOURCE_TEXT: LruMemo[tuple, str] = LruMemo(CODE_OBJECTS)
 #: The same for code whose source ``linecache`` holds in memory (a notebook
 #: cell): (path, what) -> (the linecache entry read, lines, first line).
 _HELD_LINES: LruMemo[tuple, tuple[tuple, tuple[str, ...], int]] = LruMemo(CODE_OBJECTS)
@@ -231,18 +234,28 @@ def getsourcelines(obj: object) -> tuple[list[str], int]:
     that function then had the same text, and the key never moved again
     (`relocated_source_lines` finds where the code is defined instead).
     """
+    return _lines_and_key(obj)[:2]
+
+
+def _lines_and_key(obj: object) -> tuple[list[str], int, tuple | None]:
+    """`getsourcelines`, and the key its lines were served from or kept
+    under (`_SOURCE_LINES`) -- None when they were not, so `getsource`
+    keeps its text only where the lines themselves are kept: code read
+    through ``linecache``'s in-memory entry, or found in another file than
+    the one this object's key names (`relocated_source_lines`), answers
+    from what that entry or that file holds and is read again."""
     with untracked():
         obj = unwrapped(obj)
         _note_read(obj)
-        lines, first = _inspect_source_lines(obj)
+        lines, first, key = _inspect_source_lines(obj)
         code = _code_of(obj)
         if code is not None and not block_defines(lines, code):
             moved = relocated_source_lines(obj, code)
             if moved is None:
                 raise OSError(f"could not find the definition of {code.co_name}: its code was compiled from other text")
             source_reads.note_file(moved[2])
-            return moved[0], moved[1]
-        return lines, first
+            return moved[0], moved[1], None
+        return lines, first, key
 
 
 def _note_read(obj: object) -> None:
@@ -343,7 +356,7 @@ def code_is_where_it_says(code: types.CodeType) -> bool:
     that cannot be read (the caller's own checks then apply)."""
     try:
         with untracked():
-            lines, _first = _inspect_source_lines(code)
+            lines, _first, _key = _inspect_source_lines(code)
     except Exception:  # noqa: BLE001 - no block to compare: nothing to say
         return True
     return block_defines(lines, code)
@@ -364,28 +377,30 @@ def defining_file(fn: object) -> str | None:
     return moved[2] if moved is not None else None
 
 
-def _inspect_source_lines(obj: object) -> tuple[list[str], int]:
+def _inspect_source_lines(obj: object) -> tuple[list[str], int, tuple | None]:
     """`getsourcelines` as ``inspect`` answers it, memoised: the block at the
-    line the code names, whatever it defines."""
+    line the code names, whatever it defines. The third value is the key the
+    lines are kept under, or None where they are not kept at all."""
     target = _source_target(obj)
     if target is not None and target[0] == "code":
         held = _held_source_lines(obj, target)
         if held is not None:
-            return held
+            return (*held, None)
     version = settled_source_version(obj) if target is not None else None
     if version is None:
-        return _getsourcelines(obj)
+        return (*_getsourcelines(obj), None)
     key = (*version, target)
     hit = _SOURCE_LINES.get(key)
     if hit is not None:
-        return list(hit[0]), hit[1]
+        return list(hit[0]), hit[1], key
     if target[0] == "class" and _CLASS_SOURCE_PARSES_FILE:
         lines, first = _class_source_lines(obj, version)
     else:
         lines, first = _kept_block(obj, version, target)
-    if source_version_unchanged(version):
-        _SOURCE_LINES[key] = (tuple(lines), first)
-    return lines, first
+    if not source_version_unchanged(version):
+        return lines, first, None
+    _SOURCE_LINES[key] = (tuple(lines), first)
+    return lines, first, key
 
 
 #: (path, *file_version) -> (the ``linecache`` entry digested, the digest of
@@ -678,8 +693,52 @@ def source_version_unchanged(version: tuple[str, int, int, int, int]) -> bool:
 
 
 def getsource(obj: object) -> str:
-    """``inspect.getsource`` through `getsourcelines`'s memo."""
-    return "".join(getsourcelines(obj)[0])
+    """``inspect.getsource`` through `getsourcelines`'s memo, with the text
+    itself kept (`_SOURCE_TEXT`) under the same key.
+
+    The key and the analysis of a fresh process read the same helper's text
+    a dozen times -- its key digest, its guard in the report store, the
+    names its signature and its decorators read, its body's imports and the
+    globals it may change -- and each read copied the block's lines out of
+    the memo, joined them and checked again that the block defines what it
+    says: 3,500 reads over the first calls of nilearn's cached functions in
+    one process, all but ~300 of them a block already read. Kept under
+    the file's settled version, as the lines are, so an edit
+    (`stat_has_settled`, `file_version`) is read again; where the lines
+    themselves are not kept -- a notebook cell's in-memory ``linecache``
+    entry, code found in another file than its own -- neither is the
+    text."""
+    with untracked():
+        try:
+            inner = unwrapped(obj)
+        except ValueError:  # a ``__wrapped__`` chain that loops: as `getsourcelines`
+            inner = None
+        if inner is not None:
+            key = _text_key(inner)
+            if key is not None:
+                text = _SOURCE_TEXT.get(key)
+                if text is not None:
+                    _note_read(inner)
+                    return text
+    lines, _first, kept_under = _lines_and_key(obj)
+    text = "".join(lines)
+    if kept_under is not None:
+        _SOURCE_TEXT[kept_under] = text
+    return text
+
+
+def _text_key(obj: object) -> tuple | None:
+    """The key *obj*'s block is kept under (`_SOURCE_LINES`), without
+    reading it: its target in its file and the file's settled version. None
+    where nothing is kept, and for code read from a ``linecache`` entry
+    held in memory (`_held_source_lines`), whose file is not on disk and
+    has no settled version. Called untracked, as `_inspect_source_lines`
+    builds the same key."""
+    target = _source_target(obj)
+    if target is None:
+        return None
+    version = settled_source_version(obj)
+    return None if version is None else (*version, target)
 
 
 def _class_source_lines(cls: object, version: tuple[str, int, int, int, int]) -> tuple[list[str], int]:
