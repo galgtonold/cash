@@ -5,8 +5,9 @@ name: Nightly integration
 # night and by hand from the Actions tab, split into shards that run in
 # parallel. tools/test_selection/shard.py assigns each test to one shard by a
 # stable hash of its node id, so the shards never overlap and together run
-# every test. The wheel-gate job runs alongside the shards, and so does the
-# held-unit job: the unit tests too slow for every push.
+# every test. The wheel-gate job runs alongside the shards, and so do the
+# held-unit job (the unit tests too slow for every push) and the self-check
+# job (the unit suite and the core set with every memo checked).
 on:
   schedule:
     - cron: "0 2 * * *"
@@ -134,6 +135,55 @@ jobs:
           --ignore=tests/docs
           -m "nightly or full_sweep"
           -n auto --tb=short -q -rs --durations=20
+
+  # Every memo and fast path checked against the slow path. CASH_VERIFY=1
+  # turns on all the self-checks (cash/_verify.py; docs/contributing.md
+  # lists them): each answer cash reuses -- the key of a hit met again, the
+  # code part of a key, a class's fold, a stored analysis, a watched value's
+  # digest, a simulated cell -- is worked out again behind the reuse, and a
+  # difference raises. A checked run is several times slower, so it runs
+  # here and not on a push. The work-count tests (the internals folders)
+  # are left out: they bound the work a call does, and a check adds to it.
+  # The per-test time limit is raised for the same reason.
+  self-check:
+    name: Self-check (CASH_VERIFY=1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run the unit tests with every self-check on
+        env:
+          CASH_VERIFY: "1"
+        run: >-
+          python -m pytest tests/
+          --ignore=tests/test_notebook_integration
+          --ignore=tests/test_wheel_gate
+          --ignore=tests/docs
+          --ignore=tests/test_core/internals
+          --ignore=tests/test_notebook/internals
+          -m "not perf and not nightly"
+          -n auto --tb=short -q -rs --durations=20
+          -o timeout=120 -o faulthandler_timeout=240
+
+      - name: Run the integration core set with every self-check on
+        if: ${{ !cancelled() }}
+        env:
+          CASH_VERIFY: "1"
+        run: >-
+          python -m pytest @tools/test_selection/core_set.txt
+          -n auto --tb=short -q -o timeout=180
 
   # The wheel gate (scripts/wheel_gate.py): builds the wheel, installs it into
   # a fresh venv and drives a real Jupyter server through kernel restarts. The

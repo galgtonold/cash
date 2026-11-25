@@ -79,7 +79,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from .. import _native
+from .. import _native, _verify
 from .._active import ACTIVE_CONFIG, EXPLAINING
 from .._user_attrs import plain_getattr
 from ..code_swaps import FOLDED_CODE, FoldedCode
@@ -120,7 +120,7 @@ def _flag(name: str, default: str) -> bool:
 #: Is the memo on? Needs the extension's world watch.
 ENABLED = hit_memo.ENABLED and _cw is not None and hasattr(_cw, "world_holds") and _flag("CASH_STATE_MEMO", "1")
 #: Rebuild behind every reuse and compare.
-VERIFY = ENABLED and (_flag("CASH_STATE_MEMO_VERIFY", "0") or hit_memo.VERIFY)
+VERIFY = ENABLED and (_verify.requested("CASH_STATE_MEMO_VERIFY") or hit_memo.VERIFY)
 
 #: The epoch the memo is at: the core epoch, which a change to a name
 #: libraries set and put back (`hit_memo._SCOPED_NAMES`: ``warnings.filters``

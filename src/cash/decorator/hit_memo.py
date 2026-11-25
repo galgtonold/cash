@@ -73,7 +73,7 @@ import typing
 import weakref
 from typing import TYPE_CHECKING, Any
 
-from .. import _native, _weak
+from .. import _native, _verify, _weak
 from .._clock import perf_counter as _perf_counter
 from .._memo import CODE_OBJECTS, LruMemo
 from .._type_memo import class_flags, class_mro, class_name
@@ -111,8 +111,9 @@ def _flag(name: str, default: str) -> bool:
 
 #: Is the fast path on? Needs the extension; ``CASH_HITPATH=0`` turns it off.
 ENABLED = _cw is not None and _flag("CASH_HITPATH", "1")
-#: ``CASH_HITPATH_VERIFY=1``: every fast hit builds the key again and compares.
-VERIFY = ENABLED and _flag("CASH_HITPATH_VERIFY", "0")
+#: ``CASH_HITPATH_VERIFY=1`` (or ``CASH_VERIFY=1``): every fast hit builds
+#: the key again and compares.
+VERIFY = ENABLED and _verify.requested("CASH_HITPATH_VERIFY")
 
 _fast_lookup = _cw.fast_lookup if ENABLED else None
 if ENABLED:

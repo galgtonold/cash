@@ -204,6 +204,34 @@ python scripts/doc_numbers.py --update
 [`tests/docs/README.md`](https://github.com/galgtonold/cash/blob/main/tests/docs/README.md)
 explains claim anchors, skipped examples and derived numbers.
 
+**Changing a memo or a fast path:** cash keeps many answers between calls
+(the key of a hit met again, the code part of a key, what a class folds to,
+a stored analysis, a watched value's digest, a simulated cell), and each
+must give what the slow path gives. Each has a switch that works the answer
+out again behind every reuse and raises when the two differ. `CASH_VERIFY=1`
+turns all of them on at once:
+
+```bash
+CASH_VERIFY=1 pytest tests/test_core/globals_and_closures tests/test_core/arguments -m "not perf"
+```
+
+| Switch | Checks | Raises |
+|---|---|---|
+| `CASH_HITPATH_VERIFY` | a hit served without building its key, and a helper fold reused | `HitMemoMismatch` |
+| `CASH_STATE_MEMO_VERIFY` | the remembered code part of a key | `StateMemoMismatch` |
+| `CASH_CLASS_MEMO_VERIFY` | what a class folds to | `ClassMemoMismatch` |
+| `CASH_ANALYSIS_MEMO_VERIFY` | analysis answers reused in a process or read from the cache folder | `StoredReportMismatch` and its siblings |
+| `CASH_CWATCH_VERIFY` | a digest the C extension's watchers call unchanged | `WatchMismatch` |
+| `CASH_VERIFY_INCREMENTAL_SIM` | a notebook cell's simulation reused after an edit | fails the test (`tests/conftest.py`) |
+
+A switch set to `0` stays off under `CASH_VERIFY=1`. A checked run is several
+times slower and does more work, so the work-count tests
+(`tests/test_*/internals/`) are not run with it, and a script a test starts
+with `run_python` does not inherit it. The nightly workflow runs the unit
+suite and the integration core set this way (`self-check` in
+`.github/workflows/nightly.yml`); a failure there that names one of the
+exceptions above is a memo that disagreed with the slow path.
+
 ## Writing tests
 
 | Folder | What goes there |

@@ -87,6 +87,13 @@ _ENV_ALLOWLIST: frozenset[str] = frozenset(
         # (cash.decorator.class_memo); read once at import, so not a setting.
         "CASH_CLASS_MEMO",
         "CASH_CLASS_MEMO_VERIFY",
+        # Turn every self-check on at once, and the checks of the analysis
+        # memos, the watchers and the notebook's cell memos (cash._verify);
+        # for contributors and CI, named on the contributing page only.
+        "CASH_VERIFY",
+        "CASH_ANALYSIS_MEMO_VERIFY",
+        "CASH_CWATCH_VERIFY",
+        "CASH_VERIFY_INCREMENTAL_SIM",
         # Switches the native file hook off (cash.tracking.native_reads); one
         # process-wide switch read once at import, so not a setting.
         "CASH_NATIVE_FILE_HOOK",

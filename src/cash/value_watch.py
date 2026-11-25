@@ -42,7 +42,7 @@ from collections.abc import Callable
 from time import perf_counter
 from typing import Any
 
-from . import _native, _weak, kept_state
+from . import _native, _verify, _weak, kept_state
 from ._native import REASON
 from ._native import cwatch as _cw
 from ._type_memo import class_dict, class_flags, class_module, class_name, class_qualname
@@ -86,7 +86,7 @@ class WatchMismatch(AssertionError):
     not the digest hashing the value again gives."""
 
 
-VERIFY = os.environ.get("CASH_CWATCH_VERIFY", "") not in ("", "0")
+VERIFY = _verify.requested("CASH_CWATCH_VERIFY")
 
 _FIRST = _ARM = _ALREADY = _ARMED = _NEED_TYPE = _KEPT = -1
 if _cw is not None:

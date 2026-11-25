@@ -27,7 +27,7 @@ import os
 from collections.abc import Callable
 from typing import Any, TypeVar
 
-from .. import _weak
+from .. import _verify, _weak
 from .._memo import PARSED_SOURCES, LruMemo
 
 __all__ = ["ENABLED", "VERIFY", "TreeMemoMismatch", "fact", "parse", "status", "stripped_def"]
@@ -43,7 +43,7 @@ def _flag(name: str, default: str) -> bool:
 ENABLED = _flag("CASH_ANALYSIS_MEMO", "1")
 #: Work every reused answer out again and compare (the on-disk module scans
 #: of `scan_store` too).
-VERIFY = _flag("CASH_ANALYSIS_MEMO_VERIFY", "0")
+VERIFY = _verify.requested("CASH_ANALYSIS_MEMO_VERIFY")
 
 
 class TreeMemoMismatch(AssertionError):
