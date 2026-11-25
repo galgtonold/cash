@@ -139,7 +139,8 @@ def load_events(url):
     return pd.read_parquet(url)
 
 url = "s3://bucket/events.parquet"
-load_events(url)   # first call: downloads, records the ETag (two metadata requests)
+# first call: downloads, records the ETag (two metadata requests)
+load_events(url)
 load_events(url)   # cache hit: one metadata request
 ```
 
