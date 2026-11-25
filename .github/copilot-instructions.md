@@ -98,6 +98,8 @@ storage backends and the effect vocabulary (`effects.py`), not a key builder.
   Outside `notebook/`, only the magics loaders (`Cash.register_magic`,
   `load_ipython_extension`, `nbconvert`) import it, so `@cash.cache` runs without
   the notebook package (`tests/test_core/project/test_decorator_without_notebook.py`).
+  That test lists the few imports inside functions that still break the rule
+  (the id() check of a result is one); the list may only shrink.
 
 ### JupyterLab extension (`labextension/`)
 

@@ -367,7 +367,7 @@ class Shadow:
         from ...install_paths import is_user_code_module
         from ...jit_functions import jit_python_function
         from ...tracking.trace_items import class_digest, name_table
-        from ..string_lookups import code_looks_up_by_string
+        from ...string_lookups import code_looks_up_by_string
 
         inputs = [n for n in inputs if isinstance(n, str) and not n.startswith("__cash")]
         markers = set(unit.markers)
@@ -546,7 +546,7 @@ class Shadow:
         recorded (`code_trace._Recorder.by_string`), and each lookup's value
         called at once? A statement's own code is the processor's to judge
         (``cache_key.lookups_followed``): the unit says so."""
-        from ..string_lookups import code_lookups_traceable
+        from ...string_lookups import code_lookups_traceable
 
         if code not in attribute_or(self.recorder, "by_string", ()):
             return False

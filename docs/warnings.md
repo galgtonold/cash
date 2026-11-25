@@ -388,7 +388,7 @@ cache the part that computes the numbers, and draw in an uncached function.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.refuses_identity_held @1c16baec, cash/decorator/purity_checks.py:_identity_reason @53c9b0d6 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.refuses_identity_held @d9e2e1ff, cash/decorator/purity_checks.py:_identity_reason @799c5374 -->
 **What happened.** Before storing a result, cash looks through it for the
 `id()` of a live object or a weak reference
 ([STORE-IDENTITY-HELD](#store-identity-held)). The look could not finish,
@@ -3533,7 +3533,7 @@ defining `greedy` and `rep` ran again).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.refuses_identity_held @1c16baec, cash/notebook/statement/identity_holders.py:returned_identity_reason @6f24efda -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.refuses_identity_held @d9e2e1ff, cash/notebook/statement/identity_holders.py:returned_identity_reason @f10802ab -->
 **What happened.** The result finds an object by its identity: it holds the
 `id()` of an object that is alive, either as a number (`return id(x)`,
 `{id(x): "x"}`) or spelled in text (`'k' + str(id(x))`, `f"run-{id(x)}"`,

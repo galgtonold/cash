@@ -160,14 +160,23 @@ def bump() -> None:
 _DEPENDENTS: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 
 
-#: A cached function's wrapper -> its state, for the scan of a caller.
+#: A cached function's wrapper -> a weak reference to its state, for the
+#: scan of a caller. The wrapper closes over its state, which holds the
+#: function: held here, the state kept its own key alive, and every
+#: function ever decorated with it.
 _STATE_OF: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 
 
 def own_state(wrapper: Any, state: list | None) -> None:
     """Note that *wrapper*'s remembered hits live in *state*."""
     if state is not None:
-        _STATE_OF[wrapper] = state
+        _STATE_OF[wrapper] = _weak.ref(state)
+
+
+def _state_of(wrapper: Any) -> list | None:
+    """The state `own_state` noted for *wrapper*, while both are alive."""
+    held = _STATE_OF.get(wrapper)
+    return held() if held is not None else None
 
 
 def read_by_others(state: list | None) -> bool:
@@ -1071,7 +1080,7 @@ class _Scan:
         if is_cash_wrapper(f):
             # Another cached function, or this one called by name: its own
             # state is cash's (a registration, a setting) or its code.
-            callee = _STATE_OF.get(plain_getattr(f, "__func__", f))
+            callee = _state_of(plain_getattr(f, "__func__", f))
             if callee is not None:
                 self.callees.append(callee)
             inner = plain_getattr(f, "__wrapped__", None)

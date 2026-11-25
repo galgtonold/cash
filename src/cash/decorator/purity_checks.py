@@ -98,6 +98,11 @@ _DESCRIPTORS = (classmethod, staticmethod, property, type)
 logger = logging.getLogger(__name__)
 
 
+#: By exact type, the results `PurityChecks._shared_with` need not look
+#: at: no caller can write through one, and it holds no other object.
+_ATOMS = frozenset({int, float, complex, bool, str, bytes, type(None)})
+
+
 def is_mutable(value) -> bool:
     """Whether a caller can write through *value*, so a copy would differ.
 
@@ -1156,6 +1161,12 @@ class PurityChecks:
         or None. *keeper* is who still holds the shared object. *held*:
         whether something outside the call held *result* itself when the
         body returned it (None: not known, taken as held)."""
+        if type(result) in _ATOMS:
+            # A number, a text, None: nothing can be written through it and
+            # it holds nothing, so no part of it is shared in a way a copy
+            # would not be. Every search below ends the same, after
+            # binding the arguments and reading the function's globals.
+            return None
         supplied = _supplied(func, args, kwargs)
         found = self._shared_by_name(result, supplied, func)
         if found is not None:
@@ -1556,7 +1567,11 @@ class PurityChecks:
         such a number, or the detector cannot be imported (the notebook
         package left out) -- the result is stored as before, and
         ``CACHE-IDENTITY-UNCHECKED`` says once that it was not checked."""
-        reason = _identity_reason(result, _identity_holders(func, call_args), seconds)
+        # What holds an object the result may name is put together only if
+        # the detector asks: plain data that spells no address is cleared
+        # without it, and a copy of the module's globals per miss was a
+        # tenth of a quick function's whole miss.
+        reason = _identity_reason(result, lambda: _identity_holders(func, call_args), seconds)
         if reason is None:
             return False
         if type(reason) is str:  # not an IdentityHeld, itself a str: the check was not run
@@ -2613,7 +2628,7 @@ def identity_moved(snapshot: tuple | None, value: Any) -> bool:
     return any(k1 != k2 or v1 is not v2 for (k1, v1), (k2, v2) in zip(before, now))
 
 
-def _identity_reason(result: Any, holders: dict[str, Any], seconds: float) -> Any:
+def _identity_reason(result: Any, holders: Callable[[], dict[str, Any]], seconds: float) -> Any:
     """`returned_identity_reason` for *result*, or a text saying why it could
     not be asked: its module is in the notebook package, which an install
     may leave out (``test_decorator_without_notebook``)."""

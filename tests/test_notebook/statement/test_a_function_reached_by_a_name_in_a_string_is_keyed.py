@@ -17,7 +17,7 @@ import pytest
 
 from cash.notebook.cache_key import unkeyed_reach
 from cash.notebook.cache_status import CacheStatus
-from cash.notebook.string_lookups import code_looks_up_by_string, statement_looks_up_by_string
+from cash.string_lookups import code_looks_up_by_string, statement_looks_up_by_string
 
 DEFINITIONS = """import time
 cfg = 1

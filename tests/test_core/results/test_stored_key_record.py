@@ -215,3 +215,30 @@ def test_a_miss_reads_no_whole_record(tmp_path, monkeypatch):
         record.miss_facts("mod.f", f"mod.f:s:d:c{i}")
     assert not applied, "a miss merged the whole record again"
     record.close()
+
+
+def test_a_loop_of_new_keys_keeps_one_view_across_trims_and_writes(tmp_path, monkeypatch):
+    """A loop of quick misses notes more keys than a record keeps between
+    two writes, and the record is rewritten once a second: neither builds
+    the view again, and its answers stay those of the whole record."""
+    from cash.decorator.stored_keys import facts_from_doc
+
+    monkeypatch.setattr(StoredKeyRecord, "WRITE_INTERVAL", 3600.0)  # written only when the test says
+    record = StoredKeyRecord(lambda: str(tmp_path))
+    built = []
+    real = stored_keys._View.__init__
+    monkeypatch.setattr(stored_keys._View, "__init__", lambda self, *a: (built.append(1), real(self, *a))[1])
+    for i in range(500):
+        key = f"mod.f:s{i % 3}:d:a{i}"
+        assert record.miss_facts("mod.f", key) == facts_from_doc(record.read("mod.f"), key), i
+        if i % 7:
+            record.note_stored("mod.f", key, None, _no_ledger)
+        else:
+            record.note_ram_only("mod.f", key, "under the floor", _no_ledger)
+        if i % 90 == 89:
+            record.flush()
+        # A key noted long ago, one noted just now and one written: as the record tells them.
+        for old in (f"mod.f:s{(i // 2) % 3}:d:a{i // 2}", key, f"mod.f:s0:d:a{max(0, i - 80)}"):
+            assert record.miss_facts("mod.f", old) == facts_from_doc(record.read("mod.f"), old), (i, old)
+    assert len(built) <= 2, f"the view was built {len(built)} times in 500 misses"
+    record.close()

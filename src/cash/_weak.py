@@ -21,6 +21,7 @@ cached_fn.cache_clear)`` hands cash's code to a reference of the user's.
 from __future__ import annotations
 
 import itertools
+import sys
 import types
 import weakref
 from collections.abc import Callable
@@ -49,10 +50,19 @@ class _Callback:
     def __init__(self, fn: Callable[[Any], object] | None) -> None:
         self.fn = fn
 
-    def __call__(self, reference: Any) -> None:
+    def __call__(self, reference: Any, _finalizing: Callable[[], bool] = sys.is_finalizing) -> None:
         fn = self.fn
         if fn is not None:
-            fn(reference)
+            try:
+                fn(reference)
+            except Exception:
+                # An object freed while the interpreter shuts down calls
+                # back into modules whose globals are already None. The
+                # memo the callback tidies dies with the process, so the
+                # failure says nothing; Python would print it as
+                # "Exception ignored" at the end of a clean run.
+                if not _finalizing():
+                    raise
 
 
 #: The callback of a reference with nothing to run when its object goes.

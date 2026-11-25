@@ -2391,7 +2391,7 @@ class InMemoryBackend(CacheBackend):
             # before recording the new one so the running total stays accurate.
             previous = self._store.get(key)
             if previous is not None:
-                self._current_size_bytes -= previous[0].get("size", 0)
+                self._current_size_bytes -= _charged(previous[0])
                 self._release_frozen(key)
             self._store[key] = (metadata, stored)
             self._touch(key)
@@ -2427,7 +2427,7 @@ class InMemoryBackend(CacheBackend):
                 self._checked[key] = checked
             else:
                 self._checked.pop(key, None)
-            self._current_size_bytes += size
+            self._current_size_bytes += _charged(metadata)
 
             # Check max_entries limit
             if self.max_entries is not None and len(self._store) > self.max_entries:
@@ -2491,7 +2491,7 @@ class InMemoryBackend(CacheBackend):
         self._release_frozen(key)
         entry = self._store.pop(key, None)
         if entry is not None:
-            self._current_size_bytes -= entry[0].get("size", 0)
+            self._current_size_bytes -= _charged(entry[0])
 
     def delete(self, key: str) -> None:
         with self._lock:
@@ -2620,7 +2620,7 @@ class InMemoryBackend(CacheBackend):
                 entry = self._store.get(key)
                 if entry is None:
                     continue
-                freed += entry[0].get("size", 0) or 0
+                freed += _charged(entry[0])
                 self._drop(key)
                 self._gdsf_clock = max(self._gdsf_clock, priority)
             if freed:
@@ -2690,6 +2690,22 @@ class InMemoryBackend(CacheBackend):
             except (OSError, AttributeError):
                 # Best-effort memory cleanup; safe to ignore on non-glibc systems
                 pass
+
+
+#: What the RAM tier keeps for one entry besides its value, in bytes: the
+#: key's text, the metadata dict and what it holds, and the entry's rows in
+#: the tier's own tables. Measured at about 1,100 bytes for a small
+#: decorator result (20,000 distinct calls of a one-line function). Charged
+#: to the byte cap with each entry: counting the value alone, a small
+#: result weighed 28 bytes, and the cap of a fifth of the machine's memory
+#: stood for a hundred million entries, forty times the memory itself.
+ENTRY_OVERHEAD_BYTES = 1100
+
+
+def _charged(metadata: MetadataDict) -> int:
+    """What an entry with *metadata* counts against the byte cap: its
+    value's size and `ENTRY_OVERHEAD_BYTES`."""
+    return (metadata.get("size", 0) or 0) + ENTRY_OVERHEAD_BYTES
 
 
 #: Whether a failed memory reading has been logged in this process.

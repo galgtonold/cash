@@ -59,6 +59,11 @@ Each tier has a size cap, sized to the machine unless you set one:
 | Disk | A quarter of the room on the cache's volume (free space plus what the cache already holds), at least 8 GiB and at most 100 GiB, and never more than 80% of that room. Set `max_cache_size` to fix it. |
 | Memory | A fifth of the memory the process may use (the machine's RAM, or a container's limit if lower), at least 512 MiB and at most 4 GiB. |
 
+<!-- claim: cash/backends/memory_backend.py:ENTRY_OVERHEAD_BYTES == 1100, cash/backends/memory_backend.py:_charged @30de1105 -->
+Against the memory cap an entry counts as its value plus 1,100 bytes for what
+cash keeps with it (its key and its metadata), so a great many small results
+reach the cap as a few large ones do.
+
 <!-- claim: cash/backends/budget_notices.py:describe_budget @663afadf, cash/backends/adaptive_caps.py:disk_cap_reason @8e67909a, cash/backends/file_eviction.py:FileEvictor.budget @9ff2d2c0 -->
 cash says how big the disk cache may grow when caching starts, once per
 process and cache folder. The line names the folder, the cap and the rule that
