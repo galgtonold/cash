@@ -40,7 +40,7 @@ from .._type_memo import class_name
 from .._user_attrs import plain_getattr
 from ..tracking.tracker_context import untracked
 
-__all__ = ["TOOL_NAME", "Recorder", "Unit", "other_thread_alive", "runs_user_code"]
+__all__ = ["TOOL_NAME", "Recorder", "Unit", "other_thread_alive", "runs_user_code", "working_threads"]
 
 TOOL_NAME = "cash-shadow"
 #: Tried in this order; 0-2 belong to debuggers, coverage and profilers.
@@ -578,19 +578,35 @@ def other_thread_alive(notebook_ns: Any, working: bool = False) -> bool:
     a change to what the process keeps (a setting, a random stream) can be
     its doing? The same, less a host's message channel
     (`works_for_no_call`), which runs its protocol alone."""
+    found = _other_threads(notebook_ns, working, first=True)
+    return found is None or bool(found)
+
+
+def working_threads() -> list[threading.Thread] | None:
+    """The threads `other_thread_alive` counts with *working*, or None
+    when one of them is a thread `threading` does not list."""
+    return _other_threads(None, True, first=False)
+
+
+def _other_threads(notebook_ns: Any, working: bool, first: bool) -> list[threading.Thread] | None:
+    """The listed threads `other_thread_alive` counts (the first alone
+    with *first*); None when an unlisted one counts."""
     me = threading.current_thread()
     threads = threading.enumerate()
     listed = {t.ident for t in threads}
     if _unlisted_python_thread(listed, working):
-        return True
+        return None
+    found: list[threading.Thread] = []
     for t in threads:
         if t is me or t in HOST_THREADS or not t.is_alive():
             continue
-        if runs_user_code(t, notebook_ns):
-            return True
-        if _kernel_code(t):
-            continue
-        name = getattr(_code_of(t), "__module__", None)
-        if not (isinstance(name, str) and (name == "cash" or name.startswith("cash."))):
-            return True
-    return False
+        if not runs_user_code(t, notebook_ns):
+            if _kernel_code(t):
+                continue
+            name = getattr(_code_of(t), "__module__", None)
+            if isinstance(name, str) and (name == "cash" or name.startswith("cash.")):
+                continue
+        found.append(t)
+        if first:
+            break
+    return found
