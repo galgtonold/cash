@@ -53,7 +53,7 @@ from ...tracking.randomness import (
 from ...tracking.randomness.detect import get_value_seeding_rng_modules
 from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
-from ..callee_reach import helper_seeded_modules
+from ..callee_reach import helper_seeded_modules, seed_only_call_modules
 from ..lineage_formula import UNSEEDED, seeded_unseen_by
 from ..statement.randomness import position_after
 from ..tracking_state import TrackingState
@@ -79,7 +79,8 @@ class _Stmt:
     #: The streams it draws from.
     draws: frozenset[str]
     #: The streams it sets and nothing else: a bare seed with a value
-    #: (``np.random.seed(0)``), empty for any other statement.
+    #: (``np.random.seed(0)``), or one call of a notebook function that
+    #: only seeds (``set_seed(0)``); empty for any other statement.
     bare_seed: frozenset[str]
 
 
@@ -137,6 +138,20 @@ def _imports_only(code: str) -> bool:
     except SyntaxError:
         return False
     return bool(tree.body) and all(isinstance(n, (ast.Import, ast.ImportFrom)) for n in tree.body)
+
+
+def _plain_def(code: str) -> bool:
+    """One ``def`` with no decorator and no call among its defaults:
+    running it binds its name to the function and does nothing else."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return False
+    if len(tree.body) != 1 or not isinstance(tree.body[0], ast.FunctionDef) or tree.body[0].decorator_list:
+        return False
+    args = tree.body[0].args
+    defaults = [*args.defaults, *(d for d in args.kw_defaults if d is not None)]
+    return not any(isinstance(n, ast.Call) for d in defaults for n in walk_tree(d))
 
 
 def _constant_binding(code: str) -> bool:
@@ -573,6 +588,18 @@ class RngRewind:
             if _imports_only(stmts[binder].code):
                 needed[binder] = None
                 continue
+            if _plain_def(stmts[binder].code) and not any(
+                _rebinds(stmts[q].code, name) for q in range(binder + 1, len(stmts))
+            ):
+                # A function the kernel does not hold (after a restart),
+                # defined once: defined again at its place, with what its
+                # body reads bound first, it is the one a run calls there.
+                trial = dict(inserts)
+                if not self._inputs_ready(binder, stmts, in_plan, trial, end):
+                    return False
+                needed.update({p: None for p in trial if p not in inserts})
+                needed[binder] = None
+                continue
             # An immutable literal bound above and rebound by nothing below
             # it: run again at its place, it leaves the name as a run does.
             if not _constant_binding(stmts[binder].code) or any(
@@ -617,6 +644,13 @@ class RngRewind:
         ledger = self.tracking_state.observed_rng_statement_draws
         observed_cells = self.tracking_state.observed_rng_cells
         out: list[_Stmt] = []
+        # name -> the ``def`` of it nearest above, for a function the kernel
+        # does not hold yet (after a restart).
+        defs: dict[str, str] = {}
+
+        def is_module(name: str) -> bool:
+            return self._is_module(name, len(out), out)
+
         for idx, cell in enumerate(upstream):
             tree = parse_cell_source(cell)
             if tree is None:
@@ -634,13 +668,17 @@ class RngRewind:
                 digest = exact_source_digest(code)
                 draws = set(drawing_modules_now(code)) | set(ledger.get(digest, ()))
                 moves = set(draws) | set(seeding_modules_now(code))
+                bare_seed = _bare_seed_modules(code)
                 try:
-                    moves |= helper_seeded_modules(code, ns)
+                    moves |= helper_seeded_modules(code, ns, defs.get)
+                    bare_seed = bare_seed or seed_only_call_modules(code, ns, defs.get, is_module)
                 except Exception:  # noqa: BLE001 - a helper that cannot be read seeds nothing known
                     pass
+                if isinstance(node, ast.FunctionDef):
+                    defs[node.name] = code
                 for lineages in (seeded_unseen_by(self.tracking_state, code) or {}).values():
                     moves |= {_module_of(var) for var in lineages}
-                out.append(_Stmt(idx, code, occurrence, frozenset(moves), frozenset(draws), _bare_seed_modules(code)))
+                out.append(_Stmt(idx, code, occurrence, frozenset(moves), frozenset(draws), bare_seed))
             # A stream the cell was seen to move that no statement of it shows
             # moving is moved somewhere in it: its last statement stands for it.
             unseen = set(observed_cells.get(exact_source_digest(cell), ())) - {m for s in out[first:] for m in s.moves}
