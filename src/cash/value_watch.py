@@ -78,6 +78,7 @@ KIND_PLAIN_KEY = 1  # the decorator's key part for plain data (arg_hashing.plain
 KIND_WALKED = 2  # a token for an argument the decorator's key walked (`tag`)
 KIND_NO_STREAM = 3  # "holds no stream" for what a function holds (call_key.holds_a_stream)
 KIND_HANDED = 4  # a copy the memory tier handed out, unchanged since (handed_copies)
+KIND_FROZEN = 5  # a frozen=True result passed on as an argument, unchanged since (decorator.frozen)
 
 
 class WatchMismatch(AssertionError):
@@ -224,11 +225,23 @@ def _classify(t: type) -> tuple[bool, tuple, bool]:
                         return no
                     break
             slots.append(member)
-    if slots:
-        # What pickle reads them by, worked out now: `copyreg._slotnames`
-        # writes ``__slotnames__`` into the class on first use, which would
-        # move its version tag right after the verdict.
-        copyreg._slotnames(t)
+    # ``__annotations__`` read off a class with none of its own (below 3.14)
+    # writes an empty dict into it, moving its version tag: an ``isinstance``
+    # against an ABC a runtime-checkable Protocol is registered with (as
+    # scikit-learn's import does to ``Sized``) reads it. Written now, before
+    # the verdict.
+    for klass in mro[:-1]:
+        try:
+            klass.__annotations__  # read for what it writes
+        except Exception:  # noqa: BLE001 - nothing to write
+            pass
+    # What pickle reads its slots by (none, for most), worked out now:
+    # `copyreg._slotnames` writes ``__slotnames__`` into the class the first
+    # time an instance is pickled, slots or not, which would move its version
+    # tag right after the verdict -- and an instance watched before its
+    # class was first pickled (a frozen result, watched as it is handed out
+    # and stored after) would read as changed.
+    copyreg._slotnames(t)
     # What the keyed pickle asks, remembered per class as it remembers it.
     views = bool(kept_state.cached_properties(t))
     return True, tuple(slots), views
