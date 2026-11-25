@@ -290,7 +290,7 @@ def _capture_in_place(
         out = stack.enter_context(StreamTaken("stdout", sink)) if stdout else None
         err = stack.enter_context(StreamTaken("stderr", sink)) if stderr else None
         if tee:
-            stack.callback(lambda: [taken.sink.flush() for taken in (out, err) if taken is not None])
+            stack.callback(lambda: [taken.sink.flush_written() for taken in (out, err) if taken is not None])
         yield _Captured(shown, out, err)
 
 

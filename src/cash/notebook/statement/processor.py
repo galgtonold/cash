@@ -159,6 +159,7 @@ from ...analysis.annotations import CacheAnnotation
 from ...analysis.ast_util import called_names, handed_names, parse_cached, resolve_dotted_name, walk_tree
 from ...analysis.cacheability import analyze_statement, statement_writes_files
 from ...analysis.cacheability_decision import (
+    analysis_failed,
     cacheability_verdict,
     identity_coupled_reason,
 )
@@ -343,6 +344,27 @@ _HOLDS_ITEMS = 2000
 _KERNEL_PACKAGES = frozenset({"IPython", "ipykernel"})
 #: How many statements refused for an unseen writer are remembered.
 _UNSEEN_REFUSED_KEPT = 1024
+
+
+def _refuse_unanalysed(run: StatementRun, check: str, exc: BaseException) -> None:
+    """Refuse to store *run*: a *check* that guards its entry raised *exc*.
+    "Could not tell" is not "found nothing": the statement runs every time,
+    and the user is told once (``NOTEBOOK-ANALYSIS-FAILED``)."""
+    run.skip_cache = True
+    run.metrics["uncacheable_reasons"].append(analysis_failed(check, exc))
+
+
+#: The messages `_log_once` has logged at warning level.
+_LOGGED_ONCE: set[str] = set()
+
+
+def _log_once(message: str, code: str) -> None:
+    """Log that a check on *code* raised and what follows is the safe side
+    of it: at warning level the first time for each *message*, at debug
+    level after. Call it from the ``except`` block."""
+    level = logging.DEBUG if message in _LOGGED_ONCE else logging.WARNING
+    _LOGGED_ONCE.add(message)
+    logger.log(level, f"%s {message}", _LOG_PROCESSOR, code[:80], exc_info=True)
 
 
 def _may_hold_memory(value: Any) -> bool:
@@ -1041,6 +1063,9 @@ class StatementProcessor:
         #: cell it watched: ``name -> (id, lineage, fingerprint)``.
         self._as_written_prints: dict[str, tuple[int, str, str]] = {}
         self._key_parts: KeyParts | None = None
+        #: The error of the last statement keyed whose module-state writes
+        #: could not be read (`_record_module_state_writes`), or None.
+        self._module_state_unread: BaseException | None = None
         self._randomness.use_draw_store(ObservedDrawStore(_guard_dir) if _guard_dir else None)
         #: `TrackingState.collect_first`, kept across kernels.
         self._collect_first_store = CollectFirstStore(_guard_dir) if _guard_dir else None
@@ -2361,6 +2386,9 @@ class StatementProcessor:
             run.code, occurrence_index=run.occurrence_index, tree=run.tree
         )
         run.key_parts = self._key_parts
+        if self._module_state_unread is not None:
+            _refuse_unanalysed(run, "tell which modules it sets state on", self._module_state_unread)
+            self._module_state_unread = None
         outputs = set(effects.outputs)
         callee_globals = set(effects.callee_globals)
         run.callee_globals = frozenset(callee_globals)
@@ -3079,8 +3107,8 @@ class StatementProcessor:
         names = set(run.inputs)
         try:
             names |= called_function_globals(run.inputs, user_ns, variable_lineage=self.tracking_state.variable_lineage)
-        except Exception:
-            logger.debug("%s could not read what %r calls", _LOG_PROCESSOR, run.code[:80], exc_info=True)
+        except Exception as exc:  # noqa: BLE001 - not read: nothing guards its entry, so none is made
+            _refuse_unanalysed(run, "read the globals the functions it calls read", exc)
         held = reference_states.states(names, self.tracking_state.current_session_hashes, known) or {}
         found = dict(held)
         for key, digest in self._freshness.inherited_reference_states(self.tracking_state, run.inputs).items():
@@ -3183,8 +3211,8 @@ class StatementProcessor:
         # it sets state on that its text does not say (`note_module_state`).
         try:
             held = module_globals(run.code, self.shell.user_ns)
-        except Exception:
-            logger.debug("%s could not watch the modules %r reaches", _LOG_PROCESSOR, run.code[:80], exc_info=True)
+        except Exception as exc:  # noqa: BLE001 - not watched: what it sets on a module is not seen
+            _refuse_unanalysed(run, "watch the modules it reaches", exc)
             held = {}
         # pyplot's figures, to see a statement change them through a name
         # cash does not know (`pyplot_state`). Not read for one that already
@@ -3420,8 +3448,8 @@ class StatementProcessor:
             # it ran and the module is loaded.
             try:
                 run.rebound_modules = run.rebound_modules | import_state_writes(run.code, self.shell.user_ns)
-            except Exception:
-                logger.debug("%s could not read what %r's imports set", _LOG_PROCESSOR, run.code[:80], exc_info=True)
+            except Exception as exc:  # noqa: BLE001 - not read: an entry would not bring that state back
+                _refuse_unanalysed(run, "read what its imports set on other modules", exc)
         with self._after_it_ran(run):
             self._forget_file_answers_if_it_wrote(code, execution)
         execution.wall_time = wall_time
@@ -3521,9 +3549,8 @@ class StatementProcessor:
         every time (``# @cash:assume-safe`` caches it anyway)."""
         try:
             started = statement_starting_workers(run.code, self.shell.user_ns, run.tree)
-        except Exception:
-            logger.debug("%s could not read whether %r starts workers", _LOG_PROCESSOR, run.code[:80], exc_info=True)
-            return None
+        except Exception as exc:  # noqa: BLE001 - not told: taken to start them
+            return analysis_failed("tell whether it starts worker processes or threads", exc)
         if not started:
             return None
         return (
@@ -3573,7 +3600,10 @@ class StatementProcessor:
         try:
             before = snapshot(reads.watched, code, self.shell.user_ns)
         except Exception:
-            logger.debug("%s could not watch the reads %r may change", _LOG_PROCESSOR, code[:80], exc_info=True)
+            # Fails safe: a value no write is noted for is taken as changed
+            # from outside the notebook, and the keys that read it move
+            # (`recorded_reads.choose`).
+            _log_once("could not watch the reads %r may change", code)
             before = {}
         try:
             yield
@@ -3581,8 +3611,8 @@ class StatementProcessor:
             if before:
                 try:
                     note_writes(before, code, reads)
-                except Exception:
-                    logger.debug("%s could not note what %r changed", _LOG_PROCESSOR, code[:80], exc_info=True)
+                except Exception:  # fails safe, as above
+                    _log_once("could not note what %r changed", code)
 
     def _finish(self, run: StatementRun, execution: StatementExecution) -> ProcessResult:
         """Record what the executed statement did, and store it."""
@@ -6156,7 +6186,8 @@ class StatementProcessor:
             return False
         try:
             return statement_calls_user_writer(run.code, self.shell.user_ns, run.tree, appends=False) is not None
-        except Exception:  # noqa: BLE001 - unjudged: as before, not recorded
+        except Exception:  # noqa: BLE001 - unjudged: not recorded, so the replay runs it again
+            _log_once("could not tell whether %r writes a file through a function of yours", run.code)
             return False
 
     def _record_file_effects(self, run: StatementRun, execution: StatementExecution) -> None:
@@ -6582,7 +6613,7 @@ class StatementProcessor:
         self._key_parts = KeyParts(frozenset(functions), frozenset(modules), occurrence_index)
 
         self._randomness.record_seeds(code, cache_key)
-        self._record_module_state_writes(code)
+        self._module_state_unread = self._record_module_state_writes(code)
 
         hash_time = _perf_counter() - t2
         return effects, source_hash, cache_key, analysis_time, hash_time
@@ -6609,21 +6640,23 @@ class StatementProcessor:
             occurrence_index=occurrence_index,
         )
 
-    def _record_module_state_writes(self, code: str) -> None:
+    def _record_module_state_writes(self, code: str) -> BaseException | None:
         """Note *code* as a statement that sets state on a local module, so a
         reload of the module knows its state is to be rebuilt
         (``ModuleInvalidator``). Run again, it moves to the end: the order is
-        the one the kernel last ran them in."""
+        the one the kernel last ran them in. Returns the error when the
+        modules could not be told: the statement is then not stored, so a
+        reload has no entry of it to serve in place of the state."""
         try:
             modules = module_state_writes(code, self.shell.user_ns)
-        except Exception:
-            logger.debug("%s could not tell which modules %r sets state on", _LOG_PROCESSOR, code[:80], exc_info=True)
-            return
+        except Exception as exc:  # noqa: BLE001 - handed to the caller, which refuses the store
+            return exc
         for module in modules:
             writers = self.tracking_state.module_state_writers.setdefault(module, [])
             if code in writers:
                 writers.remove(code)
             writers.append(code)
+        return None
 
     def _log_cache_lookup(
         self,

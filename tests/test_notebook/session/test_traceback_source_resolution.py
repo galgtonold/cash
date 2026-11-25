@@ -20,6 +20,7 @@ from cash._paths import CELL_ROOT
 from cash.notebook.compiled_source import (
     is_cash_filename,
     register_cell_source,
+    statement_place,
 )
 from tests._cell_driver import run_cash_cell
 
@@ -47,6 +48,27 @@ def test_a_routed_call_is_shown_as_the_user_wrote_it():
     rewritten, _ = wrap_eligible_calls(ast.parse("d = [f(i) for i in range(n)] + [m.g(j)]"))
     name = register_cell_source(ast.unparse(rewritten))
     assert linecache.getline(name, 1).strip() == "d = [f(i) for i in range(n)] + [m.g(j)]"
+
+
+def test_a_statement_sharing_its_line_is_quoted_with_the_whole_line():
+    """``warnings.warn('careful'); x = 1``: a warning from the first
+    statement quotes the line as the cell has it, as plain Jupyter does;
+    the second, whose columns are not the line's, keeps its own text."""
+    cell = "import time\nwarnings.warn('careful'); x = 1\n"
+    with statement_place(None, 3, 2, cell):
+        first = register_cell_source("warnings.warn('careful')")
+    with statement_place(None, 3, 2, cell):
+        second = register_cell_source("x = 1")
+    assert linecache.getline(first, 2) == "warnings.warn('careful'); x = 1\n"
+    assert linecache.getline(first, 1) == "import time\n"
+    assert linecache.getline(second, 2).rstrip("\n") == "x = 1"
+
+
+def test_a_statement_that_only_starts_like_its_line_keeps_its_own_text():
+    cell = "total = count + 1\n"
+    with statement_place(None, 1, 1, cell):
+        name = register_cell_source("total = count")
+    assert linecache.getline(name, 1).rstrip("\n") == "total = count"
 
 
 def test_register_cell_source_distinguishes_statements():

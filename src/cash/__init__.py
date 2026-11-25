@@ -32,6 +32,7 @@ _compiled_methods.__enter__()
 
 from . import (
     _active,
+    _memo_registry,
     _gc_context,  # noqa: F401 - collections run in a context of their own
     _streams_at_import,
 )
@@ -194,7 +195,10 @@ def reset_session() -> None:
     For test fixtures and benchmarks that need cash to start over without
     restarting Python. Under IPython the magics are re-registered on the
     new instance. The cache on disk is kept; ``cash clear --all`` deletes
-    it.
+    it. The process-wide memos that held facts of the old session (what it
+    learnt of lineages and cache keys, what it warned of once) are emptied
+    (`cash._memo_registry`); those that hold facts of the process (of code
+    objects, types, loaded modules) are kept.
 
     The settings start over too: the new instance reads the environment and
     the config files again, so what ``cash.configure(...)`` changed is
@@ -204,6 +208,9 @@ def reset_session() -> None:
     them.
     """
     _active.set_default_cash(None)
+    # What the old session's memos held of its lineages and keys goes with
+    # it; before the new instance is made, which reads its own back in.
+    _memo_registry.reset("session")
     # If IPython is active, re-register magics on a fresh instance so
     # existing ``%cash_*`` references resolve to the new singleton.
     try:
