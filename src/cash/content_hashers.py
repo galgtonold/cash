@@ -491,7 +491,7 @@ def _fold_pandas_array(h: Any, values: Any, pd: Any) -> None:
     elif route == "objects":
         _fold_object_items(h, _np_array(values, object))
     elif route == "arrow":
-        fold_arrow_column(h, held_values(values).__arrow_array__())
+        fold_arrow_column(h, held_values(values).__arrow_array__(), True)
     else:
         fold_buffer(h, _np_array(pd.util.hash_pandas_object(values, index=False)))
 
@@ -756,7 +756,7 @@ def raw_view(array: Any) -> Any:
     return array
 
 
-def fold_arrow_column(h: Any, column: Any) -> None:
+def fold_arrow_column(h: Any, column: Any, dictionaries: bool = False) -> None:
     """Fold a pyarrow Array or ChunkedArray's values into *h*, exactly.
 
     Numbers, dates and times by their values buffer, strings and binaries
@@ -764,7 +764,8 @@ def fold_arrow_column(h: Any, column: Any) -> None:
     and the positions of the missing values: read from each chunk's own
     offset, so a slice keys as its rows, and the same rows in any chunking
     key alike. Each part is hashed as one stream (`BulkHasher`), on several
-    threads when it is big. A dictionary column is read by its values.
+    threads when it is big. A dictionary column is read by its values, or
+    with *dictionaries* by its dictionary and its indices (below).
     Other types -- lists, structs, decimals -- are written as an Arrow IPC
     stream, which carries the validity bitmap and the values as they are,
     and each chunk's rows from its offset (`_fold_arrow_ipc`).
@@ -777,9 +778,27 @@ def fold_arrow_column(h: Any, column: Any) -> None:
 
     chunks = column.chunks if isinstance(column, pa.ChunkedArray) else [column]
     if pa.types.is_dictionary(column.type):
-        # By the values: which index stands for which value is the
-        # dictionary's order, which one process builds as it meets them.
         h.update(f"|dictionary:{column.type}|".encode())
+        if dictionaries:
+            # A column the user holds as Arrow: its dictionary is read
+            # (``.dictionary``, ``.indices``), and ``to_pandas()`` makes it
+            # the categories of a Categorical, order and unused entries
+            # included. So the dictionary in its order, then the indices.
+            # Chunks holding different dictionaries are first given one
+            # (as ``to_pandas`` gives them), so the same rows over the same
+            # dictionary key alike in any chunking.
+            if len(chunks) > 1 and not all(chunk.dictionary.equals(chunks[0].dictionary) for chunk in chunks[1:]):
+                chunks = column.unify_dictionaries().chunks
+            entries = chunks[0].dictionary if chunks else pa.array([], type=column.type.value_type)
+            h.update(f"|entries:{len(entries)}|".encode())
+            fold_arrow_column(h, entries, True)
+            h.update(b"|indices|")
+            indices = pa.chunked_array([chunk.indices for chunk in chunks], type=column.type.index_type)
+            fold_arrow_column(h, indices, True)
+            return
+        # A polars categorical exported to Arrow: which index stands for
+        # which value is the order one process met the values in, and no
+        # polars code is handed it. By the values.
         chunks = [chunk.dictionary_decode() for chunk in chunks]
         column = pa.chunked_array(chunks, type=column.type.value_type)
     kind, width = _arrow_layout(column.type)
@@ -2069,7 +2088,7 @@ def hash_pyarrow(value: Any) -> str | None:
     show, so every equal-length slice of one table would hash alike; each
     chunk is read from its offset. A dictionary column's buffers hold only
     the indices, so ``["red", "blue"]`` and ``["cat", "dog"]`` would hash
-    alike too; its values are read.
+    alike too; its dictionary is read, then its indices.
     """
     try:
         import pyarrow as pa
@@ -2079,11 +2098,11 @@ def hash_pyarrow(value: Any) -> str | None:
             fold_buffer(h, value.schema.serialize())
             for column in value.columns:
                 h.update(b"|column|")
-                fold_arrow_column(h, column)
+                fold_arrow_column(h, column, True)
             return h.hexdigest()
         if isinstance(value, (pa.Array, pa.ChunkedArray)):
             h = hashlib.sha256(f"{class_name(type(value))}:{len(value)}:{value.type}:".encode())
-            fold_arrow_column(h, value)
+            fold_arrow_column(h, value, True)
             return h.hexdigest()
     except (ImportError, TypeError, ValueError, AttributeError, MemoryError, NotImplementedError):
         logger.debug("Failed to hash PyArrow %s", class_name(type(value)))

@@ -45,7 +45,7 @@ value the watchers cannot fully cover is hashed every time.
 | `ndarray` | numpy | shape, dtype, memory order and every byte; an object array by its items, column by column |
 | `DataFrame`, `Series` | polars | schema and every value, each column from its Arrow memory; an `Object` column by its values' content |
 | `LazyFrame` | polars | the serialised plan, including in-memory data; a plan reading a file holds the path, and the decorator records the files it scans as the call's reads |
-| `Table`, `RecordBatch`, `Array`, `ChunkedArray` | pyarrow | schema or type and every row, each column from its offset; a dictionary column by its values |
+| `Table`, `RecordBatch`, `Array`, `ChunkedArray` | pyarrow | schema or type and every row, each column from its offset; a dictionary column by its dictionary, in its order and with the entries no row uses, and its indices |
 | sparse matrices and arrays | scipy.sparse | type, shape, dtype, format and every array the format stores; a DOK or LIL matrix as the CSR matrix it converts to |
 | `DataFrame`, `Series` | modin | converted to pandas, then hashed as pandas |
 | any collection | dask | the task-graph keys and the schema |
