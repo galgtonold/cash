@@ -396,7 +396,10 @@ class MutationClassifier:
         )
         handed = frozenset(name for name in handed if not is_stream(user_ns.get(name)))
         names = set(call_arguments(tree, user_ns) | watched | handed) - outputs
-        return names, names - bare_call_arguments(tree, user_ns) - watched
+        # A name a statement that keeps nothing hands on in any form (in a
+        # list, to a lambda given to ``map``) is not kept-only: that
+        # statement is there for what it does.
+        return names, names - bare_call_arguments(tree, user_ns) - watched - _named_where_nothing_is_kept(tree)
 
     def magic_snapshots(self, node: ast.stmt, code: str) -> dict[str, str | None] | None:
         """Before the magic statement *node* (*code*) runs: the fingerprint
@@ -599,3 +602,18 @@ def _in_place_receivers(tree: ast.Module | None) -> set[str]:
         if isinstance(root, ast.Name):
             found.add(root.id)
     return found
+
+
+def _named_where_nothing_is_kept(tree: ast.Module | None) -> set[str]:
+    """The names read by the bare expression statements of *tree*:
+    ``list(map(lambda s: s["tracker"].inc(), [state]))`` keeps no result,
+    so what it hands on it hands on to be changed."""
+    if tree is None:
+        return set()
+    return {
+        node.id
+        for stmt in tree.body
+        if isinstance(stmt, ast.Expr)
+        for node in ast.walk(stmt)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+    }
