@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import builtins
+import dataclasses
 import functools
 import importlib
 import logging
@@ -37,6 +38,20 @@ from .handed_callables import handed_callables
 from .helper_code import is_user_code
 from .mutations import is_vars_of, namespace_item, writer_aliases, written_argument
 from .namespace_effects import capturable_globals, notebook_global_rebinds
+from .scope_model import (
+    ANNOTATION,
+    BIND,
+    CLASS,
+    DECLARED,
+    DELETE,
+    EXCEPT,
+    READ,
+    SITE,
+    Scope,
+    ScopeModel,
+    bound_names,
+    scope_model,
+)
 from .writer_aliases import namespace_writer_aliases
 
 __all__ = [
@@ -61,55 +76,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-_FUNCTION_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
-_COMPREHENSION_NODES = (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)
-
-
-def _own_bindings(scope: ast.AST) -> set[str]:
-    """The names the function or lambda *scope* binds itself: its parameters
-    and every name its own body assigns, imports, defines or catches, minus
-    those it declares ``global``.
-
-    Nested functions, lambdas and classes are not entered (their own names
-    are theirs), nor are comprehension targets; a ``:=`` inside a
-    comprehension binds here, as Python scopes it. A name this misses is
-    resolved as a global, which can only add an edge, never lose one.
-    """
-    args = scope.args
-    bound = {a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg) if a is not None}
-    declared_global: set[str] = set()
-    stack: list[ast.AST] = list(scope.body) if isinstance(scope.body, list) else [scope.body]
-    while stack:
-        node = stack.pop()
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            bound.add(node.name)
-            continue  # its decorators and defaults may hold a `:=`; missing one only adds an edge
-        if isinstance(node, ast.Lambda):
-            continue
-        if isinstance(node, ast.Global):
-            declared_global.update(node.names)
-        elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
-            bound.add(node.id)
-        elif isinstance(node, (ast.Import, ast.ImportFrom)):
-            bound.update((alias.asname or alias.name).split(".")[0] for alias in node.names if alias.name != "*")
-        elif isinstance(node, ast.ExceptHandler) and node.name:
-            bound.add(node.name)
-        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
-            bound.add(node.name)
-        elif isinstance(node, ast.MatchMapping) and node.rest:
-            bound.add(node.rest)
-        if isinstance(node, ast.comprehension):
-            stack.extend((node.iter, *node.ifs))  # its target is the comprehension's own
-            continue
-        stack.extend(ast.iter_child_nodes(node))
-    return bound - declared_global
-
-
-def _comprehension_targets(node: ast.AST) -> set[str]:
-    """Names the comprehension *node* binds in its own scope (its targets)."""
-    return {n.id for gen in node.generators for n in walk_tree(gen.target) if isinstance(n, ast.Name)}
-
-
 def _dotted_chain(node: ast.expr) -> list[str] | None:
     """``["a", "b", "c"]`` for ``a.b.c``; None when the root is not a name."""
     parts: list[str] = []
@@ -123,7 +89,7 @@ def _dotted_chain(node: ast.expr) -> list[str] | None:
     return parts
 
 
-class _CallVisitor(ast.NodeVisitor):
+class _CallVisitor:
     """Collect all function-call names from an AST for find_called_functions.
 
     ``referenced`` is every name and ``a.b`` chain READ anywhere, called or
@@ -131,82 +97,36 @@ class _CallVisitor(ast.NodeVisitor):
     ``for fn in [inner]``, ``def f(fn=inner)``.
 
     A chain whose first name the function binds itself -- a parameter, an
-    assignment, a loop or ``with`` target, a comprehension variable, a free
-    variable from an enclosing function (*outer_locals*) -- is a local, not
-    the global of that name, and is left out: ``def f(df): df.values`` must
-    never look at a module-level ``df``.
+    assignment, a loop or ``with`` target, a ``match`` capture, a
+    comprehension variable, a free variable from an enclosing function
+    (*outer_locals*) -- is a local, not the global of that name, and is left
+    out: ``def f(df): df.values`` must never look at a module-level ``df``.
+    Which scope a name belongs to is the scope model's answer.
     """
 
     def __init__(self, outer_locals: frozenset[str] | set[str] = frozenset()) -> None:
         self.names_to_resolve: list[str] = []
         self.referenced: list[str] = []
-        self._scopes: list[set[str]] = [set(outer_locals)] if outer_locals else []
+        self._outer_locals = frozenset(outer_locals)
 
-    def _is_local(self, name: str) -> bool:
-        return any(name in scope for scope in self._scopes)
+    def _is_local(self, name: str, scope: Scope) -> bool:
+        return name in self._outer_locals or scope.owner(name).parent is not None
 
-    def _scoped(self, bound: set[str], nodes: list[ast.AST]) -> None:
-        self._scopes.append(bound)
-        try:
-            for node in nodes:
-                self.visit(node)
-        finally:
-            self._scopes.pop()
-
-    def _visit_function(self, node: ast.AST) -> None:
-        # Decorators, defaults and annotations run in the enclosing scope.
-        for deco in getattr(node, "decorator_list", ()):
-            self.visit(deco)
-        args = node.args
-        for default in (*args.defaults, *(d for d in args.kw_defaults if d is not None)):
-            self.visit(default)
-        if not isinstance(node, ast.Lambda):
-            for a in (*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg):
-                if a is not None and a.annotation is not None:
-                    self.visit(a.annotation)
-            if node.returns is not None:
-                self.visit(node.returns)
-        body = node.body if isinstance(node.body, list) else [node.body]
-        self._scoped(_own_bindings(node), body)
-
-    visit_FunctionDef = _visit_function
-    visit_AsyncFunctionDef = _visit_function
-    visit_Lambda = _visit_function
-
-    def _visit_comprehension(self, node: ast.AST) -> None:
-        # The first iterable is evaluated in the enclosing scope.
-        first, *rest = node.generators
-        self.visit(first.iter)
-        inner: list[ast.AST] = [*first.ifs]
-        for gen in rest:
-            inner.extend((gen.iter, *gen.ifs))
-        if isinstance(node, ast.DictComp):
-            inner.extend((node.key, node.value))
-        else:
-            inner.append(node.elt)
-        self._scoped(_comprehension_targets(node), inner)
-
-    visit_ListComp = _visit_comprehension
-    visit_SetComp = _visit_comprehension
-    visit_GeneratorExp = _visit_comprehension
-    visit_DictComp = _visit_comprehension
-
-    def visit_Name(self, node: ast.Name) -> None:
-        if isinstance(node.ctx, ast.Load) and not self._is_local(node.id):
-            self.referenced.append(node.id)
-
-    def visit_Attribute(self, node: ast.Attribute) -> None:
-        if isinstance(node.ctx, ast.Load):
-            chain = _dotted_chain(node)
-            if chain is not None and not self._is_local(chain[0]):
-                self.referenced.append(".".join(chain))
-        self.generic_visit(node)
-
-    def visit_Call(self, node: ast.Call) -> None:
-        chain = _dotted_chain(node.func)
-        if chain is not None and not self._is_local(chain[0]):
-            self.names_to_resolve.append(".".join(chain))
-        self.generic_visit(node)
+    def visit(self, tree: ast.AST) -> None:
+        for event in scope_model(tree).events:
+            node = event.node
+            if event.kind == READ:
+                if isinstance(node.ctx, ast.Load) and not self._is_local(event.name, event.scope):
+                    self.referenced.append(event.name)
+            elif event.kind == SITE:
+                if isinstance(node, ast.Call):
+                    chain = _dotted_chain(node.func)
+                    if chain is not None and not self._is_local(chain[0], event.scope):
+                        self.names_to_resolve.append(".".join(chain))
+                elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
+                    chain = _dotted_chain(node)
+                    if chain is not None and not self._is_local(chain[0], event.scope):
+                        self.referenced.append(".".join(chain))
 
 
 def exec_literal(node: ast.Call) -> ast.Module | None:
@@ -228,68 +148,139 @@ def exec_literal(node: ast.Call) -> ast.Module | None:
         return None
 
 
-class _FlowVisitor(ast.NodeVisitor):
-    """Track variable reads (inputs) and writes (outputs) across scopes.
+@dataclasses.dataclass(frozen=True)
+class _Flow:
+    """What a block of code reads and writes, as the notebook counts it."""
 
-    Lifted from the inline class inside ``analyze_code_block`` so that its
-    methods each have their own complexity budget.
+    #: Names read before the block binds them: its inputs.
+    inputs: frozenset[str]
+    #: Names the block binds at cell level, or changes in place there.
+    outputs: frozenset[str]
+    #: The outputs that are bound (``x = ...``), not only changed in place.
+    defined_in_block: frozenset[str]
+    #: The outputs changed in place (``x[k] = ...``, ``x.attr = ...``).
+    modified_objects: frozenset[str]
+
+
+class _FlowReplay:
+    """Works out a :class:`_Flow` from the scope model of a tree.
+
+    Which names the code binds and reads, and in which scope, is the
+    model's answer (`scope_model`): a ``match`` capture, a ``:=``, an
+    ``except ... as``, a comprehension variable, a parameter. What is added
+    here is the notebook's own reading of them, in the order the code runs:
+
+    * a module-level name read before the block binds it is an input; one a
+      function body reads is an input too (the function reads it when
+      called), unless the function stored it first through ``global``;
+    * a module-level name the block binds when it runs is an output; what a
+      function binds through ``global`` is not (it happens when called);
+    * ``x[k] = v``, ``x.attr = v``, ``x.method(inplace=True)`` and a writer
+      call (``setattr(x, ...)``) at cell level read ``x`` and change it.
+
+    ``x: int`` alone binds nothing. ``del x`` and the name of ``except E as
+    e`` (unbound again when the handler ends) are not outputs.
     """
 
-    def __init__(self, aliases: Mapping[str, str | None] | None = None) -> None:
+    def __init__(self, tree: ast.AST, aliases: Mapping[str, str | None] | None = None) -> None:
         #: Names bound to a writer (`mutations.writer_of`): the namespace's
-        #: (`namespace_writer_aliases`), then the cell's own (`visit_Module`).
+        #: (`namespace_writer_aliases`), then the cell's own
+        #: (``sa = setattr`` then ``sa(points[7], 'x', -3)``).
         self.aliases: dict[str, str | None] = dict(aliases or {})
-        self.cell_aliases: dict[str, str] = {}
-        # Stack of sets of defined variables. scopes[0] is the cell level.
-        self.scopes: list[set[str]] = [set()]
-        # Parallel stack: True where the scope at the same index is a
-        # comprehension scope. Used for PEP 572 walrus scoping -- a ``:=``
-        # target binds in the nearest enclosing NON-comprehension scope.
-        self.comp_scopes: list[bool] = [False]
+        self.cell_aliases: dict[str, str] = writer_aliases(tree) if isinstance(tree, ast.Module) else {}
+        self.aliases.update(self.cell_aliases)
         self.outputs: set[str] = set()
         self.real_inputs: set[str] = set()
         self.defined_in_block: set[str] = set()
         self.modified_objects: set[str] = set()
+        # Module-level names bound so far, the names each class body has
+        # bound so far, and those each function has stored through `global`.
+        self._top: set[str] = set()
+        self._class: dict[Scope, set[str]] = {}
+        self._later: dict[Scope, set[str]] = {}
+        self._run(scope_model(tree, exec_literal))
 
-    # ------------------------------------------------------------------
-    # Scope helpers
-    # ------------------------------------------------------------------
+    def result(self) -> _Flow:
+        return _Flow(
+            frozenset(self.real_inputs),
+            frozenset(self.outputs),
+            frozenset(self.defined_in_block),
+            frozenset(self.modified_objects),
+        )
 
-    def is_defined(self, name: str) -> bool:
-        """Check if name is defined in any active scope."""
-        return any(name in scope for scope in reversed(self.scopes))
+    def is_defined(self, name: str, scope: Scope) -> bool:
+        """Does code of *scope* reading *name* here find it without the
+        notebook's namespace from before the block?"""
+        owner = scope.owner(name)
+        if owner.parent is not None:
+            if owner.kind != CLASS:
+                return True  # a local of a function, lambda or comprehension
+            if name in self._class.get(owner, ()):
+                return True
+            # A class body reads a name it has not bound yet from the module.
+        if name in self._top:
+            return True
+        while scope.parent is not None:
+            if name in self._later.get(scope, ()):
+                return True
+            scope = scope.parent
+        return False
 
-    def define_variable(self, name: str) -> None:
-        self.scopes[-1].add(name)
-        if len(self.scopes) == 1:
+    def _run(self, model: ScopeModel) -> None:
+        if model.module.star_imports:
+            # ``from m import *`` binds names the text does not show; the
+            # statement's output ``*`` stands for them.
+            self.outputs.add("*")
+            self.defined_in_block.add("*")
+        for event in model.events:
+            kind, scope = event.kind, event.scope
+            if kind == READ:
+                if scope.kind == ANNOTATION and not isinstance(scope.node, ast.AnnAssign):
+                    continue  # only the annotation of a variable is read
+                if not self.is_defined(event.name, scope):
+                    self.real_inputs.add(event.name)
+            elif kind == BIND:
+                self._bind(event.name, scope, event.how)
+            else:
+                node = event.node
+                if isinstance(node, ast.Call):
+                    self._call(node, scope)
+                elif isinstance(node, ast.Subscript):
+                    if isinstance(node.ctx, ast.Store):
+                        self._changed(self._extract_base_name(node.value, scope), scope)
+                    elif isinstance(node.ctx, ast.Load):
+                        parent_name = self._extract_base_name(node.value, scope)
+                        if parent_name and not self.is_defined(parent_name, scope):
+                            self.real_inputs.add(parent_name)
+                elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store):
+                    self._changed(self._extract_base_name(node.value, scope), scope)
+
+    def _bind(self, name: str, scope: Scope, how: str | None) -> None:
+        if how in (DECLARED, DELETE):
+            return
+        owner = scope.owner(name)
+        if owner.parent is not None:
+            if owner.kind == CLASS:
+                self._class.setdefault(owner, set()).add(name)
+            return
+        if scope.runs_later:
+            self._later.setdefault(scope, set()).add(name)
+            return
+        self._top.add(name)
+        if how != EXCEPT:
             self.outputs.add(name)
             self.defined_in_block.add(name)
 
-    @staticmethod
-    def _add_args_to_scope(scope: set, args: ast.arguments) -> None:
-        """Register all argument names from an ast.arguments node into scope."""
-        for arg in args.args:
-            scope.add(arg.arg)
-        for arg in args.posonlyargs:
-            scope.add(arg.arg)
-        for arg in args.kwonlyargs:
-            scope.add(arg.arg)
-        if args.vararg:
-            scope.add(args.vararg.arg)
-        if args.kwarg:
-            scope.add(args.kwarg.arg)
+    def _changed(self, parent_name: str | None, scope: Scope) -> None:
+        """Code of *scope* changes the object *parent_name* holds in place."""
+        if parent_name:
+            if not self.is_defined(parent_name, scope):
+                self.real_inputs.add(parent_name)
+            if scope.parent is None:
+                self.outputs.add(parent_name)
+                self.modified_objects.add(parent_name)
 
-    # ------------------------------------------------------------------
-    # visit_* methods
-    # ------------------------------------------------------------------
-
-    def visit_Module(self, node: ast.Module) -> None:
-        # ``sa = setattr`` then ``sa(points[7], 'x', -3)``.
-        self.cell_aliases = writer_aliases(node)
-        self.aliases.update(self.cell_aliases)
-        self.generic_visit(node)
-
-    def _writer_aliases(self, call: ast.Call) -> dict[str, str | None]:
+    def _writer_aliases(self, call: ast.Call, scope: Scope) -> dict[str, str | None]:
         """`aliases`, with each name *call* is spelt from that the cell binds
         to something else than a writer left out: ``setattr`` a function of
         the cell's own."""
@@ -297,254 +288,39 @@ class _FlowVisitor(ast.NodeVisitor):
         for spelt in (call.func, *call.args[:1]):
             while isinstance(spelt, ast.Attribute):
                 spelt = spelt.value
-            if isinstance(spelt, ast.Name) and self.is_defined(spelt.id) and spelt.id not in self.cell_aliases:
+            if isinstance(spelt, ast.Name) and self.is_defined(spelt.id, scope) and spelt.id not in self.cell_aliases:
                 aliases = {**aliases, spelt.id: None}
         return aliases
 
-    def visit_Name(self, node: ast.Name) -> None:
-        if isinstance(node.ctx, ast.Store):
-            self.define_variable(node.id)
-        elif isinstance(node.ctx, ast.Load) and not self.is_defined(node.id):
-            self.real_inputs.add(node.id)
-        self.generic_visit(node)
-
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        self._handle_function(node)
-
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        self._handle_function(node)
-
-    def _handle_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
-        # 1. Decorators (in current scope)
-        for decorator in node.decorator_list:
-            self.visit(decorator)
-
-        # 2. Defaults (in current scope)
-        if node.args.defaults:
-            for default in node.args.defaults:
-                self.visit(default)
-        if node.args.kw_defaults:
-            for default in node.args.kw_defaults:
-                if default:
-                    self.visit(default)
-
-        # 3. Define function name in CURRENT scope
-        self.define_variable(node.name)
-
-        # 4. Enter new scope, add arguments, visit body, exit scope
-        self.scopes.append(set())
-        self.comp_scopes.append(False)
-        self._add_args_to_scope(self.scopes[-1], node.args)
-        for stmt in node.body:
-            self.visit(stmt)
-        self.scopes.pop()
-        self.comp_scopes.pop()
-
-    def visit_ClassDef(self, node: ast.ClassDef) -> None:
-        for decorator in node.decorator_list:
-            self.visit(decorator)
-        for base in node.bases:
-            self.visit(base)
-        for keyword in node.keywords:
-            self.visit(keyword.value)
-        self.define_variable(node.name)
-        self.scopes.append(set())
-        self.comp_scopes.append(False)
-        for stmt in node.body:
-            self.visit(stmt)
-        self.scopes.pop()
-        self.comp_scopes.pop()
-
-    def visit_Lambda(self, node: ast.Lambda) -> None:
-        if node.args.defaults:
-            for default in node.args.defaults:
-                self.visit(default)
-        if node.args.kw_defaults:
-            for default in node.args.kw_defaults:
-                if default:
-                    self.visit(default)
-        self.scopes.append(set())
-        self.comp_scopes.append(False)
-        self._add_args_to_scope(self.scopes[-1], node.args)
-        self.visit(node.body)
-        self.scopes.pop()
-        self.comp_scopes.pop()
-
-    # --- Comprehension scoping (Python 3: iteration vars are local) ---
-
-    def _visit_comprehension(self, node: ast.expr, value_nodes: list[ast.expr]) -> None:
-        """Handle ListComp / SetComp / GeneratorExp / DictComp."""
-        self.scopes.append(set())
-        self.comp_scopes.append(True)
-        for generator in node.generators:  # type: ignore[attr-defined]
-            self.visit(generator.iter)
-            self._define_comp_target(generator.target)
-            for if_clause in generator.ifs:
-                self.visit(if_clause)
-        for vnode in value_nodes:
-            self.visit(vnode)
-        self.scopes.pop()
-        self.comp_scopes.pop()
-
-    def _define_comp_target(self, target: ast.expr) -> None:
-        """Define comprehension target variable(s) in current scope only."""
-        if isinstance(target, ast.Name):
-            self.scopes[-1].add(target.id)
-        elif isinstance(target, (ast.Tuple, ast.List)):
-            for elt in target.elts:
-                self._define_comp_target(elt)
-        elif isinstance(target, ast.Starred):
-            self._define_comp_target(target.value)
-
-    def visit_ListComp(self, node: ast.ListComp) -> None:
-        self._visit_comprehension(node, [node.elt])
-
-    def visit_SetComp(self, node: ast.SetComp) -> None:
-        self._visit_comprehension(node, [node.elt])
-
-    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
-        self._visit_comprehension(node, [node.elt])
-
-    def visit_DictComp(self, node: ast.DictComp) -> None:
-        self._visit_comprehension(node, [node.key, node.value])
-
-    def visit_Subscript(self, node: ast.Subscript) -> None:
-        if isinstance(node.ctx, ast.Store):
-            parent_name = self._extract_base_name(node.value)
-            if parent_name:
-                if not self.is_defined(parent_name):
-                    self.real_inputs.add(parent_name)
-                if len(self.scopes) == 1:
-                    self.outputs.add(parent_name)
-                    self.modified_objects.add(parent_name)
-        elif isinstance(node.ctx, ast.Load):
-            parent_name = self._extract_base_name(node.value)
-            if parent_name and not self.is_defined(parent_name):
-                self.real_inputs.add(parent_name)
-        self.visit(node.slice)
-        self.visit(node.value)
-
-    def visit_Attribute(self, node: ast.Attribute) -> None:
-        if isinstance(node.ctx, ast.Store):
-            parent_name = self._extract_base_name(node.value)
-            if parent_name:
-                if not self.is_defined(parent_name):
-                    self.real_inputs.add(parent_name)
-                if len(self.scopes) == 1:
-                    self.outputs.add(parent_name)
-                    self.modified_objects.add(parent_name)
-        self.generic_visit(node)
-
-    def visit_Assign(self, node: ast.Assign) -> None:
-        self.visit(node.value)
-        for target in node.targets:
-            self.visit(target)
-
-    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
-        # Walrus ``target := value``. Visit the value FIRST so a self-referential
-        # read (``n := n + 1``) registers ``n`` as an input before the binding
-        # hides it (mirrors visit_Assign). PEP 572 also binds the target in the
-        # nearest enclosing NON-comprehension scope, so a walrus inside a
-        # comprehension still defines a cell-level output.
-        self.visit(node.value)
-        target = node.target
-        if isinstance(target, ast.Name):
-            self._define_walrus_target(target.id)
-        else:  # defensive: PEP 572 only permits a bare Name target
-            self.visit(target)
-
-    def _define_walrus_target(self, name: str) -> None:
-        idx = len(self.scopes) - 1
-        while idx > 0 and self.comp_scopes[idx]:
-            idx -= 1
-        self.scopes[idx].add(name)
-        if idx == 0:
-            self.outputs.add(name)
-            self.defined_in_block.add(name)
-
-    def visit_AugAssign(self, node: ast.AugAssign) -> None:
-        if isinstance(node.target, ast.Name):
-            if not self.is_defined(node.target.id):
-                self.real_inputs.add(node.target.id)
-            self.define_variable(node.target.id)
-        elif isinstance(node.target, (ast.Subscript, ast.Attribute)):
-            parent_name = self._extract_base_name(node.target)
-            if parent_name:
-                if not self.is_defined(parent_name):
-                    self.real_inputs.add(parent_name)
-                if len(self.scopes) == 1:
-                    self.outputs.add(parent_name)
-                    self.modified_objects.add(parent_name)
-            # What selects the element is read too: `too_high` in
-            # `sales.loc[too_high, ['price']] /= 100`. Unread, it was no input,
-            # so a restart rebuilt the statement without its producer --
-            # UpstreamStateError, `name 'too_high' is not defined`
-            # -- and an edit to the mask did not re-key the statement.
-            target = node.target
-            while isinstance(target, (ast.Subscript, ast.Attribute)):
-                if isinstance(target, ast.Subscript):
-                    self.visit(target.slice)
-                target = target.value
-        if node.value:
-            self.visit(node.value)
-
-    def visit_Call(self, node: ast.Call) -> None:
-        executed = exec_literal(node) if len(self.scopes) == 1 else None
-        if executed is not None:
-            # ``exec('w = base * 2')`` runs its text in the cell's namespace:
-            # what it reads and binds is the statement's, as if written inline.
-            for stmt in executed.body:
-                self.visit(stmt)
+    def _call(self, node: ast.Call, scope: Scope) -> None:
         if isinstance(node.func, ast.Attribute):
             for keyword in node.keywords:
                 if keyword.arg == "inplace" and isinstance(keyword.value, ast.Constant) and keyword.value.value is True:
-                    parent_name = self._extract_base_name(node.func.value)
-                    if parent_name:
-                        if not self.is_defined(parent_name):
-                            self.real_inputs.add(parent_name)
-                        if len(self.scopes) == 1:
-                            self.outputs.add(parent_name)
-                            self.modified_objects.add(parent_name)
+                    self._changed(self._extract_base_name(node.func.value, scope), scope)
                     break
-        written = written_argument(node, self._writer_aliases(node)) if node.args else None
+        written = written_argument(node, self._writer_aliases(node, scope)) if node.args else None
         if written is not None:
             # ``setattr(points[7], "x", -3)`` changes ``points`` in place, as
-            # ``points[7].x = -3`` does (`visit_Attribute`); so do
-            # ``object.__setattr__``, ``operator.setitem(vars(p), 'x', -3)``,
-            # ``list.append(rows, x)``, an alias of any of them and
-            # ``map(setattr, points, ...)``.
-            parent_name = self._extract_base_name(written[1])
-            if parent_name:
-                if not self.is_defined(parent_name):
-                    self.real_inputs.add(parent_name)
-                if len(self.scopes) == 1:
-                    self.outputs.add(parent_name)
-                    self.modified_objects.add(parent_name)
-        self.generic_visit(node)
+            # ``points[7].x = -3`` does; so do ``object.__setattr__``,
+            # ``operator.setitem(vars(p), 'x', -3)``, ``list.append(rows, x)``,
+            # an alias of any of them and ``map(setattr, points, ...)``.
+            self._changed(self._extract_base_name(written[1], scope), scope)
 
-    def visit_Import(self, node: ast.Import) -> None:
-        for alias in node.names:
-            name = alias.asname or alias.name.split(".")[0]
-            self.define_variable(name)
-
-    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        for alias in node.names:
-            name = alias.asname or alias.name
-            self.define_variable(name)
-
-    def _extract_base_name(self, node: ast.expr) -> str | None:
-        if isinstance(node, ast.Name):
-            return node.id
-        if isinstance(node, (ast.Subscript, ast.Attribute)):
-            # ``globals()['points'][7].x = -3`` writes into ``points``.
-            item = namespace_item(node)
-            if item is not None and not self.is_defined(node.value.func.id):  # type: ignore[attr-defined]
-                return item
-            return self._extract_base_name(node.value)
-        if isinstance(node, ast.Call) and is_vars_of(node) and not self.is_defined("vars"):
-            # ``vars(p)['x'] = 3`` writes ``p.__dict__``, as ``p.x = 3`` does.
-            return self._extract_base_name(node.args[0])
-        return None
+    def _extract_base_name(self, node: ast.expr, scope: Scope) -> str | None:
+        while True:
+            if isinstance(node, ast.Name):
+                return node.id
+            if isinstance(node, (ast.Subscript, ast.Attribute)):
+                # ``globals()['points'][7].x = -3`` writes into ``points``.
+                item = namespace_item(node)
+                if item is not None and not self.is_defined(node.value.func.id, scope):  # type: ignore[attr-defined]
+                    return item
+                node = node.value
+            elif isinstance(node, ast.Call) and is_vars_of(node) and not self.is_defined("vars", scope):
+                # ``vars(p)['x'] = 3`` writes ``p.__dict__``, as ``p.x = 3`` does.
+                node = node.args[0]
+            else:
+                return None
 
 
 class _ForbiddenVisitor(ast.NodeVisitor):
@@ -1220,12 +996,7 @@ class CodeAnalyzer:
             # so every statement reading `sc` missed. What the
             # call really changes, `adata`, is observed at runtime instead. Module
             # SETTINGS (`plt.rcParams.update(...)`) are routed separately.
-            bound = {
-                n.id for n in walk_tree(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del))
-            }
-            for node in walk_tree(tree):
-                if isinstance(node, (ast.Import, ast.ImportFrom)):
-                    bound.update((a.asname or a.name).split(".")[0] for a in node.names)
+            bound = bound_names(tree)
             outputs = {o for o in outputs if o in bound or not instance_of(user_ns.get(o), types.ModuleType)}
         return inputs, outputs
 
@@ -1253,9 +1024,8 @@ class CodeAnalyzer:
                 tree = ast.parse(clean_code)
             except SyntaxError:
                 return set()
-        visitor = _FlowVisitor()
-        visitor.visit(tree)
-        return set(visitor.defined_in_block) - set(visitor.modified_objects)
+        flow = _FlowReplay(tree).result()
+        return set(flow.defined_in_block - flow.modified_objects)
 
     @staticmethod
     def top_level_assigned_names(code: str, tree: ast.Module | None = None) -> set[str]:
@@ -1546,7 +1316,7 @@ _FLOWS: weakref.WeakKeyDictionary[ast.AST, dict[frozenset, tuple[frozenset[str],
 
 
 def _flow(tree: ast.AST, aliases: Mapping[str, str | None] | None) -> tuple[frozenset[str], frozenset[str]]:
-    """What `_FlowVisitor` finds *tree* reads and writes, given the writer
+    """What `_FlowReplay` finds *tree* reads and writes, given the writer
     *aliases*: once per tree and aliases, which alone decide it. The
     simulation and the runtime each asked again of the same statement."""
     key = frozenset(aliases.items()) if aliases else frozenset()
@@ -1556,9 +1326,8 @@ def _flow(tree: ast.AST, aliases: Mapping[str, str | None] | None) -> tuple[froz
         answers = _FLOWS[tree] = {}
     found = answers.get(key)
     if found is None:
-        visitor = _FlowVisitor(aliases)
-        visitor.visit(tree)
-        found = answers[key] = (frozenset(visitor.real_inputs), frozenset(visitor.outputs))
+        flow = _FlowReplay(tree, aliases).result()
+        found = answers[key] = (flow.inputs, flow.outputs)
     return found
 
 

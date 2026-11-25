@@ -222,6 +222,8 @@ class Scope:
             return self.top
         if name not in self.declared_nonlocal and (name in self.params or name in self.stores):
             return self
+        if name == "__class__" and self.kind != CLASS and self._in_class():
+            return self  # the cell Python gives every method, read by `super()`
         scope = self.parent
         while scope.parent is not None:
             if name in scope.declared_global:
@@ -232,6 +234,14 @@ class Scope:
                     return scope
             scope = scope.parent
         return scope
+
+    def _in_class(self) -> bool:
+        scope = self.parent
+        while scope is not None:
+            if scope.kind == CLASS:
+                return True
+            scope = scope.parent
+        return False
 
     def walk(self) -> Iterator[Scope]:
         """This scope and every scope inside it, outermost first."""

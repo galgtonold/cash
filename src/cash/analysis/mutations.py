@@ -1318,7 +1318,7 @@ def standalone_method_mutation_receivers(tree: ast.Module | None) -> frozenset[s
     a method known to mutate its receiver (``MUTATING_METHODS``) or a pandas
     method invoked with ``inplace=True``.
 
-    These receivers carry no Store target, so ``code_analyzer._FlowVisitor``
+    These receivers carry no Store target, so the flow analysis of ``code_analyzer``
     never surfaces them as *outputs* and their lineage is left frozen — a
     cached downstream consumer then serves a stale value after the mutation is
     edited.  Both the runtime (``StatementProcessor.process_statement``) and the
