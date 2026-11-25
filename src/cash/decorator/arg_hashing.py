@@ -1647,6 +1647,9 @@ class FrameDigests:
         #: they were made from, and outlive one another. Ids whose entry is
         #: gone are skipped, and dropped once there are many.
         self._columns: dict[tuple, tuple[int, ...]] = {}
+        #: The size of ``_columns`` from which its dead ids are dropped
+        #: next (`_prune_columns`).
+        self._prune_at = _COLUMNS_PER_FRAME * maxsize
         #: ``(id, entry)`` of the last frame `lookup` found changed, for the
         #: `hash_frame` that follows to take the pieces of the columns whose
         #: memory it kept (`_memory_kept`); taken, or replaced, at once.
@@ -1661,7 +1664,28 @@ class FrameDigests:
     def clear(self) -> None:
         self._entries.clear()
         self._columns.clear()
+        self._prune_at = _COLUMNS_PER_FRAME * self._entries.maxsize
         self._changed = None
+
+    def _prune_columns(self) -> None:
+        """Drop from ``_columns`` the ids of frames whose entries are gone,
+        once it has grown to ``_prune_at``; then not again before it has
+        doubled. The walk reads the whole table, so it must not run on
+        every store: the columns of frames that are alive stay, and while
+        they were more than a fixed limit -- one frame of 20,000 columns,
+        or 300 of 60 -- every new frame hashed walked all of them again,
+        44 ms for a one-row frame that takes 1."""
+        columns = self._columns
+        if len(columns) < self._prune_at:
+            return
+        live = self._entries
+        for column, owners in list(columns.items()):
+            kept = tuple(owner for owner in owners if owner in live)
+            if kept:
+                columns[column] = kept
+            else:
+                del columns[column]
+        self._prune_at = max(_COLUMNS_PER_FRAME * live.maxsize, 2 * len(columns))
 
     def forget_moved_lists(self, obj: Any) -> None:
         """Drop *obj*'s entry when its shallow copy holds a block of lists
@@ -1823,14 +1847,7 @@ class FrameDigests:
         self._entries[key] = (wref, held, signature, content_hash, since, pieces or {}, kept)
         if pieces:
             columns = self._columns
-            if len(columns) > 64 * self._entries.maxsize:
-                live = set(self._entries.keys())
-                for column, owners in list(columns.items()):
-                    kept = tuple(owner for owner in owners if owner in live)
-                    if kept:
-                        columns[column] = kept
-                    else:
-                        del columns[column]
+            self._prune_columns()
             for column in pieces:
                 owners = columns.get(column, ())
                 alive = (owner for owner in owners if owner != key and owner in self._entries)
@@ -1936,6 +1953,11 @@ class _KnownPieces:
 
 #: Frames remembered per shared column (`FrameDigests._columns`).
 _COLUMN_OWNERS = 4
+
+#: Columns per remembered frame the table of shared columns may hold before
+#: the ids of dropped frames are first cleared from it
+#: (`FrameDigests._prune_columns`).
+_COLUMNS_PER_FRAME = 64
 
 
 class _FramePieces(ColumnPieces):
