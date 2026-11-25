@@ -20,7 +20,9 @@ np = pytest.importorskip("numpy")
 pytestmark = pytest.mark.core
 
 
-@pytest.mark.parametrize("make", [lambda: pd.DataFrame({"a": [1, 2]}), lambda: pd.Series([1, 2])], ids=["frame", "series"])
+@pytest.mark.parametrize(
+    "make", [lambda: pd.DataFrame({"a": [1, 2]}), lambda: pd.Series([1, 2])], ids=["frame", "series"]
+)
 def test_the_flag_is_in_the_hash(make):
     plain, strict = make(), make().set_flags(allows_duplicate_labels=False)
     assert hash_pandas(plain) != hash_pandas(strict)

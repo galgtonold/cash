@@ -75,4 +75,3 @@ def test_many_frames_one_after_the_other_walk_the_table_a_few_times(memo):
     assert 0 < table.walked <= 6 * 60_000
     # The walks did drop the ids of the frames the memo no longer holds.
     assert len(table) <= 2 * 64 * 256
-

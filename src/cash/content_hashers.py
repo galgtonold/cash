@@ -177,9 +177,7 @@ def hash_pandas(value: Any) -> str | None:
             columns = value.columns
             column_dtypes = [_pandas_dtype_key(dt) for dt in getattr(columns, "dtypes", [columns.dtype])]
             labels = (*columns.names, *index.names)
-            schema = (
-                f"{list(columns.names)!r}:{column_dtypes!r}:{getattr(columns, 'freq', None)!r}:{dtypes!r}:{axes}"
-            )
+            schema = f"{list(columns.names)!r}:{column_dtypes!r}:{getattr(columns, 'freq', None)!r}:{dtypes!r}:{axes}"
         else:  # Series
             labels = (value.name, *index.names)
             schema = f"{value.name!r}:{_pandas_dtype_key(value.dtype)!r}:{axes}"
