@@ -716,7 +716,7 @@ large frame of text columns hashes at about 0.2 s per million rows.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @af1e5f6d, cash/decorator/purity_checks.py:PurityChecks.warn_shared_on_hit @cdd6af30, cash/decorator/purity_checks.py:PurityChecks._shared_with @c1fd42b0, cash/decorator/purity_checks.py:_shared_argument_item @d1be9c9d, cash/decorator/purity_checks.py:SHARED_ARGUMENT_ITEMS == 500000 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @af1e5f6d, cash/decorator/purity_checks.py:PurityChecks.warn_shared_on_hit @cdd6af30, cash/decorator/purity_checks.py:PurityChecks._shared_with @712b939a, cash/decorator/purity_checks.py:_shared_argument_item @d1be9c9d, cash/decorator/purity_checks.py:SHARED_ARGUMENT_ITEMS == 500000 -->
 **What happened.** The result shares state with an object outside the
 call: an argument, or something the function reaches by name. On the first
 run, a write through one shows in the other. A cache hit returns a separate
@@ -3302,7 +3302,7 @@ statement, on the line above it or at the end of its line. It turns off the
 rewind as well as caching, and the statement no longer raises this warning.
 `# @cash:allow-random` only silences the warning.
 
-<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @f47b657d -->
+<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @22361a8b -->
 With `@cash.cache`: the check runs when the decorator is applied, once per
 function, and reads only that function's source. A draw from the global
 `random` or `numpy.random` stream is not reported when a seed of that stream
@@ -3418,7 +3418,7 @@ still changes the key.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/remote_source.py:RemoteFileDataSource._warn_failure @7f36a07c -->
+<!-- claim: cash/remote_source.py:RemoteFileDataSource._warn_failure @5387d68e -->
 **What happened.** Reading a remote file's state failed. The message names
 the URL and the exception. cash recomputed rather than serve an unchecked
 result.
@@ -3632,7 +3632,7 @@ multiple of 8 inside the memory the process uses.
 **Why it matters.** Nobody can say which version of the file the result came
 from, so storing it could serve a stale result later.
 
-<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker.add_tracked_remote @d35cd256, cash/tracking/file_tracker.py:FileAccessTracker._remote_changed_since_read @005b2b15, cash/tracking/file_dep_snapshot.py:remote_moved @4e5eda40 -->
+<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker.add_tracked_remote @611599fe, cash/tracking/file_tracker.py:FileAccessTracker._remote_changed_since_read @005b2b15, cash/tracking/file_dep_snapshot.py:remote_moved @4e5eda40 -->
 For a remote object cash asks the store for its validator before the read and
 again when the result is stored, and compares the two: a miss costs two
 metadata requests per object. Inside a revalidation window
