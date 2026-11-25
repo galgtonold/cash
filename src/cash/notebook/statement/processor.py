@@ -16,7 +16,7 @@ import os
 import secrets
 import sys
 import types
-from collections.abc import Callable, Collection, Generator, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Generator, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from typing import Any
 
@@ -87,7 +87,7 @@ from cash.notebook.statement.derivation_edges import (
     shared_object_partners,
     unlink,
 )
-from cash.notebook.statement.directives import statement_directives, ttl_floor_from_called_functions
+from cash.notebook.statement.directives import statement_directives
 from cash.notebook.statement.evictions import EvictedRecomputes
 from cash.notebook.statement.expression_memo import ExpressionMemo
 from cash.notebook.statement.file_deps import StatementFileDeps
@@ -117,6 +117,7 @@ from cash.notebook.statement.input_change import (
 )
 from cash.notebook.statement.last_runs import KeyParts, LastRuns
 from cash.notebook.statement.lineage import StatementLineageBuilder, clear_rebound_edges
+from cash.notebook.statement.lookup import StatementLookup
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON, MissGuard
 from cash.notebook.statement.mutation_routing import MutationRouting, rebound_only
 from cash.notebook.statement.mutations import MutationClassifier
@@ -1088,6 +1089,7 @@ class StatementProcessor:
         self._stmt_restorer = StatementRestorer(shell=shell, compute_hash=compute_hash_fn)
         self._records = StatementRecords(shell, self.tracking_state, cash_instance, self.function_tracker)
         self._in_loop = InLoopChanges(shell, self.tracking_state, self._records)
+        self._lookups = StatementLookup(shell, self.tracking_state, self._freshness, self._miss_guard, self._records)
         self._mutation_routing = MutationRouting(
             shell, self.tracking_state, self._mutations, self._records, self._in_loop, self._cheap_to_rerun
         )
@@ -1830,7 +1832,7 @@ class StatementProcessor:
         unseeded_fits = self._randomness.warn_unseeded_estimator_fit(run.code, fits_cached, run.allow_random)
         self._randomness.stamp_random_effect(run.metrics, run.code, run.unseeded_calls, unseeded_fits)
 
-        metadata, cached_data = self._lookup(run, analysis_time, hash_time)
+        metadata, cached_data = self._lookups.lookup(run, analysis_time, hash_time)
         if run.must_run:
             # It learns what it changes as it runs: a restore would not.
             metadata, cached_data = None, None
@@ -2764,25 +2766,6 @@ class StatementProcessor:
             )
             run.skip_cache = True
             run.drew_from_stream = True
-
-    def _lookup(
-        self, run: StatementRun, analysis_time: float, hash_time: float
-    ) -> tuple[StatementCacheMetadata | None, Any | None]:
-        """Look *run* up in the cache: ``(metadata, cached_data)``, both None
-        on a miss or a skipped lookup."""
-        run.effective_ttl = ttl_floor_from_called_functions(run.inputs, run.effective_ttl, self.shell.user_ns)
-        metadata, cached_data, cache_check_time = self._do_cache_lookup(
-            run.skip_cache, run.cache_key, run.effective_ttl, run.inputs, run.metrics["uncacheable_reasons"]
-        )
-        if cached_data is None and not run.skip_cache:
-            run.stale_file = self._freshness.last_stale_file
-        self._observe_miss_guard(run.skip_cache, run.code, run.source_hash, run.cache_key, cached_data, run.inputs)
-
-        if logger.isEnabledFor(logging.DEBUG):
-            self._log_cache_lookup(
-                run.code, run.cache_key, run.inputs, cached_data, analysis_time, hash_time, cache_check_time
-            )
-        return metadata, cached_data
 
     def _serve_hit(
         self,
@@ -4027,67 +4010,6 @@ class StatementProcessor:
         self._records.begin_cell()
         self._rebuild_cost.begin_cell()
         self._calls.begin_cell()
-
-    def _do_cache_lookup(
-        self,
-        skip_cache: bool,
-        cache_key: str,
-        ttl: int | None,
-        inputs: set[str],
-        reasons: Sequence[str] = (),
-    ) -> tuple[StatementCacheMetadata | None, Any | None, float]:
-        """Run cache lookup unless *skip_cache* is set; a skipped lookup is
-        logged with the *reasons* the statement runs every time."""
-        if not skip_cache:
-            return self._freshness.check_cache(
-                self.tracking_state, cache_key, ttl, inputs, epoch=file_state_epoch(), bound=self.shell.user_ns
-            )
-        logger.debug(
-            "%s Skipping cache lookup: %s",
-            _LOG_ANNOTATION,
-            "; ".join(reasons) or "the statement runs every time (@cash:no-cache, or a statement cash never stores)",
-        )
-        return None, None, 0.0
-
-    def _observe_miss_guard(
-        self,
-        skip_cache: bool,
-        code: str,
-        source_hash: str,
-        cache_key: str,
-        cached_data: Any,
-        inputs: set[str] | None = None,
-    ) -> None:
-        """Feed one lookup outcome to the perpetual-miss guard.
-
-        Called on every run that actually performed a lookup — a skipped lookup
-        never serialises either, so it carries no evidence about whether
-        serialising pays back.
-
-        A *hit* is "the key matched an entry", i.e. ``cached_data`` is not None.
-        A key that matched but whose entry was invalidated (TTL / changed file
-        dep) reads as a miss here, and correctly so: the key was STABLE, so it
-        registers no churn and cannot move the counter. That workflow —
-        recompute because a file changed, cache for the next unchanged run — is
-        exactly the one that must never be guarded.
-
-        Control-structure BODY statements are excluded, following the same
-        precedent as mutation classification: they arrive with a per-iteration
-        marker comment, so every iteration is a different ``source_hash``. The
-        "identical source, run repeatedly" signature is meaningless for them, and
-        recording one per iteration would grow the store by the loop's trip
-        count.
-        """
-        if skip_cache:
-            return
-        if has_marker(code):
-            return
-        self._miss_guard.observe(
-            source_hash,
-            cache_key,
-            hit=cached_data is not None,
-            components=self._records.lineages_read(inputs) if inputs else {},
-        )
 
     def _other_thread_alive(self) -> bool:
         """`trace_recorder.other_thread_alive` in the notebook's namespace."""
@@ -6677,27 +6599,6 @@ class StatementProcessor:
                 writers.remove(code)
             writers.append(code)
         return None
-
-    def _log_cache_lookup(
-        self,
-        code: str,
-        cache_key: str,
-        inputs: set[str],
-        cached_data: Any,
-        analysis_time: float,
-        hash_time: float,
-        cache_check_time: float,
-    ) -> None:
-        logger.debug("[CACHE DEBUG] Statement: %s...", code[:50])
-        logger.debug("[CACHE DEBUG] Key: %s...", cache_key[:40])
-        logger.debug("[CACHE DEBUG] Inputs: %s", inputs)
-        logger.debug("[CACHE DEBUG] Cache hit: %s", cached_data is not None)
-        logger.debug(
-            "[TIMING] Analysis: %.1fms | Hash: %.1fms | Lookup: %.1fms",
-            analysis_time * 1000,
-            hash_time * 1000,
-            cache_check_time * 1000,
-        )
 
     def _handle_execution_error(self, result: Any, silent: bool) -> bool | None:
         if not silent:
