@@ -107,7 +107,8 @@ def register_cell_source(code: str) -> str:
         offset = first - 1 if first > 1 else 0
         cell_lines = cell.splitlines(True)
         mine = [line.rstrip("\r\n") for line in lines]
-        if [line.rstrip("\r\n") for line in cell_lines[offset : offset + len(mine)]] == mine:
+        theirs = [line.rstrip("\r\n") for line in cell_lines[offset : offset + len(mine)]]
+        if theirs == mine or _begins_its_last_line(mine, theirs):
             lines = cell_lines  # the lines around it too, as IPython shows them
         else:
             lines = ["\n"] * offset + lines
@@ -116,6 +117,19 @@ def register_cell_source(code: str) -> str:
             named[name] = number
     linecache.cache[name] = (sum(map(len, lines)), None, lines, name)
     return name
+
+
+def _begins_its_last_line(mine: list[str], theirs: list[str]) -> bool:
+    """Whether the statement with the lines *mine* stands in the cell's
+    lines *theirs* with another statement after it on its last line
+    (``warnings.warn('careful'); x = 1``): its columns are the cell's then,
+    so the cell's line is shown whole, as plain Jupyter quotes it in a
+    warning or a traceback. A statement that follows another on its line
+    has other columns, and keeps its own text."""
+    if not mine or len(theirs) != len(mine) or theirs[:-1] != mine[:-1]:
+        return False
+    last, whole = mine[-1], theirs[-1]
+    return whole.startswith(last) and whole[len(last) :].lstrip().startswith(";")
 
 
 def is_cash_filename(filename: str | None) -> bool:
