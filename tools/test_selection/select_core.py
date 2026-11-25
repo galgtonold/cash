@@ -16,9 +16,19 @@ Selection is greedy weighted set cover: repeatedly take the passing test with
 the most new elements per second of runtime. The headline-feature files in
 ``ALWAYS`` are taken first. Failed, errored and skipped tests are never picked.
 
+Cover says each line ran, not that each behaviour was asserted: a folder of
+1,400 tests over the same lines got 42 picks, the chart folder none. So the
+set is then topped up to a floor, ``FLOOR`` of each feature folder's tests
+(`top_up`), with the cheapest tests from as many files as possible.
+
 Usage::
 
     python tools/test_selection/select_core.py --out .testsel
+
+    # Top up the committed list to the floor without a baseline run (no
+    # durations: one test per file in turn). Run the added tests before
+    # committing the list.
+    python tools/test_selection/select_core.py --top-up
 """
 
 from __future__ import annotations
@@ -26,13 +36,20 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import math
 import re
+import subprocess
+import sys
 from collections import Counter, defaultdict
 from itertools import combinations
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
+INTEGRATION = "tests/test_notebook_integration"
+
+#: The share of each feature folder's tests the core set holds at least.
+FLOOR = 0.05
 
 # Always in the core set: the files that exercise the headline features.
 ALWAYS = [
@@ -273,13 +290,97 @@ def elements_for(nodeid, lines, feats, steps):
     return el
 
 
+def folder_of(nodeid: str) -> str:
+    """The feature folder of an integration test: the directory under
+    ``tests/test_notebook_integration`` (``""`` for a test at its top)."""
+    parts = nodeid.split("::", 1)[0].split("/")
+    return parts[2] if len(parts) > 3 else ""
+
+
+def floor_of(count: int, share: float = FLOOR) -> int:
+    """How many of a folder's *count* tests the core set holds at least."""
+    return math.ceil(count * share) if count else 0
+
+
+def top_up(chosen, candidates, cost=None, share: float = FLOOR) -> list[str]:
+    """The tests to add to *chosen* so that every feature folder has its
+    floor: *share* of the folder's tests among *candidates* (which include
+    the chosen ones), rounded up.
+
+    Taken a file at a time, so the additions spread over a folder's files
+    before any file gives a second test; within a turn the cheapest first
+    by *cost* (seconds per test; by name where unknown)."""
+    cost = cost or {}
+    chosen = set(chosen)
+    by_folder: dict[str, list[str]] = defaultdict(list)
+    for nodeid in candidates:
+        by_folder[folder_of(nodeid)].append(nodeid)
+    added: list[str] = []
+    for folder in sorted(by_folder):
+        tests = by_folder[folder]
+        short = floor_of(len(tests), share) - sum(1 for n in tests if n in chosen)
+        if short <= 0:
+            continue
+        by_file: dict[str, list[str]] = defaultdict(list)
+        for nodeid in sorted(tests, key=lambda n: (cost.get(n, 0.0), n)):
+            if nodeid not in chosen:
+                by_file[nodeid.split("::", 1)[0]].append(nodeid)
+        turn = 0
+        while short > 0:
+            this_turn = [queue[turn] for queue in by_file.values() if len(queue) > turn]
+            if not this_turn:
+                break
+            take = sorted(this_turn, key=lambda n: (cost.get(n, 0.0), n))[:short]
+            added += take
+            short -= len(take)
+            turn += 1
+    return added
+
+
+def below_floor(chosen, candidates, share: float = FLOOR) -> dict[str, tuple[int, int]]:
+    """``folder -> (held, floor)`` for each folder the set holds too few of."""
+    held = Counter(folder_of(n) for n in chosen)
+    count = Counter(folder_of(n) for n in candidates)
+    return {f: (held[f], floor_of(c, share)) for f, c in sorted(count.items()) if held[f] < floor_of(c, share)}
+
+
+def collected_tests() -> list[str]:
+    """Every integration test pytest collects in this checkout."""
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", "-n", "0", "-p", "no:randomly", INTEGRATION],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    if proc.returncode != 0:
+        raise SystemExit(f"pytest could not collect {INTEGRATION}:\n{proc.stdout[-2000:]}{proc.stderr[-2000:]}")
+    return [line for line in proc.stdout.splitlines() if line.startswith(INTEGRATION + "/")]
+
+
+def top_up_committed() -> int:
+    """Bring the committed list up to the floor and print what was added."""
+    path = HERE / "core_set.txt"
+    chosen = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    added = top_up(chosen, collected_tests())
+    path.write_text("\n".join(sorted({*chosen, *added})) + "\n", encoding="utf-8")
+    print("\n".join(added))
+    print(f"{len(added)} tests added: run them before committing the list", file=sys.stderr)
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=str(ROOT / ".testsel"))
     ap.add_argument(
         "--overhead", type=float, default=1.0, help="seconds added to every test's cost (kernel handover etc.)"
     )
+    ap.add_argument(
+        "--top-up", action="store_true", help="add tests to the committed core_set.txt until each folder has its floor"
+    )
     args = ap.parse_args()
+    if args.top_up:
+        return top_up_committed()
     out = Path(args.out)
 
     results = json.loads((out / "results.json").read_text(encoding="utf-8"))
@@ -311,6 +412,11 @@ def main() -> int:
         covered |= els[best]
         remaining.discard(best)
 
+    by_cover = len(chosen)
+    for n in top_up(chosen, passing, cost):
+        chosen.append(n)
+        covered |= els[n]
+
     universe = set().union(*els.values()) if els else set()
     kinds = Counter(e[0] for e in universe)
     kinds_cov = Counter(e[0] for e in covered)
@@ -340,6 +446,7 @@ def main() -> int:
         f"- Passed after a rerun (flaky here): {len(flaky)}",
         f"- Core set: **{len(chosen)} tests**, {core_time / 60:.1f} min of test time "
         f"vs {total_time / 60:.1f} min for the full suite ({core_time / max(total_time, 1):.0%})",
+        f"- Of these, {len(chosen) - by_cover} were added for the floor of {FLOOR:.0%} of each feature folder",
         f"- Passing tests with no coverage recorded (labelling failed?): {len(missing_ctx)}",
         "",
         "| Element | In suite | Covered by core set |",
