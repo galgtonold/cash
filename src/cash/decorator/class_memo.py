@@ -201,7 +201,7 @@ class _Proof:
             self.reaches_cached = bool(reached)
             self.cells, self.tags = _weakened(cells), _weakened(tags)
             self.outside = _outside_namespaces(cls, found, cells, tags, watched)
-        except Exception:  # noqa: BLE001 - Ineligible, or a scan that broke: folded every time
+        except Exception:  # noqa: BLE001 - fails closed: Ineligible, or a scan that broke: folded every time
             STATS["refused"] += 1
             self.backoff = _MAX_BACKOFF
             return False

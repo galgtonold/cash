@@ -174,7 +174,7 @@ class HelperFoldMemo:
             return compute()
         try:
             cells = hit_memo.watch_helper(helper, root_module)
-        except Exception:  # noqa: BLE001 - Ineligible, or a scan that broke: folded every time
+        except Exception:  # noqa: BLE001 - fails closed: Ineligible, or a scan that broke: folded every time
             self._refused[(id(helper), world)] = helper
             STATS["refused"] += 1
             return compute()

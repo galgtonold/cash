@@ -636,9 +636,9 @@ def unshared_hash(obj: Any) -> str:
         return unshared_digest(obj)
     except HashBudgetExceeded:
         raise
-    except Exception as exc:  # noqa: BLE001 - whatever stops this pickle, as `compute_hash` reads it
+    except Exception as exc:  # noqa: BLE001 - fails closed: whatever stops this pickle, as `compute_hash` reads it
         logger.debug("Unshared hash failed for %s: %r", class_name(type(obj)), exc)
-    except BaseException as exc:
+    except BaseException as exc:  # fails closed
         if not is_native_panic(exc):
             raise
     return compute_hash(obj)
@@ -798,14 +798,14 @@ def _compute_hash(obj: Any) -> str:
         raise
     except HASH_ERRORS as exc:
         logger.debug("Primary hash failed for %s: %s", type_name, exc)
-    except Exception as exc:  # noqa: BLE001 - see below
+    except Exception as exc:  # noqa: BLE001 - fails closed: see below
         # Whatever a user's `__reduce__` or `__getstate__` raises: the value
         # has no content hash, so it gets the identity tier, which callers
         # recognise as content-blind. Raised to the user, it failed a cell
         # that plain Python runs.
         logger.debug("Hash failed for %s: %r", type_name, exc)
         return identity_hash(obj)
-    except BaseException as exc:
+    except BaseException as exc:  # fails closed
         if not is_native_panic(exc):
             raise
         return identity_hash(obj)
@@ -814,12 +814,12 @@ def _compute_hash(obj: Any) -> str:
         return _pickle_digest(obj)
     except HashBudgetExceeded:
         raise
-    except Exception:  # noqa: BLE001 - see below
+    except Exception:  # noqa: BLE001 - fails closed: see below
         # Python 3.13 raises AttributeError for an instance of a class
         # defined inside a function ("Can't get local object"); a user's
         # `__reduce__` may raise anything.
         pass
-    except BaseException as exc:
+    except BaseException as exc:  # fails closed
         if not is_native_panic(exc):
             raise
 

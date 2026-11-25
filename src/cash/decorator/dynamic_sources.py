@@ -108,7 +108,7 @@ class Resolution:
         if self._owner is not None:
             try:
                 pickle.dumps(self._resolvers, protocol=pickle.HIGHEST_PROTOCOL)
-            except Exception:  # noqa: BLE001 - a lambda, a local function
+            except Exception:  # noqa: BLE001 - fails closed: a lambda, a local function
                 return (_resolution_by_reference, state)
         return (Resolution, (self._func_name, self._resolvers, self._args, self._kwargs, self._expected, self._owner))
 
@@ -116,7 +116,7 @@ class Resolution:
         """About how much the call's arguments hold: their pickled size."""
         try:
             return len(pickle.dumps((self._args, self._kwargs), protocol=pickle.HIGHEST_PROTOCOL))
-        except Exception:  # noqa: BLE001 - an argument that does not pickle
+        except Exception:  # noqa: BLE001 - fails closed: an argument that does not pickle
             return _UNSIZED_BYTES
 
     def resolve_now(self) -> list[tuple[str, str]]:
@@ -132,7 +132,7 @@ class Resolution:
         tokens; a resolver or token that raises is not shown unchanged."""
         try:
             return self.resolve_now() == self._expected
-        except Exception:
+        except Exception:  # fails closed
             logger.debug("[CORE] a dynamic_depends_on resolver raised when asked again", exc_info=True)
             return False
 
@@ -217,7 +217,7 @@ def recorded_sources(tracker: Any) -> DynamicSources | None:
         record = {"id": source_id, "token": token}
         try:
             data = pickle.dumps(source, protocol=pickle.HIGHEST_PROTOCOL)
-        except Exception:
+        except Exception:  # fails closed
             logger.debug("[CORE] dynamic source %s does not pickle", source_id, exc_info=True)
             picklable = False
             data = None
@@ -251,7 +251,7 @@ def _resolver_record(resolution: Resolution) -> dict[str, str]:
     (`_HeldCalls`), as one that does not pickle at all."""
     try:
         data = pickle.dumps(resolution, protocol=pickle.HIGHEST_PROTOCOL)
-    except Exception:
+    except Exception:  # fails closed
         logger.debug("[CORE] a dynamic_depends_on resolver call does not pickle", exc_info=True)
         return {"here_only": "1", "bytes": str(resolution.argument_bytes())}
     if len(data) > INLINE_PICKLE_BYTES:
@@ -346,7 +346,7 @@ def _unpickled_resolution(record: dict[str, str], fetch: Callable[[str], Any] | 
     data = base64.b64decode(blob)
     try:
         resolution = pickle.loads(data)
-    except Exception:
+    except Exception:  # fails closed
         logger.debug("[CORE] a dynamic_depends_on resolver call does not unpickle", exc_info=True)
         return None
     if not isinstance(resolution, Resolution):
@@ -396,7 +396,7 @@ def _unpickled(record: dict[str, str], fetch: Callable[[str], Any] | None) -> Da
             return known
         try:
             data = fetch(source_key(digest)) if fetch is not None else None
-        except Exception:
+        except Exception:  # fails closed
             logger.debug("[CORE] dynamic source %s could not be read", record.get("id"), exc_info=True)
             data = None
         if not isinstance(data, bytes) or hashlib.sha256(data).hexdigest() != digest:
@@ -408,7 +408,7 @@ def _unpickled(record: dict[str, str], fetch: Callable[[str], Any] | None) -> Da
         data = base64.b64decode(blob)
     try:
         source = pickle.loads(data)
-    except Exception:
+    except Exception:  # fails closed
         logger.debug("[CORE] dynamic source %s does not unpickle", record.get("id"), exc_info=True)
         return None
     if not isinstance(source, DataSource):
@@ -442,7 +442,7 @@ def dynamic_sources_fresh(
     for source, record in zip(sources, records):
         try:
             token = state_token_of(source)
-        except Exception:
+        except Exception:  # fails closed
             logger.debug("[CORE] state_token() of %s raised", record.get("id"), exc_info=True)
             return False
         if token != record.get("token"):

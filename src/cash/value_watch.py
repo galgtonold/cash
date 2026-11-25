@@ -183,7 +183,7 @@ def classify(t: type) -> tuple[bool, tuple, bool]:
     """
     try:
         return _classify(t)
-    except Exception:  # noqa: BLE001 - a class that cannot even be inspected: not watched
+    except Exception:  # noqa: BLE001 - fails closed: a class that cannot even be inspected: not watched
         return False, (), False
 
 
@@ -234,7 +234,7 @@ def _classify(t: type) -> tuple[bool, tuple, bool]:
     for klass in mro[:-1]:
         try:
             klass.__annotations__  # read for what it writes
-        except Exception:  # noqa: BLE001 - nothing to write
+        except Exception:  # noqa: BLE001 - fails closed: nothing to write
             pass
     # What pickle reads its slots by (none, for most), worked out now:
     # `copyreg._slotnames` writes ``__slotnames__`` into the class the first
@@ -260,7 +260,7 @@ def _views_of(obj: Any) -> frozenset | None:
             if not all(_plain_view_class(type(held[name])) for name in views):
                 return None
         return frozenset(views)
-    except Exception:  # noqa: BLE001 - what the key's own call would raise: hashed every time
+    except Exception:  # noqa: BLE001 - fails closed: what the key's own call would raise: hashed every time
         return None
 
 
@@ -348,7 +348,7 @@ def _anchors() -> tuple:
     if ipython is not None:
         try:
             shell = ipython.get_ipython()
-        except Exception:  # noqa: BLE001 - no shell
+        except Exception:  # noqa: BLE001 - fails closed: no shell
             shell = None
         user_ns = getattr(shell, "user_ns", None)
         if isinstance(user_ns, dict) and all(user_ns is not other for other in found):

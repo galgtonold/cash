@@ -653,7 +653,7 @@ class GlobalsFold:
                 continue
             try:
                 report = get_analyzer().analyze_reached(fn)
-            except Exception:  # noqa: BLE001 - built on every call instead
+            except Exception:  # noqa: BLE001 - fails closed: built on every call instead
                 return None
             if (
                 report.unwalkable
@@ -829,7 +829,7 @@ class GlobalsFold:
         """
         try:
             report = get_analyzer().analyze_reached(fn)
-        except Exception as e:  # noqa: BLE001 - no report means no key, not a partial one
+        except Exception as e:  # noqa: BLE001 - fails closed: no report means no key, not a partial one
             report = PurityReport(unwalkable=f"cash could not find the helpers it calls ({class_name(type(e))}: {e})")
         if report.unwalkable:
             raise KeyBuildFailed(

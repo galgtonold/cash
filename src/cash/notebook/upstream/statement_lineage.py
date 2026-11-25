@@ -747,7 +747,7 @@ class StatementLineage:
         try:
             text = transform(cell) if callable(transform) else clean_cell_source(cell)
             return ast.unparse(ast.parse(text))
-        except Exception:  # noqa: BLE001 - IPython's transform of arbitrary text
+        except Exception:  # noqa: BLE001 - fails closed: IPython's transform of arbitrary text
             tree = parse_cell_source(cell)
             return ast.unparse(tree) if tree is not None else ""
 

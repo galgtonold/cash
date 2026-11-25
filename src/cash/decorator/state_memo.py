@@ -474,7 +474,7 @@ def _same(a: Any, b: Any, depth: int = 0) -> bool:
         return len(a) == len(b) and all(_same(x, y, depth + 1) for x, y in zip(a, b))
     try:
         return bool(a == b)
-    except Exception:  # noqa: BLE001 - not comparable: not the same
+    except Exception:  # noqa: BLE001 - fails closed: not comparable: not the same
         return False
 
 
@@ -589,7 +589,7 @@ class StateMemo:
                 self.outside = main_rebinding.outside_namespaces(
                     reports, cells, tags, watched, (plain_getattr(self.spec.func, "__module__", None),)
                 )
-        except Exception:  # noqa: BLE001 - Ineligible, or a scan that broke: the ordinary path
+        except Exception:  # noqa: BLE001 - fails closed: Ineligible, or a scan that broke: the ordinary path
             STATS["scans_failed"] += 1
             return False
         self.cells, self.tags, self.family = cells, tags, family

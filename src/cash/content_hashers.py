@@ -331,7 +331,7 @@ def index_memory_key(index: Any, pd: Any) -> tuple | None:
             str(index.dtype),
             route,
         )
-    except Exception:  # noqa: BLE001 - pandas internals changed: read the labels
+    except Exception:  # noqa: BLE001 - fails closed: pandas internals changed: read the labels
         return None
 
 
@@ -557,7 +557,7 @@ def read_into_memo(frame: Any) -> bool:
         return False
     try:
         return _FRAME_READER[0](frame) is not None
-    except Exception:  # noqa: BLE001 - only a speedup: nothing is known
+    except Exception:  # noqa: BLE001 - fails closed: only a speedup: nothing is known
         return False
 
 
@@ -570,7 +570,7 @@ def known_column_pieces(frame: Any) -> Any:
         return None
     try:
         return _PIECE_SOURCE[0](frame)
-    except Exception:  # noqa: BLE001 - only a speedup: nothing is known
+    except Exception:  # noqa: BLE001 - fails closed: only a speedup: nothing is known
         return None
 
 
@@ -651,7 +651,7 @@ def column_memory_key(frame: Any, pos: int, route: str | None, dtype: Any = None
             dtype,
             route,
         )
-    except Exception:  # noqa: BLE001 - pandas internals changed: read the column
+    except Exception:  # noqa: BLE001 - fails closed: pandas internals changed: read the column
         return None
 
 
@@ -704,7 +704,7 @@ def _column_buffers(frame: Any) -> Callable[[int, Any], Any]:
     try:
         mgr = _pandas_compat.manager(frame)
         blocks, blknos, blklocs = _pandas_compat.column_layout(mgr)
-    except Exception:  # noqa: BLE001 - pandas internals changed: through iloc
+    except Exception:  # noqa: BLE001 - fails closed: pandas internals changed: through iloc
         return lambda pos, dtype: None
     slab: list[Any] = [None, 0, 0, None]  # block values, first row, stop, the copy
 
@@ -731,7 +731,7 @@ def _column_buffers(frame: Any) -> Callable[[int, Any], Any]:
             if values.flags.f_contiguous and not values.flags.c_contiguous and values.shape[1] > 1:
                 return strided(values, row)
             return values[row]
-        except Exception:  # noqa: BLE001 - through iloc
+        except Exception:  # noqa: BLE001 - fails closed: through iloc
             return None
 
     return buffer
@@ -878,7 +878,7 @@ def _joined(pa: Any, run: list) -> list:
         return run
     try:
         return [pa.concat_arrays(run)]
-    except Exception:  # noqa: BLE001 - read one by one, as before
+    except Exception:  # noqa: BLE001 - fails closed: read one by one, as before
         return run
 
 
@@ -1599,10 +1599,10 @@ def lazy_frame_sources(value: Any) -> list[str] | None:
             warnings.simplefilter("ignore")  # the JSON format is deprecated, not gone
             plan = json.loads(value.serialize(format="json"))
         _plan_paths(plan, found)
-    except Exception:  # noqa: BLE001 - polars raises its own types
+    except Exception:  # noqa: BLE001 - fails closed: polars raises its own types
         try:
             text = value.explain(optimized=False)
-        except Exception:  # noqa: BLE001 - polars raises its own types
+        except Exception:  # noqa: BLE001 - fails closed: polars raises its own types
             return None
         for listed in _EXPLAIN_SCAN.findall(text):
             found.extend(p.strip() for p in listed.split(",") if p.strip() and not p.strip().startswith("..."))
@@ -1665,12 +1665,12 @@ def hash_polars(value: Any) -> str | None:
         if isinstance(value, pl.LazyFrame):
             try:
                 return hashlib.sha256(value.serialize()).hexdigest()
-            except Exception:  # noqa: BLE001 - polars raises its own types
+            except Exception:  # noqa: BLE001 - fails closed: polars raises its own types
                 logger.debug("polars LazyFrame serialize() failed; no built-in hash for it")
                 return None
     except (ImportError, TypeError, ValueError, AttributeError):
         logger.debug("Failed to hash polars %s", class_name(type(value)))
-    except BaseException as exc:
+    except BaseException as exc:  # fails closed
         if not is_native_panic(exc):
             raise
         logger.debug("polars panicked hashing a %s: %s", class_name(type(value)), exc)
@@ -1712,9 +1712,9 @@ def polars_signature(value: Any) -> tuple | None:
             for column in _newest_arrow_columns(frame, pl)
         )
         return (schema, frame.height, columns)
-    except Exception:  # noqa: BLE001 - polars or pyarrow refused: no signature, hash it
+    except Exception:  # noqa: BLE001 - fails closed: polars or pyarrow refused: no signature, hash it
         return None
-    except BaseException as exc:
+    except BaseException as exc:  # fails closed
         if not is_native_panic(exc):
             raise
         return None
@@ -1773,7 +1773,7 @@ def _rows_read_at_once(frame: Any) -> int:
         if kernels is not None and hasattr(kernels, "copy_pieces"):
             return frame.height
         return frame.height // max(1, *frame.n_chunks("all"))
-    except Exception:  # noqa: BLE001 - polars raises its own types; fold on one thread
+    except Exception:  # noqa: BLE001 - fails closed: polars raises its own types; fold on one thread
         return 0
 
 
@@ -1830,7 +1830,7 @@ def _fold_polars_columns(h: Any, columns: list[tuple[str, Any]], rows_at_once: i
                 return
             try:
                 columns[i][1].fold(records[i])  # type: ignore[arg-type]
-            except BaseException as exc:  # noqa: BLE001 - re-raised on the caller's thread
+            except BaseException as exc:  # noqa: BLE001 - fails closed: re-raised on the caller's thread
                 with lock:
                     errors.append(exc)
                 return
@@ -2032,7 +2032,7 @@ def held_objects(value: Any) -> list | None:
                 columns.extend(value.get_column(n).to_list() for n, dt in value.schema.items() if dt == pl.Object)
             elif isinstance(value, pl.Series) and value.dtype == pl.Object:
                 columns.append(value.to_list())
-    except Exception:  # a library's internals changed: nothing found
+    except Exception:  # fails open: a library's internals changed: the objects an array or column holds are not walked
         logger.debug("Could not list the objects a %s holds", class_name(type(value)), exc_info=True)
         return None
     found: list = []
@@ -2156,7 +2156,7 @@ class ArrowDigests:
                 return digest
             entries = self._entries
             wref = _weak.ref(value, lambda _ref, key=key, entries=entries: entries.pop(key, None))
-        except Exception:  # noqa: BLE001 - the memo is a speedup: read it next time
+        except Exception:  # noqa: BLE001 - fails closed: the memo is a speedup: read it next time
             return digest
         self._entries[key] = (wref, digest)
         return digest

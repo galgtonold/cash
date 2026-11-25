@@ -431,7 +431,7 @@ def _own_annotations(base: type) -> list[tuple[str, Any]] | str | None:
             value = annotationlib.call_annotate_function(
                 annotationlib.get_annotate_from_class_namespace(ns), annotationlib.Format.FORWARDREF
             )
-        except Exception:  # noqa: BLE001 - an annotation that cannot be evaluated: keyed by its code alone
+        except Exception:  # noqa: BLE001 - fails closed: an annotation that cannot be evaluated: keyed by its code alone
             return "unevaluated"
     if not isinstance(value, dict):
         return None
@@ -469,7 +469,7 @@ _TYPE_QUALNAME = type.__dict__["__qualname__"].__get__
 def _class_name(k: type) -> str:
     try:
         return f"{_TYPE_MODULE(k)}.{_TYPE_QUALNAME(k)}"
-    except Exception:  # noqa: BLE001 - a class with no ``__module__``
+    except Exception:  # noqa: BLE001 - fails closed: a class with no ``__module__``
         return f"?.{_TYPE_QUALNAME(k)}"
 
 
@@ -589,7 +589,7 @@ def _library_code(value: Any) -> Any:
     try:
         if is_user_code_object(inner):
             return None
-    except Exception:  # noqa: BLE001 - undecidable: the class channels key it as code
+    except Exception:  # noqa: BLE001 - fails closed: undecidable: the class channels key it as code
         return None
     return inner
 

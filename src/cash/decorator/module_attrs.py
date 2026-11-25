@@ -438,7 +438,7 @@ class ModuleAttrFold:
             return []
         try:
             value = static_attr(obj, attr) if is_cls else getattr(obj, attr)
-        except (AttributeError, Exception):  # noqa: BLE001 - never break a call
+        except (AttributeError, Exception):  # noqa: BLE001 - fails open: an attribute whose read raises is not keyed (the body's own read raises too)
             return []
         label = f"{mod_name}.{attr}"
         if isinstance(value, type):

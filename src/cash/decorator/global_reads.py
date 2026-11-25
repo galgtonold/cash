@@ -152,7 +152,7 @@ def global_attr_chains(scopes: tuple, name: str, getattr_is_builtin: bool) -> tu
     for scope in scopes:
         try:
             ins = [i for i in dis.get_instructions(scope) if i.opname not in ("CACHE", "EXTENDED_ARG", "NOP")]
-        except Exception:  # noqa: BLE001 - code dis cannot read: keyed whole
+        except Exception:  # noqa: BLE001 - fails closed: code dis cannot read: keyed whole
             return None
         for k, op in enumerate(ins):
             if op.argval != name:
@@ -213,7 +213,7 @@ def module_attr_chains(scopes: tuple, path: tuple[str, ...]) -> tuple[tuple[str,
     for scope in scopes:
         try:
             ins = [i for i in dis.get_instructions(scope) if i.opname not in ("CACHE", "EXTENDED_ARG", "NOP")]
-        except Exception:  # noqa: BLE001 - code dis cannot read: keyed whole
+        except Exception:  # noqa: BLE001 - fails closed: code dis cannot read: keyed whole
             return None
         for k, op in enumerate(ins):
             if op.argval != head:

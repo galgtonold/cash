@@ -963,7 +963,7 @@ def _parts_held(value: Any, kind: type) -> Iterable[Any] | None:
         return () if top in _OWN_GC_MODULES or top in sys.stdlib_module_names else None
     try:
         held = get_referents(value)
-    except Exception:  # noqa: BLE001 - an object the collector cannot read
+    except Exception:  # noqa: BLE001 - fails open: an object the collector cannot read: what it holds is not followed
         return None
     # Its class, which the collector names first for a class of Python
     # code: found by identity in C, never by a comparison of the items.
@@ -1098,7 +1098,7 @@ def _resolve_call(func: ast.expr, namespace: Mapping[str, Any]) -> tuple[Any, st
         return _as_callee(vars(owner).get(func.attr), None, False)
     try:
         member = static_attr(owner, func.attr)
-    except Exception:  # noqa: BLE001 - an object's attribute lookup
+    except Exception:  # noqa: BLE001 - fails open: an attribute lookup that raises: the callee is not followed
         return None, "function", None
     if isinstance(owner, type):
         return _as_callee(member, owner, False)
@@ -1142,7 +1142,7 @@ def _static_value(expr: ast.expr, namespace: Mapping[str, Any]) -> tuple[Any, ty
             return None, None
         try:
             value = static_attr(value, attr)
-        except Exception:  # noqa: BLE001 - an object's attribute lookup
+        except Exception:  # noqa: BLE001 - fails open: an attribute lookup that raises: the callee is not followed
             return None, None
         if isinstance(value, (classmethod, staticmethod, property)) or not _plain_attribute(value):
             return None, None
@@ -1821,7 +1821,7 @@ class _Found:
         """The function *value* wraps (``functools.wraps``' ``__wrapped__``)."""
         try:
             wrapped = static_attr(value, "__wrapped__", None)
-        except Exception:  # noqa: BLE001 - an object's attribute lookup
+        except Exception:  # noqa: BLE001 - fails open: an attribute lookup that raises: the callee is not followed
             return
         if type(wrapped) is types.FunctionType:
             self.value(wrapped)

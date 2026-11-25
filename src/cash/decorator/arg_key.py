@@ -120,7 +120,7 @@ def annotated_ignores(func: Any, sig: inspect.Signature) -> frozenset[str]:
         return frozenset()
     try:
         hints: dict[str, Any] | None = typing.get_type_hints(owner, include_extras=True)
-    except Exception:  # noqa: BLE001 - any failure: resolve per parameter below
+    except Exception:  # noqa: BLE001 - fails closed: any failure: resolve per parameter below
         hints = None
     namespace = _globals_of(owner)
     found = set()
@@ -133,7 +133,7 @@ def annotated_ignores(func: Any, sig: inspect.Signature) -> frozenset[str]:
         elif isinstance(ann, str):
             try:
                 hint = eval(ann, dict(namespace), None)  # what get_type_hints does
-            except Exception as exc:  # the annotation names something not importable here
+            except Exception as exc:  # fails closed: the annotation names something not importable here
                 if re.search(r"\bIgnore\b", ann):
                     raise TypeError(
                         f"@cash.cache on {getattr(func, '__qualname__', func)!r}: the annotation of parameter "
@@ -376,7 +376,7 @@ def _scan_text(src: str, namespace: dict[str, Any]) -> list[str]:
                 found.append(f"{effect.name}()")
     try:
         unseeded, _messages, _seeded = RandomnessDetector().analyze_code(src)
-    except Exception:  # noqa: BLE001 - the scan must never break decoration
+    except Exception:  # noqa: BLE001 - fails closed: the scan must never break decoration
         unseeded = []
     found.extend(describe_random_call(call) for call in unseeded)
     return found
@@ -429,7 +429,7 @@ def key_function_impurities(key_fn: Callable[..., Any]) -> list[str]:
                 found.extend(_scan_text(helper_text, _globals_of(helper)))
         try:
             report = get_analyzer().analyze(helper)
-        except Exception:  # noqa: BLE001 - the analysis must never break decoration
+        except Exception:  # noqa: BLE001 - fails closed: the analysis must never break decoration
             continue
         for issue in report.issues:
             if issue.kind in (ISSUE_AMBIENT_READ, ISSUE_NETWORK_READ) or (

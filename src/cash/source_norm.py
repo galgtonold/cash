@@ -349,7 +349,7 @@ def normalize_source_for_hash(source: str) -> str:
             drop_waiver_blocks(tree)
         drop_docstrings(tree)
         code = ast.unparse(tree)
-    except Exception:  # noqa: BLE001 - never raise from inside a hasher
+    except Exception:  # noqa: BLE001 - fails closed: never raise from inside a hasher
         return _normalize_tokens(source)
     return _SEP.join([code, *_directive_atoms(text)])
 

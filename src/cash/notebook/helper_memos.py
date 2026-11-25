@@ -220,7 +220,7 @@ def _modules_of_user() -> tuple[Any, ...]:
         try:
             if is_user_module(mod):
                 mods.append(mod)
-        except Exception:  # noqa: BLE001 - an odd entry in sys.modules
+        except Exception:  # noqa: BLE001 - fails closed: an odd entry in sys.modules
             continue
     _user_modules = (stamp, tuple(mods))
     return _user_modules[1]
@@ -376,7 +376,7 @@ def watched(ns: Mapping[str, Any]) -> list[tuple[list[str], Any, int, int, int, 
     for where, memo in _where(ns):
         try:
             info = memo.cache_info()
-        except Exception:  # noqa: BLE001 - a wrapper whose counters raise
+        except Exception:  # noqa: BLE001 - fails open: a wrapper whose counters raise is not watched (functools' own never do)
             continue
         out.append((where, memo, info.hits, info.misses, info.currsize, _held(memo)))
     return out or None
@@ -398,7 +398,7 @@ def none_moved(before: list[tuple[list[str], Any, int, int, int, Any]] | None, c
     for _, memo, hits, misses, size, _ in before or ():
         try:
             info = memo.cache_info()
-        except Exception:  # noqa: BLE001 - a wrapper whose counters raise
+        except Exception:  # noqa: BLE001 - fails closed: a wrapper whose counters raise
             return False
         if (info.hits, info.misses, info.currsize) != (hits, misses, size):
             return False
@@ -419,7 +419,7 @@ def bodies_run(
     for _, memo, _, misses, *_ in before or ():
         try:
             ran = memo.cache_info().misses != misses or id(memo) in fired
-        except Exception:  # noqa: BLE001 - a wrapper whose counters raise
+        except Exception:  # noqa: BLE001 - fails closed: a wrapper whose counters raise
             ran = True
         if not ran:
             continue
@@ -472,7 +472,7 @@ def watching_clears(before: list[tuple[list[str], Any, int, int, int, Any]] | No
             try:
                 info = memo.cache_info()
                 items = _items(memo) or []
-            except Exception:  # noqa: BLE001 - a wrapper whose counters raise
+            except Exception:  # noqa: BLE001 - fails closed: a wrapper whose counters raise
                 continue
             start = (info.hits, info.misses, info.currsize)
             samples = items[:_CLEAR_SAMPLES] if info.currsize else []
@@ -507,7 +507,7 @@ def _untouched(memo: Any, start: tuple[int, int, int], samples: list[tuple[Any, 
         if (info.hits, info.misses, info.currsize) != start:
             return False
         held = {(id(key), id(answer)) for key, answer in _items(memo) or ()}
-    except Exception:  # noqa: BLE001 - not readable: not taken as untouched
+    except Exception:  # noqa: BLE001 - fails closed: not readable: not taken as untouched
         return False
     return all((id(key), id(answer)) in held for key, answer in samples)
 
@@ -527,7 +527,7 @@ def _items(memo: Any) -> list[tuple[Any, Any]] | None:
         size = memo.cache_info().currsize
         maxsize = memo.cache_parameters().get("maxsize")
         refs = get_referents(memo)
-    except Exception:  # noqa: BLE001 - a wrapper that cannot be read
+    except Exception:  # noqa: BLE001 - fails closed: a wrapper that cannot be read
         return None
     if refs and refs[0] is type(memo):
         refs = refs[1:]
@@ -548,7 +548,7 @@ def _items(memo: Any) -> list[tuple[Any, Any]] | None:
             return None
         if {id(k) for k in keys} != {id(k) for k in cache}:
             return None
-    except Exception:  # noqa: BLE001 - a key whose comparison raises
+    except Exception:  # noqa: BLE001 - fails closed: a key whose comparison raises
         return None
     return list(zip(keys, answers))
 
@@ -589,7 +589,7 @@ def _item_digests(memo: Any) -> list[str] | None:
         return known[1]
     try:
         digests: list[str] | None = sorted({_pair_digest(k, v) for k, v in items})
-    except Exception:  # noqa: BLE001 - a key or answer with no digest: unreadable
+    except Exception:  # noqa: BLE001 - fails closed: a key or answer with no digest: unreadable
         digests = None
     _digests[memo] = (flat, digests)
     return digests
@@ -664,7 +664,7 @@ def _pure(memo: Any) -> bool:
                         return False
                 elif name not in _BUILTINS or _BUILTINS[name] is not _builtin(name, globals_):
                     return False
-    except Exception:  # noqa: BLE001 - code this cannot read: not known to be pure
+    except Exception:  # noqa: BLE001 - fails closed: code this cannot read: not known to be pure
         return False
     return True
 
@@ -721,7 +721,7 @@ def _calls_only_pure(memo: Any) -> bool:
                 previous = op
             if calls != callees:
                 return False
-    except Exception:  # noqa: BLE001 - code this cannot read: not called
+    except Exception:  # noqa: BLE001 - fails closed: code this cannot read: not called
         return False
     return True
 
@@ -789,7 +789,7 @@ def _changed_in_place(
             continue
         try:
             now[id(answer)] = (answer, _answer_digest(answer))
-        except Exception:  # noqa: BLE001 - an answer with no digest: never judged unchanged
+        except Exception:  # noqa: BLE001 - fails closed: an answer with no digest: never judged unchanged
             continue
     verdict: bool | None = False
     for _, answer in items if judged is None else judged:
@@ -799,7 +799,7 @@ def _changed_in_place(
         if current is None and judged is not None:
             try:
                 current = (answer, _answer_digest(answer))
-            except Exception:  # noqa: BLE001 - an answer with no digest
+            except Exception:  # noqa: BLE001 - fails closed: an answer with no digest
                 current = None
         before = seen.get(id(answer))
         if current is None or before is None or before[0] is not answer:
@@ -862,7 +862,7 @@ def _seen_now(memo: Any, items: list[tuple[Any, Any]]) -> dict[int, tuple[Any, s
             continue
         try:
             taken[id(answer)] = (answer, _answer_digest(answer))
-        except Exception:  # noqa: BLE001 - an answer with no digest: left unseen
+        except Exception:  # noqa: BLE001 - fails closed: an answer with no digest: left unseen
             continue
     _answers_seen[memo] = taken
     return taken
@@ -937,7 +937,7 @@ def used(
     for where, memo, hits, misses, size, held in before:
         try:
             info = memo.cache_info()
-        except Exception:  # noqa: BLE001 - a wrapper whose counters raise
+        except Exception:  # noqa: BLE001 - fails open: a wrapper whose counters raise is not watched (functools' own never do)
             continue
         fired = cleared is not None and id(memo) in cleared.fired
         first = cleared is not None and id(memo) in cleared.first
@@ -1119,7 +1119,7 @@ def _change_of(
     try:
         before_digests = _digests_of(memo, before_items) if read else []
         keys = [_change_key_digest(key) for key, _ in added]
-    except Exception:  # noqa: BLE001 - a key or answer with no digest
+    except Exception:  # noqa: BLE001 - fails closed: a key or answer with no digest
         return None
     # The calls that compute the answers it held before again, for a helper
     # that provably computes from its arguments alone: a lookup finding one
@@ -1173,7 +1173,7 @@ def _cleared_change(memo: Any, items: list[tuple[Any, Any]]) -> dict | None:
         return {"emptied": True, "cleared": True, "items": [], "keys": None, "pairs": [], "unportable": True}
     try:
         digests = [_change_key_digest(key) for key in keys]
-    except Exception:  # noqa: BLE001 - a key with no digest
+    except Exception:  # noqa: BLE001 - fails closed: a key with no digest
         return None
     return {
         "emptied": True,
@@ -1228,7 +1228,7 @@ def _plain_keys(keys: list[Any]) -> tuple[bytes, bool] | None:
     try:
         data = pickle.dumps(keys, protocol=5)
         back = pickle.loads(data)
-    except Exception:  # noqa: BLE001 - not pickled or not read back: not plain
+    except Exception:  # noqa: BLE001 - fails closed: not pickled or not read back: not plain
         return None
     mark = _live_mark()
     marked = mark is not None and any(type(key) is tuple and mark in key for key in keys)
@@ -1316,7 +1316,7 @@ def _unbounded(memo: Any) -> bool:
     hit can put answers into; a bounded one keeps a list only C updates."""
     try:
         return memo.cache_parameters().get("maxsize") is None
-    except Exception:  # noqa: BLE001 - a wrapper without its parameters
+    except Exception:  # noqa: BLE001 - fails closed: a wrapper without its parameters
         return False
 
 
@@ -1361,7 +1361,7 @@ def _changed_label(
     for where, memo, hits, misses, size, held in before:
         try:
             info = memo.cache_info()
-        except Exception:  # noqa: BLE001 - a wrapper whose counters raise
+        except Exception:  # noqa: BLE001 - fails closed: a wrapper whose counters raise
             continue
         now = _held(memo)
         went_back = info.hits < hits or info.misses < misses or info.currsize < size
@@ -1398,7 +1398,7 @@ def _memos_cleared_by(code: str | None, ns: Mapping[str, Any] | None, fn: Any = 
         for attr in attrs:
             try:
                 value = static_attr(value, attr)
-            except Exception:  # noqa: BLE001 - not there: no memo named
+            except Exception:  # noqa: BLE001 - fails closed: not there: no memo named
                 return
         if type(value) is _LRU_WRAPPER:
             found.add(id(value))
@@ -1420,7 +1420,7 @@ def _memos_cleared_by(code: str | None, ns: Mapping[str, Any] | None, fn: Any = 
             name, globals_ = attribute_or(fn, "__name__", None), attribute_or(fn, "__globals__", None)
             if isinstance(name, str) and isinstance(globals_, dict) and globals_.get(name) is fn:
                 functions.extend(reached_user_code(name, globals_).functions)
-    except Exception:  # noqa: BLE001 - not read: the counters decide
+    except Exception:  # noqa: BLE001 - fails closed: not read: the counters decide
         pass
     for function in functions:
         code_obj = attribute_or(function, "__code__", None)
@@ -1453,7 +1453,7 @@ def _calls_of(memo: Any, items: list[tuple[Any, Any]]) -> list[list[str]] | None
     try:
         if memo.cache_parameters().get("typed"):
             return None
-    except Exception:  # noqa: BLE001 - a wrapper without its parameters
+    except Exception:  # noqa: BLE001 - fails closed: a wrapper without its parameters
         return None
     calls = []
     for key, answer in items:
@@ -1473,7 +1473,7 @@ def _calls_of(memo: Any, items: list[tuple[Any, Any]]) -> list[list[str]] | None
             if not _same(ast.literal_eval(text), call):
                 return None
             calls.append([_pair_digest(key, answer), text])
-        except Exception:  # noqa: BLE001 - no text, or none that gives it back
+        except Exception:  # noqa: BLE001 - fails closed: no text, or none that gives it back
             return None
     return calls
 
@@ -1505,7 +1505,7 @@ def _refill(memo: Any, calls: list[list[str]]) -> bool:
         try:
             args, kwargs = ast.literal_eval(text)
             memo(*args, **kwargs)
-        except Exception:  # noqa: BLE001 - it did not answer as the run's did
+        except Exception:  # noqa: BLE001 - fails closed: it did not answer as the run's did
             return False
     return True
 
@@ -1617,7 +1617,7 @@ def hidden_counters() -> dict[int, tuple[int, int, int]]:
     for key, memo in list(_hidden.items()):
         try:
             info = memo.cache_info()
-        except Exception:  # noqa: BLE001 - a wrapper whose counters raise: seen as moved
+        except Exception:  # noqa: BLE001 - fails closed: a wrapper whose counters raise: seen as moved
             continue
         out[key] = (info.hits, info.misses, info.currsize)
     return out
@@ -1672,7 +1672,7 @@ def hidden_moved(
         _hidden[key] = obj
         try:
             info = obj.cache_info()
-        except Exception:  # noqa: BLE001 - counters that cannot be read: taken as moved
+        except Exception:  # noqa: BLE001 - fails closed: counters that cannot be read: taken as moved
             found = found or name
             continue
         now = (info.hits, info.misses, info.currsize)
@@ -1756,7 +1756,7 @@ def _held_as_computed(record: dict, memo: Any, keys: set[str]) -> bool:
             args, kwargs = ast.literal_eval(text)
             if compute_hash(fn(*args, **kwargs)) != compute_hash(answer):
                 return False
-        except Exception:  # noqa: BLE001 - it did not answer as the run's did
+        except Exception:  # noqa: BLE001 - fails closed: it did not answer as the run's did
             return False
     return True
 
@@ -1778,7 +1778,7 @@ def _key_digests(memo: Any) -> set[str] | None:
         return known[1]
     try:
         digests = {_change_key_digest(key) for key in keys}
-    except Exception:  # noqa: BLE001 - a key with no digest
+    except Exception:  # noqa: BLE001 - fails closed: a key with no digest
         return None
     _key_digest_memo[memo] = (keys, digests)
     return digests
@@ -1789,7 +1789,7 @@ def _answers_dict(memo: Any) -> dict | None:
     try:
         size = memo.cache_info().currsize
         refs = get_referents(memo)
-    except Exception:  # noqa: BLE001 - a wrapper that cannot be read
+    except Exception:  # noqa: BLE001 - fails closed: a wrapper that cannot be read
         return None
     if refs and refs[0] is type(memo):
         refs = refs[1:]
@@ -1862,7 +1862,7 @@ def put_back(records: list[dict] | None, changes: Any, ns: Mapping[str, Any], ou
                 pairs = [(_live_key(key), answer) for key, answer in change["pairs"]]
                 digests = [_change_key_digest(key) for key, _ in pairs]
                 same = record.get("kd") == KEY_DIGESTS and digests == list(record.get("keys") or ())
-        except Exception:  # noqa: BLE001 - an entry this cannot read
+        except Exception:  # noqa: BLE001 - fails closed: an entry this cannot read
             return f"the answers it put into the helper memo {label} cannot be read back"
         if not _is_user_memo(memo) or not _unbounded(memo) or _answers_dict(memo) is None:
             return f"the helper memo {label} is not one cash can put answers into"
@@ -1914,7 +1914,7 @@ def _kept_refused(record: dict, kept: list[tuple[Any, Any]], outputs: Any) -> st
     try:
         if any(compute_hash(held) != compute_hash(answer) for held, answer in kept):
             return "the helper memo {label} holds another answer than the statement computed"
-    except Exception:  # noqa: BLE001 - an answer with no digest
+    except Exception:  # noqa: BLE001 - fails closed: an answer with no digest
         return "the helper memo {label} holds an answer cash cannot digest"
     mutable = [answer for _, answer in kept if not _fixed(answer)]
     if mutable and _reaches(outputs, mutable):
@@ -1955,7 +1955,7 @@ def _reaches(outputs: Any, targets: list[Any]) -> bool:
                 todo.extend((obj.__closure__, obj.__defaults__, obj.__kwdefaults__, obj.__dict__))
                 continue
             todo.extend(get_referents(obj))
-        except Exception:  # noqa: BLE001 - an object that cannot be looked through
+        except Exception:  # noqa: BLE001 - fails closed: an object that cannot be looked through
             return True
     return False
 
@@ -2153,11 +2153,11 @@ def clears(
         try:
             if ns is not None and any(not attrs and _is_clear(ns.get(root), names) for root, attrs in names_read(code)):
                 return True
-        except Exception:  # noqa: BLE001 - not parsed: the reach below decides
+        except Exception:  # noqa: BLE001 - fails closed: not parsed: the reach below decides
             pass
     try:
         reached = reached_user_code(code or "", ns)
-    except Exception:  # noqa: BLE001 - not followed: not known to clear
+    except Exception:  # noqa: BLE001 - fails closed: not followed: not known to clear
         return False
     return any(_names_clear(found, names) for found in reached.functions)
 

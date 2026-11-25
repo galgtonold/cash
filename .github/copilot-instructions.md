@@ -178,6 +178,17 @@ through `cash._memo_registry.reset`. A new one gets an entry there
 may be given a scope a reset clears only if dropping an entry can cost a
 recomputation or a miss and nothing else.
 
+### Broad handlers in key-deciding code
+
+In a module that builds a key, a digest or a lineage, a broad
+`except Exception` says on its `except` line which way it fails:
+`# noqa: BLE001 - fails closed: <why>` when the failure costs a miss, an
+uncached run or a value hashed again, `fails open: <what goes unkeyed>` when
+it could let a stale result through. A new handler should fail closed; one
+that fails open is counted per module in
+`tests/test_tooling/test_a_broad_handler_in_a_key_module_says_which_way_it_fails.py`,
+which also lists the modules held to this.
+
 ### pandas internals
 
 pandas is not a dependency, so a user's upgrade decides which pandas cash

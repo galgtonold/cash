@@ -139,7 +139,7 @@ def warn_source_changed_since_load(fn: Callable) -> None:
             "restart the process to run the new code. If a deploy puts new files "
             "on disk before the restart, this is the window it opens.",
         )
-    except Exception:  # a notice must never break a call
+    except Exception:  # fails closed: a notice must never break a call
         logger.debug("Could not emit the source-changed notice", exc_info=True)
 
 
@@ -179,7 +179,7 @@ def func_key(func: Callable) -> str:
             bound = hashlib.sha256(
                 pickle.dumps(stable_key_repr((func.args, sorted(func.keywords.items())), BUILTIN_CONTENT), protocol=4),
             ).hexdigest()[:12]
-        except Exception:  # noqa: BLE001 - an unpicklable argument keys on its type
+        except Exception:  # noqa: BLE001 - fails closed: an unpicklable argument keys on its type
             shape = [class_qualname(type(v)) for v in (*func.args, *func.keywords.values())]
             bound = hashlib.sha256(repr((shape, sorted(func.keywords))).encode("utf-8")).hexdigest()[:12]
         return f"{inner}[partial:{bound}]"

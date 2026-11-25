@@ -747,7 +747,7 @@ class FileDeps:
             return False
         try:
             moved = moved_fn()
-        except Exception:  # noqa: BLE001 - never let the check break a call
+        except Exception:  # noqa: BLE001 - fails closed: never let the check break a call
             # A check that could not finish never says the files held still:
             # the result is returned, not cached.
             return True

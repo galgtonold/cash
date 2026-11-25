@@ -494,7 +494,7 @@ class _Walk:
                 dtype.type, dtype
             ) is not None:
                 self.watch.append(True)
-        except Exception:  # noqa: BLE001 - left to the store's reduce, as before
+        except Exception:  # noqa: BLE001 - fails closed: left to the store's reduce, as before
             return
         if self.check is not None:
             self.check(self.data)
@@ -634,7 +634,7 @@ def _on_big_stack(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
             _MET.found = met
             _IN_A_CACHED_CALL.depth = cached
             outcome.append((True, context.run(fn, *args, **kwargs)))
-        except BaseException as exc:  # noqa: BLE001 - raised again on the caller's thread
+        except BaseException as exc:  # noqa: BLE001 - fails closed: raised again on the caller's thread
             outcome.append((False, exc))
         finally:
             # The kept thread runs the next pickle: it holds nothing of this one.
@@ -877,11 +877,11 @@ def restores_alike_apart(obj: Any, table: dict) -> bool:
         reducer = table[t]
     except KeyError:
         return issubclass(t, type)  # a class: by name
-    except Exception:  # noqa: BLE001 - not known: kept apart
+    except Exception:  # noqa: BLE001 - fails closed: not known: kept apart
         return False
     try:
         return isinstance(reducer(obj), str)
-    except Exception:  # noqa: BLE001 - not known: kept apart
+    except Exception:  # noqa: BLE001 - fails closed: not known: kept apart
         return False
 
 
@@ -1516,7 +1516,7 @@ def _pickles(obj: Any) -> bool:
     """Whether ``pickle`` takes *obj* whole."""
     try:
         pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
-    except Exception:  # noqa: BLE001 - whatever its own reduce raises
+    except Exception:  # noqa: BLE001 - fails closed: whatever its own reduce raises
         return False
     return True
 
@@ -1734,7 +1734,7 @@ def joblib_memory_state(obj: Any) -> dict | None:
         return None
     try:
         state = obj.__getstate__()
-    except Exception:  # noqa: BLE001 - not read: not trusted
+    except Exception:  # noqa: BLE001 - fails closed: not read: not trusted
         return None
     if type(state) is not dict or list(state) != list(attrs) or state["timestamp"] is not None:
         return None
@@ -1857,7 +1857,7 @@ def _reduce_hooked_class(cls: type) -> tuple:
         found: Any = sys.modules.get(module) or importlib.import_module(module)
         for part in qualname.split("."):
             found = attribute_or(found, part, _NOT_FOUND)
-    except Exception:  # noqa: BLE001 - not found by its name, as pickle says
+    except Exception:  # noqa: BLE001 - fails closed: not found by its name, as pickle says
         found = _NOT_FOUND
     if found is not cls:
         raise pickle.PicklingError(f"Can't pickle {module}.{qualname}: it's not the same object as {module}.{qualname}")
@@ -2097,7 +2097,7 @@ def _dtype_apart(dt: Any, dtypes: dict[Any, Any]) -> Any:
         own = dtypes.get(key)
         if own is None:
             own = dtypes[key] = copy.copy(dt)
-    except Exception:  # noqa: BLE001 - a dtype that will not hash or copy: as it is
+    except Exception:  # noqa: BLE001 - fails closed: a dtype that will not hash or copy: as it is
         return dt
     dtypes[id(dt)] = (dt, own)
     return own
@@ -2262,7 +2262,7 @@ def _watched(reducer: Any, t: type, registered: Any, watch: list) -> Any:
             try:
                 if packed_records(obj) is not obj:
                     watch.append(True)
-            except Exception:  # noqa: BLE001 - keyed as it is then, as `_reduce_array_for_key` does
+            except Exception:  # noqa: BLE001 - fails closed: keyed as it is then, as `_reduce_array_for_key` does
                 pass
             return reducer(obj)
 
@@ -2493,7 +2493,7 @@ def _packed_dtype(scalar_type: type, dtype: Any) -> Any:
 def _reduce_array_for_key(array: Any, protocol: int) -> Any:
     try:
         packed = packed_records(array)
-    except Exception:  # noqa: BLE001 - a dtype recfunctions does not take: as it is
+    except Exception:  # noqa: BLE001 - fails closed: a dtype recfunctions does not take: as it is
         packed = array
     if packed is array:
         return array.__reduce_ex__(protocol)
@@ -3309,7 +3309,7 @@ def _reduce_index_for_key(index: Any, reducer: Any) -> Any:
 
     try:
         digest = hash_pandas_index(index)
-    except Exception:  # noqa: BLE001 - pickled as it is
+    except Exception:  # noqa: BLE001 - fails closed: pickled as it is
         digest = None
     if digest is None:
         return reducer(index)
@@ -3558,7 +3558,7 @@ def finds_itself(obj: Any, recipe: bytes) -> bool:
     shares, and the object found later by the recipe the one it was."""
     try:
         return find_by_recipe(recipe) is obj
-    except Exception:  # noqa: BLE001 - whatever loading the recipe raises: not found
+    except Exception:  # noqa: BLE001 - fails closed: whatever loading the recipe raises: not found
         return False
 
 
@@ -3569,7 +3569,7 @@ def reference_recipe(obj: Any, reduced: Any) -> bytes | None:
     recipe = (by_name, (pickle.whichmodule(obj, reduced), reduced)) if isinstance(reduced, str) else reduced[:2]
     try:
         return pickle.dumps(recipe, protocol=4)
-    except Exception:  # noqa: BLE001 - whatever stops this pickle: no recipe
+    except Exception:  # noqa: BLE001 - fails closed: whatever stops this pickle: no recipe
         return None
 
 
@@ -3893,7 +3893,7 @@ def _picklable(value: Any) -> bool:
             # way from here and another from a deeper call; the keying as a
             # whole is too deep instead, as a pickle of it would be.
             raise
-    except Exception:  # noqa: BLE001 - whatever pickle refuses
+    except Exception:  # noqa: BLE001 - fails closed: whatever pickle refuses
         ok = False
     if memo is not None:
         memo[id(value)] = (value, ok)
@@ -3931,7 +3931,7 @@ def _same(saved: Any, value: Any) -> bool:
         return False
     try:
         return bool(saved == value)
-    except Exception:  # noqa: BLE001 - an ambiguous or failing comparison
+    except Exception:  # noqa: BLE001 - fails closed: an ambiguous or failing comparison
         return False
 
 

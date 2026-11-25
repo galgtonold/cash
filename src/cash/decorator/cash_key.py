@@ -66,7 +66,7 @@ def _lookup(t: type) -> Callable[[Any], Any] | None:
         return None
     try:
         fn = plain_getattr(t, CASH_KEY, None)
-    except Exception:  # noqa: BLE001 - an exotic metaclass: no key method
+    except Exception:  # noqa: BLE001 - fails closed: an exotic metaclass: no key method
         return None
     return fn if callable(fn) else None
 
@@ -96,7 +96,7 @@ def content_digest(value: Any) -> str | None:
     parts = []
     try:
         state = object_state(value)
-    except Exception:  # noqa: BLE001 - nothing to compare
+    except Exception:  # noqa: BLE001 - fails closed: nothing to compare
         return None
     if not state:
         return None
@@ -129,7 +129,7 @@ class _Record:
     def _path(self) -> str | None:
         try:
             directory = self._local_dir()
-        except Exception:  # noqa: BLE001 - no backend yet: keep it in memory
+        except Exception:  # noqa: BLE001 - fails closed: no backend yet: keep it in memory
             return None
         return os.path.join(directory, CASH_KEYS_FILENAME) if directory else None
 
@@ -199,7 +199,7 @@ class KeyCheck:
         try:
             if not self._enabled():
                 return
-        except Exception:  # noqa: BLE001 - a config read must never break a call
+        except Exception:  # noqa: BLE001 - fails closed: a config read must never break a call
             return
         with self._lock:
             known = self._queued.get(id(value))
@@ -237,7 +237,7 @@ class KeyCheck:
                 value = ref()
                 if value is not None:
                     self._check(value, key_id, method)
-            except Exception:  # a check must never surface as an error
+            except Exception:  # fails closed: a check must never surface as an error
                 logger.debug("__cash_key__ check failed", exc_info=True)
             finally:
                 value = None

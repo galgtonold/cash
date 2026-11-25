@@ -342,7 +342,7 @@ class GlobalValues:
             return True
         try:
             report = get_analyzer().analyze_reached(fn)
-        except Exception:  # noqa: BLE001 - not kept, built every time
+        except Exception:  # noqa: BLE001 - fails closed: not kept, built every time
             return False
         return not (
             set(report.helper_source_hashes) - {qualname_of(fn)} or report.helper_bindings or report.cached_callees
@@ -389,14 +389,14 @@ class GlobalValues:
         try:
             if any(own_code_is_user(layer, root_module) for layer in callable_layers(value)):
                 return None
-        except Exception:  # noqa: BLE001 - undecidable: hash it below
+        except Exception:  # noqa: BLE001 - fails closed: undecidable: hash it below
             pass
         cls_ref = code_ref(type(value))
         if cls_ref is not None and not plain_getattr(value, "__dict__", None) and reduced_state(value) is None:
             # Pickled as a global name (`typing.Any`): that name is what it is.
             try:
                 reduced = value.__reduce_ex__(4)
-            except Exception:  # noqa: BLE001 - carries nothing else to key
+            except Exception:  # noqa: BLE001 - fails closed: carries nothing else to key
                 reduced = None
             return f"{cls_ref}:{reduced}" if isinstance(reduced, str) else f"{cls_ref}()"
         try:
@@ -442,7 +442,7 @@ class GlobalValues:
             digest = self._args.hash_payload((stabilized,), {})
         except KeyBuildFailed:
             raise  # a function it holds cannot be keyed: the call runs uncached
-        except Exception:  # noqa: BLE001 - never break a call over this
+        except Exception:  # noqa: BLE001 - fails open: state that cannot be hashed is left out of the key
             digest = None
         finally:
             record = walk_scope.leave(scope)
@@ -537,7 +537,7 @@ class GlobalValues:
             return self._args.hash_payload((stabilized,), {})
         except KeyBuildFailed:
             raise  # a function it holds cannot be keyed: the call runs uncached
-        except Exception:  # noqa: BLE001 - unkeyable before, never break a call over it
+        except Exception:  # noqa: BLE001 - fails open: what the callable carries is left out; it is keyed by name alone
             self._note_carrier_verdict(value, False)
             return None
 
@@ -577,7 +577,7 @@ def _walked_or_refused(fn: Any) -> Any:
     as `GlobalsFold.fold_passed_helper_reads` does, never keyed without them."""
     try:
         report = get_analyzer().analyze_reached(fn)
-    except Exception as e:  # noqa: BLE001 - no report means no key, not a partial one
+    except Exception as e:  # noqa: BLE001 - fails closed: no report means no key, not a partial one
         reason = f"cash could not find the helpers it calls ({class_name(type(e))}: {e})"
     else:
         if not report.unwalkable:

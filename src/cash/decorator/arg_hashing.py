@@ -408,7 +408,7 @@ def frame_memoable(value: Any) -> bool:
         return False
     try:
         return not frame_borrows_its_data(value, since=sys.maxsize)
-    except Exception:  # noqa: BLE001 - a pandas internals change: no memo
+    except Exception:  # noqa: BLE001 - fails closed: a pandas internals change: no memo
         return False
 
 
@@ -557,7 +557,7 @@ def frame_borrows_its_data(
             extra - _cash_views.held(array) != baseline
             for array, extra in zip(arrays, _refs_beyond(arrays, pandas_refs))
         )
-    except Exception:  # noqa: BLE001 - a pandas internals change: re-hash, the safe answer
+    except Exception:  # noqa: BLE001 - fails closed: a pandas internals change: re-hash, the safe answer
         return True
 
 
@@ -1107,7 +1107,7 @@ def _watch_categorical_constructor(pd: Any) -> bool:
             return  # pandas' own, which it hands out only through what is recorded
         try:
             _note_exposed(self)
-        except Exception:  # noqa: BLE001 - recording must never break the user's call
+        except Exception:  # noqa: BLE001 - fails closed: recording must never break the user's call
             _EXPOSED[-1] = (None, sys.maxsize)
 
     categorical.__init__ = __init__
@@ -1350,7 +1350,7 @@ class CallPolarsDigests:
         if digest is not None and not self._signed and _big_polars(value):
             try:
                 held = value.clone()
-            except Exception:  # noqa: BLE001 - polars refused: read again after the body
+            except Exception:  # noqa: BLE001 - fails closed: polars refused: read again after the body
                 return digest
             self._entries[id(value)] = [value, held, digest, None]
         return digest
@@ -1376,7 +1376,7 @@ def call_polars(digests: CallPolarsDigests | None):
 def _big_polars(value: Any) -> bool:
     try:
         return value.estimated_size() >= _CALL_POLARS_MIN_BYTES
-    except Exception:  # noqa: BLE001 - a LazyFrame, or polars refused
+    except Exception:  # noqa: BLE001 - fails closed: a LazyFrame, or polars refused
         return False
 
 
@@ -1423,7 +1423,7 @@ def _handing_out(method: Callable, raw_at: int | None) -> Callable:
             try:
                 for obj in (self, getattr(self, "obj", None), getattr(self, "_selected_obj", None)):
                     _note_frame_memory(obj)
-            except Exception:  # noqa: BLE001 - recording must never break the user's call
+            except Exception:  # noqa: BLE001 - fails closed: recording must never break the user's call
                 _EXPOSED[-1] = (None, sys.maxsize)
         if _HANDING_OUT.get():
             return method(self, *args, **kwargs)
@@ -1473,7 +1473,7 @@ def _noting(accessor: Callable, outside_only: bool | str) -> Callable:
                 # 3.1), which a write through it changes under the memo.
         try:
             _note_exposed(handle)
-        except Exception:  # noqa: BLE001 - recording must never break the user's read
+        except Exception:  # noqa: BLE001 - fails closed: recording must never break the user's read
             _EXPOSED[-1] = (None, sys.maxsize)  # unknown: treat every memoised frame as written
         return handle
 
@@ -1579,7 +1579,7 @@ def is_opaque(obj: Any) -> bool:
             return False
         target = obj if isinstance(obj, type) else type(obj)
         return target in OPAQUE_TYPES
-    except Exception as e:  # noqa: BLE001 - opacity check must never break a call
+    except Exception as e:  # noqa: BLE001 - fails closed: opacity check must never break a call
         logger.debug("[CORE] opacity check failed for %r: %s", obj, e)
         return False
 
@@ -1592,10 +1592,10 @@ def _rough_size(labelled: tuple[str, Any]) -> int:
     value = labelled[1]
     try:
         return len(value)
-    except Exception:  # noqa: BLE001 - no length: its size will do
+    except Exception:  # noqa: BLE001 - fails closed: no length: its size will do
         try:
             return sys.getsizeof(value)
-        except Exception:  # noqa: BLE001 - a size is only a guess; none will do
+        except Exception:  # noqa: BLE001 - fails closed: a size is only a guess; none will do
             return 0
 
 
@@ -1731,7 +1731,7 @@ class FrameDigests:
                 continue
             try:
                 moved = not object_blocks(entry[1]) <= object_blocks(obj)
-            except Exception:  # noqa: BLE001 - a pandas internals change: the memo is only a speedup
+            except Exception:  # noqa: BLE001 - fails closed: a pandas internals change: the memo is only a speedup
                 moved = True
             if moved:
                 self.forget(obj)
@@ -1815,7 +1815,7 @@ class FrameDigests:
                 # Changed through pandas: the columns it has not written
                 # may still be the memory the entry read (`hash_frame`).
                 self._changed = (id(obj), entry)
-        except Exception:  # noqa: BLE001 - a pandas internals change: just re-hash
+        except Exception:  # noqa: BLE001 - fails closed: a pandas internals change: just re-hash
             pass
         entries.pop(id(obj), None)
         return None
@@ -1867,7 +1867,7 @@ class FrameDigests:
             entries = self._entries
             key = id(obj)
             wref = _weak.ref(obj, lambda _ref, key=key, entries=entries: entries.pop(key, None))
-        except Exception:  # noqa: BLE001 - the memo is a speedup; hash every time
+        except Exception:  # noqa: BLE001 - fails closed: the memo is a speedup; hash every time
             return
         self._entries[key] = (wref, held, signature, content_hash, since, pieces or {}, kept)
         if pieces:
@@ -1915,7 +1915,7 @@ def _memory_kept(frame: Any, entry: tuple) -> bool:
         if frame_borrows_its_data(frame, held, since, lists if kept else None, kept):
             return False
         return _lists_unchanged(lists, kept, gained=True)
-    except Exception:  # noqa: BLE001 - a pandas internals change: read the column
+    except Exception:  # noqa: BLE001 - fails closed: a pandas internals change: read the column
         return False
 
 
@@ -2108,7 +2108,7 @@ class ArgHasher:
                 for registry in (self.override_hashers, self.type_hashers)
                 for type_ in registry
             )
-        except Exception:  # noqa: BLE001 - a lookup must never break a call
+        except Exception:  # noqa: BLE001 - fails closed: a lookup must never break a call
             return False
 
     def keys_by_registration_only(self, value: Any) -> bool:
@@ -2120,7 +2120,7 @@ class ArgHasher:
                 for registry in (self.override_hashers, self.type_hashers)
                 for type_ in registry
             )
-        except Exception:  # noqa: BLE001 - a lookup must never break a call
+        except Exception:  # noqa: BLE001 - fails closed: a lookup must never break a call
             return False
 
     def warn_unhashable_args(
@@ -2241,7 +2241,7 @@ class ArgHasher:
         for candidate in candidates:
             try:
                 self.hash_payload((candidate,), {})
-            except Exception:  # noqa: BLE001 - exactly what we are looking for
+            except Exception:  # noqa: BLE001 - fails closed: exactly what we are looking for
                 return candidate
         return candidates[0] if candidates else NO_SUSPECT
 
