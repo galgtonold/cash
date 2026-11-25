@@ -105,7 +105,8 @@ class PurityAnalyzer:
             if memo_key is not None:
                 _store_report(func, report, walk, clock() - start)
         elif tree_memo.VERIFY:
-            report_store.verify(func, report, HelperWalk(func).run())
+            again = HelperWalk(func)
+            report_store.verify(func, report, again.run(), again)
         if report.unwalkable:
             warn_diagnostic(
                 CashCacheIneffectiveWarning,
