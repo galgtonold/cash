@@ -263,7 +263,14 @@ from ..shared_objects import (
     walk_budget,
 )
 from ..value_cutoff import LineageAliasStore, ValueLineageLog, use_value_lineage_log
-from ..write_observer import child_works, children_left_running, keeps_a_write, kept_writes, observe_writes
+from ..write_observer import (
+    OBSERVED_EFFECT_REASON,
+    child_works,
+    children_left_running,
+    keeps_a_write,
+    kept_writes,
+    observe_writes,
+)
 from . import hidden_generators, in_place
 from .collect_first import CollectFirstStore
 from .digest_carry import DigestCarry
@@ -3230,6 +3237,7 @@ class StatementProcessor:
                 execution.written_paths = frozenset(written_paths)
                 execution.appended_paths = frozenset(written_paths.appended)
                 execution.unseen_writer = written_paths.unseen
+                execution.observed_effect = written_paths.effect
                 execution.children_running = children_left_running(written_paths)
                 execution.waived_paths = written_paths.waived
                 execution.file_tracker = file_tracker
@@ -3311,6 +3319,18 @@ class StatementProcessor:
             if wrote:
                 run.skip_cache = True
                 run.metrics["uncacheable_reasons"].append(wrote)
+        if (
+            not run.skip_cache
+            and execution.observed_effect is not None
+            and execution.result.success
+            and not attribute_or(run.annotation, "assume_safe", False)
+        ):
+            # ``session.request("POST", url)``, a helper's ``sp.run(cmd)``,
+            # ``urlopen(req)`` with a request built in a cell above: nothing
+            # in the statement's text names the effect, and it was seen.
+            run.skip_cache = True
+            label, what = execution.observed_effect
+            run.metrics["uncacheable_reasons"].append(OBSERVED_EFFECT_REASON.format(what=what, label=label))
         if not run.skip_cache and execution.result.success and not attribute_or(run.annotation, "assume_safe", False):
             workers = self._workers_reason(run)
             if workers:

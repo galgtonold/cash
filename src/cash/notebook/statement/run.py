@@ -478,6 +478,10 @@ class StatementExecution:
     appended_paths: frozenset[str] = frozenset()
     #: What it ran that may write files unseen (`WrittenPaths.unseen`), or None.
     unseen_writer: str | None = None
+    #: What the user's own code did in it that a hit would not do again and
+    #: no file shows (`WrittenPaths.effect`): a program started, a request
+    #: sent that is not a fetch. ``(label, what)``, or None.
+    observed_effect: tuple[str, str] | None = None
     #: The child processes it started that still ran when it returned
     #: (`children_left_running`).
     children_running: list[Any] = field(default_factory=list)

@@ -22,7 +22,8 @@ names for it are :data:`MUTATOR_METHODS`, kept apart from the effect verbs.
 **Matching is by name.** A call is matched by how it is spelled
 (``requests.post``), by a method name that means the same thing on every
 receiver that has it (``df.to_csv``, ``session.post``), and -- when a namespace
-is given -- by what its names are bound to (``import time as t; t.time()``).
+is given -- by what its names are bound to (``import time as t; t.time()``,
+``from subprocess import run; run(cmd)``), whatever the kind.
 Nothing here imports a library the program has not imported itself, and no
 attribute is read from anything but a module or a class, so classifying a call
 never runs the user's code.
@@ -38,6 +39,7 @@ import contextvars
 import functools
 import hashlib
 import os
+import re
 import sys
 import types
 from collections.abc import Callable, Iterable, Mapping
@@ -59,6 +61,7 @@ __all__ = [
     "STDIN_NAMES",
     "Action",
     "EffectKind",
+    "canonical_spellings",
     "classify_call",
     "dotted_name",
     "environ_membership",
@@ -520,11 +523,6 @@ _HELPER_READS: dict[str, tuple[str, str | None]] = {
 # always run. ``plt.savefig`` is a file write (a method verb), not a display.
 PYPLOT_MODULE_ALIASES: frozenset[str] = frozenset({"plt", "pyplot", "matplotlib.pyplot"})
 
-#: The kinds a namespace is consulted for: a call to one is recognised through
-#: what its names are bound to (``from time import time as now; now()``), not
-#: only by its spelling.
-_RESOLVED_KINDS: frozenset[EffectKind] = frozenset({EffectKind.CLOCK, EffectKind.ENVIRONMENT, EffectKind.INTERACTIVE})
-
 
 def dotted_name(func: ast.AST) -> str | None:
     """``a.b.c`` for a call's callee written as a name chain, else None.
@@ -979,11 +977,34 @@ def _named_kind(name: str, call: ast.Call) -> EffectKind | None:
         if isinstance(method, ast.Constant) and isinstance(method.value, str):
             return _NR if method.value.upper() in _READ_METHODS else _NW
         return EffectKind.NETWORK  # a computed method: the direction is unknown
-    if name.endswith("urlopen") and _literal_arg(call, 1, "data") is not None:
-        return _NW
+    if name.endswith("urlopen"):
+        if _literal_arg(call, 1, "data") is not None:
+            return _NW
+        return _request_object_kind(_literal_arg(call, 0, "url")) or kind
     if name in _CWD_RESOLVERS and _surely_absolute(_literal_arg(call, 0, "path")):
         return None  # `os.path.abspath(__file__)` reads no working directory
     return kind
+
+
+def _request_object_kind(node: ast.expr | None) -> EffectKind | None:
+    """What ``urlopen(Request(url, data, headers, ..., method=...))`` does,
+    read from the ``Request(...)`` written as its argument; None when *node*
+    is not one, or says nothing (a fetch). A method computed at run time is
+    a request of unknown direction."""
+    if not isinstance(node, ast.Call):
+        return None
+    name = dotted_name(node.func)
+    if name is None or name.rsplit(".", 1)[-1] != "Request":
+        return None
+    method = _literal_arg(node, 5, "method")
+    if method is not None and not (isinstance(method, ast.Constant) and method.value is None):
+        if isinstance(method, ast.Constant) and isinstance(method.value, str):
+            return _NR if method.value.upper() in _READ_METHODS else _NW
+        return EffectKind.NETWORK
+    data = _literal_arg(node, 1, "data")
+    if data is not None and not (isinstance(data, ast.Constant) and data.value is None):
+        return _NW
+    return None
 
 
 # -- resolving names through a namespace ------------------------------------
@@ -997,11 +1018,7 @@ def _resolution_table() -> tuple[frozenset[str], tuple[str, ...]]:
     (sorted). Built once: the tables are constants, and `_roots` runs for
     every call the walk classifies, where rebuilding them was most of its
     cost."""
-    table = frozenset(
-        {name for name, kind in MODULE_CALLS.items() if kind in _RESOLVED_KINDS}
-        | set(CLOCK_WHEN_ARG_CALLS)
-        | set(CLOCK_WHEN_ARGS_OMITTED)
-    )
+    table = frozenset(set(MODULE_CALLS) | set(CLOCK_WHEN_ARG_CALLS) | set(CLOCK_WHEN_ARGS_OMITTED))
     return table, tuple(sorted({entry.split(".", 1)[0] for entry in table}))
 
 
@@ -1076,12 +1093,52 @@ def _shadowed(name: str, namespace: Mapping[str, Any] | None) -> bool:
     return namespace[name] is not getattr(builtins, name, None)
 
 
-def classify_call(call: ast.Call, namespace: Mapping[str, Any] | None = None) -> Effect | None:
+#: A name chain as written in source: ``sp.check_call``, ``run``.
+_NAME_CHAIN = re.compile(r"(?<![\w.])[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*")
+_RESOLVABLE_TYPES = (types.ModuleType, type, types.FunctionType, types.BuiltinFunctionType, types.MethodType)
+
+
+def canonical_spellings(code: str, namespace: Mapping[str, Any]) -> dict[str, str]:
+    """``{name chain as written in code: the known call it is bound to}`` for
+    the chains of *code* that reach a call this module names under another
+    spelling: ``{"sp.check_call": "subprocess.check_call", "run":
+    "subprocess.run", "post": "requests.post"}`` after ``import subprocess
+    as sp``, ``from subprocess import run`` and ``from requests import post``.
+
+    Everything :func:`classify_call` reads from a namespace, as plain data:
+    an analysis memoised on the statement's text keys on this and hands it
+    back as *aliases*. A chain spelled as a known call already is left to
+    its spelling."""
+    found: dict[str, str] = {}
+    if not namespace:
+        return found
+    table, _tops = _resolution_table()
+    for chain in set(_NAME_CHAIN.findall(code)):
+        if chain in table:
+            continue
+        parts = chain.split(".")
+        try:
+            root = namespace[parts[0]]
+        except KeyError:
+            continue
+        if not issubclass(type(root), _RESOLVABLE_TYPES):
+            continue
+        for canonical in reversed(_canonical_names(parts, namespace)):
+            if canonical in table and canonical != chain:
+                found[chain] = canonical
+                break
+    return found
+
+
+def classify_call(
+    call: ast.Call, namespace: Mapping[str, Any] | None = None, aliases: Mapping[str, str] | None = None
+) -> Effect | None:
     """What *call* does, or None when it is none of the :class:`EffectKind`\\ s.
 
     *namespace*, when given, is what the call's names are bound to; with it,
-    ``import time as t; t.time()`` is recognised as ``time.time``. Only the
-    kinds in ``_RESOLVED_KINDS`` are looked up that way.
+    ``import time as t; t.time()`` is recognised as ``time.time`` and ``from
+    subprocess import run; run(cmd)`` as ``subprocess.run``. *aliases* is
+    the same knowledge read ahead of time (:func:`canonical_spellings`).
     """
     func = call.func
     if isinstance(func, ast.Name) and func.id == "open":
@@ -1101,8 +1158,12 @@ def classify_call(call: ast.Call, namespace: Mapping[str, Any] | None = None) ->
         if namespace is not None and chain[0] in namespace:
             for canonical in reversed(_canonical_names(chain, namespace)):
                 kind = _named_kind(canonical, call)
-                if kind in _RESOLVED_KINDS:
+                if kind is not None:
                     return Effect(kind, canonical)
+        if aliases and dotted in aliases:
+            kind = _named_kind(aliases[dotted], call)
+            if kind is not None:
+                return Effect(kind, aliases[dotted])
     if not isinstance(func, ast.Attribute):
         return None
     method = func.attr
