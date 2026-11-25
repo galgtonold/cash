@@ -433,7 +433,7 @@ class CashMagics(Magics):
         # reducers again, as they do in a script.
         reducer_writes.unwatch()
         self.global_ttl = None
-        print("[OK] Auto-caching disabled")
+        print("Cash disabled. Cells run as plain Python; the cache is kept.")
 
     @line_magic
     def cash_debug(self, line: str) -> None:
@@ -559,7 +559,7 @@ class CashMagics(Magics):
         """Get machine-readable status of the last cell execution.
 
         Usage:
-            %cash_status          # Print JSON status
+            %cash_status          # Print JSON status (returns nothing)
             %cash_status json     # Return JSON string
             %cash_status dict     # Return Python dict
 
@@ -629,9 +629,10 @@ class CashMagics(Magics):
             return status
         if mode == "json":
             return json.dumps(status, default=str, indent=2)
-        # Print formatted output
+        # Printed only: a notebook shows what a cell's last line returns, so
+        # a returned dict put the whole status on the screen a second time.
         print(json.dumps(status, default=str, indent=2))
-        return status
+        return None
 
     @line_magic
     def cash_stats(self, line: str) -> None:

@@ -14,6 +14,7 @@ def test_core_exports_stable():
         "reset_session",
         "configure",
         "cleanup",
+        "clear_all",
         "disabled",  # a no-cache block that restores CASH_DISABLE
         "Ignore",  # leaves an annotated parameter out of the key
         # Purity declarations

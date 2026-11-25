@@ -16,3 +16,10 @@ def test_cash_off_releases_the_hold_cash_on_took(cash_magics):
     assert io_watch.holding()
     cash_magics.cash_off("")
     assert not io_watch.holding()
+
+
+def test_cash_off_answers_as_cash_on_does(cash_magics, capsys):
+    """``%cash_on`` says ``Cash enabled.``; ``%cash_off`` said
+    ``[OK] Auto-caching disabled``, in another voice."""
+    cash_magics.cash_off("")
+    assert capsys.readouterr().out.strip() == "Cash disabled. Cells run as plain Python; the cache is kept."

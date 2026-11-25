@@ -201,6 +201,7 @@ Pick the narrowest tool that does the job:
 | One function's entries, from a shell | `cash clear --function slow_square` |
 | One entry | `cash clear --entry ID` (ids from `cash inspect --function NAME`) |
 | Entries whose `ttl` has run out | `cash clear --expired`, or `cash.cleanup()` in code |
+| Every function this process has decorated | `cash.clear_all()` in code |
 | Everything | `cash clear --all` |
 
 A clear reaches processes that are still running, whichever of these made it:
@@ -1254,7 +1255,9 @@ print(double.explain(5))
 [HIT] model.double - hit
   cache_dir: /srv/proj/.cash
   ...
-  execution_time_saved: 3.5e-06
+  cached_at: 2026-03-02 09:14:07 (local time)
+  cache_age_seconds: 0.0016 s
+  execution_time_saved: 3.5e-06 s
 ```
 
 `reason` is one of `hit`, `no_entry`, `ttl_expired`, `file_changed`,

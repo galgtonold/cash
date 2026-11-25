@@ -265,7 +265,8 @@ class Cash:
         cache_dir: Directory for the disk tier (the ``cache_dir`` setting).
         backends: Backends to stack as tiers, fastest first; two or more are
             combined into a `TieredBackend`.
-        compress: gzip entries on disk (the ``compress`` setting).
+        compress: Compress entries on disk, with zstd on Python 3.14 and
+            later and zlib before (the ``compress`` setting).
         register_magic: Register the notebook magics. ``None`` (default)
             registers them only when an IPython session is running.
         debug: Log every cache decision (the ``debug`` setting).

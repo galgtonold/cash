@@ -219,3 +219,25 @@ async def test_explain_on_async_wrapper(tmp_path):
     e = fetch.explain("u")
     assert e.would_hit is True
     assert e.reason == "hit"
+
+
+def test_the_printed_explanation_shows_times_a_person_reads(disk_cash):
+    """``details`` keeps the numbers; the printed form showed them raw:
+    ``cached_at: 1795610601.068821``."""
+    import re
+    import time
+
+    @disk_cash.cache
+    def double(x):
+        return x * 2
+
+    before = time.time()
+    double(1)
+    e = double.explain(1)
+    assert isinstance(e.details["cached_at"], float) and e.details["cached_at"] >= before - 1
+    text = str(e)
+    stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(e.details["cached_at"]))
+    assert re.search(rf"^  cached_at: {stamp}:\d\d \(local time\)$", text, re.M), text
+    assert re.search(r"^  cache_age_seconds: [0-9.e+-]+ s$", text, re.M), text
+    assert re.search(r"^  execution_time_saved: [0-9.e+-]+ s$", text, re.M), text
+    assert str(e.details["cached_at"]) not in text

@@ -115,13 +115,14 @@ class TestCashStatus:
     """Test %cash_status magic command."""
 
     def test_status_print_mode(self, cash_magics, capsys):
+        """Bare, it prints the JSON and returns nothing: a returned dict was
+        shown by the notebook under the printed one, the status twice."""
         result = cash_magics.cash_status("")
-        assert isinstance(result, dict)
-        assert "lineage" in result
-        assert "auto_cache_enabled" in result
-        assert "debug_enabled" in result
-        captured = capsys.readouterr()
-        assert captured.out.strip()  # Should print something
+        assert result is None
+        printed = json.loads(capsys.readouterr().out)
+        assert {"lineage", "auto_cache_enabled", "debug_enabled"} <= set(printed)
+        assert cash_magics.cash_status("print") is None
+        assert json.loads(capsys.readouterr().out).keys() == printed.keys()
 
     def test_status_dict_mode(self, cash_magics):
         result = cash_magics.cash_status("dict")
@@ -238,6 +239,7 @@ class TestCaptureCellId:
 # the handlers cash added, so a mode switch replaces them and `off` removes them.
 # ============================================================================
 
+import json
 import logging
 
 from cash import _log

@@ -315,6 +315,18 @@ def cleanup(max_age: int | None = None) -> int:
     return _get_global_cash().cleanup(max_age)
 
 
+def clear_all() -> None:
+    """Delete the entries of every function ``@cash.cache`` has decorated in
+    this process, and reset their statistics.
+
+    Module-level form of :meth:`Cash.clear_all` on the default instance:
+    ``f.cache_clear()`` for each cached function. Entries of functions this
+    process has not decorated are kept; ``cash clear --all`` in a terminal
+    empties the whole cache folder.
+    """
+    _get_global_cash().clear_all()
+
+
 # The coding-agent guide entry point: ``cash.help()`` prints/returns the compact
 # reference (see ``_agent_guide.py``). Deliberately shadows the builtin at the
 # ``cash.help`` path only, and is kept out of ``__all__`` so that a star import
@@ -351,7 +363,9 @@ _LAZY_NAMES = ("cache", "show_stats", "register_hasher")
 
 
 def __dir__() -> list[str]:
-    return sorted(set(globals()) | set(_LAZY_NAMES))
+    """The public names, for ``dir(cash)`` and tab completion: not the
+    modules and helpers this file imports to build them."""
+    return sorted({*__all__, *_LAZY_NAMES, "help", "__version__"})
 
 
 # Left out of ``__all__``: ``help``, so ``from cash import *`` does not replace
@@ -368,6 +382,7 @@ __all__ = [
     "configure",
     "disabled",
     "cleanup",
+    "clear_all",
     # Purity declarations (stable)
     "pure",
     "stateful",

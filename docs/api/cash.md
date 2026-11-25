@@ -15,6 +15,7 @@ from cash import (
     Cash,
     Ignore,
     cleanup,
+    clear_all,
     configure,
     disabled,
     reset_session,
@@ -125,6 +126,8 @@ These act on the default `Cash` that `@cash.cache` uses.
 ::: cash.reset_session
 
 ::: cash.cleanup
+
+::: cash.clear_all
 
 ## Related
 

@@ -49,6 +49,21 @@ EXPLAIN_FILE_CHANGED = "file_changed"
 EXPLAIN_DISABLED = "disabled"
 
 
+def _shown(key: str, value: Any) -> Any:
+    """A detail as `CacheExplanation` prints it. ``details`` keeps the
+    numbers: a time as seconds since the epoch, a duration as a float."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return value
+    if key == "cached_at":
+        try:
+            return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(value)) + " (local time)"
+        except (OverflowError, OSError, ValueError):
+            return value
+    if isinstance(value, float) and (key.endswith("_seconds") or key == "execution_time_saved"):
+        return f"{value:.3g} s"
+    return value
+
+
 @dataclass(frozen=True)
 class CacheExplanation:
     """Why a specific call would hit or miss the cache *right now*.
@@ -124,7 +139,7 @@ class CacheExplanation:
                 for kk, vv in v.items():
                     lines.append(f"    {kk}: {vv}")
             else:
-                lines.append(f"  {k}: {v}")
+                lines.append(f"  {k}: {_shown(k, v)}")
         return "\n".join(lines)
 
     def __repr__(self) -> str:

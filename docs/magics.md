@@ -66,7 +66,7 @@ so and does nothing.
 **Usage:** `%cash_off`
 
 Cells after this one run uncached until the next `%cash_on`. It also clears the
-default `ttl`.
+default `ttl`. It prints `Cash disabled.`; what the cache holds is kept.
 
 ### `%cash_persist`
 <!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_persist @729a986b -->
@@ -162,8 +162,8 @@ whether folders are watched for changes to the files cells read
 [invalidation](how-it-works/invalidation.md#files)), and whether cash sees
 files that C libraries open themselves (`native_file_hook`; see
 [Reads through a loader cash cannot see](known-limitations.md#reads-through-a-loader-cash-cannot-see)). With no argument it prints JSON and
-returns the dict; `dict` returns it without printing; `json` returns a JSON
-string. Statuses use the enum names: `COMPUTED` for the badge's EXECUTED,
+returns nothing; `dict` returns the dict without printing; `json` returns a
+JSON string. Statuses use the enum names: `COMPUTED` for the badge's EXECUTED,
 `RESTORED` for CACHED, and `MIXED` for a statement that ran while calls inside
 it came from the cache (a cached helper called in a loop). What those calls
 saved counts in the statement's `saved_time` and the cell's
