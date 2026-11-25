@@ -679,7 +679,8 @@ class RngRewind:
             k = seen.get((cell, code), 0)
             seen[(cell, code)] = k + 1
             hidden = attribute_or(attribute_or(entry, "input_hashes"), "hidden_lineages") or {}
-            out[(cell, code, k)] = dict(hidden)
+            # A loop or branch carries the streams it reads on the entry.
+            out[(cell, code, k)] = {**(attribute_or(entry, "rng_reads", None) or {}), **hidden}
         return out
 
     @staticmethod

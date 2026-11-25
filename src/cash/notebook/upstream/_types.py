@@ -230,6 +230,15 @@ class TraceEntry:
     end, this is what the entry holds, as the runtime recorded it
     (``TrackingState.control_outcomes``)."""
 
+    rng_reads: dict[str, str | None] | None = None
+    """For a control structure, the lineage each RNG variable it draws from
+    has as it is entered (None or ``UNSEEDED`` for an unseeded stream).
+
+    A plain statement carries these on its *input_hashes*
+    (``InputHashes.hidden_lineages``), where its key reads them back; a
+    structure's input lineages are compared with its recorded outcome as
+    they are, so the streams ride here. Read by ``RngRewind`` only."""
+
 
 class IncrementalStartResult(NamedTuple):
     """Where the forward simulation starts: the first cell it must redo."""
