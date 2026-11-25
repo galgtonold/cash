@@ -291,6 +291,16 @@ jobs:
       - name: Run docs feature-parity tests
         run: pytest tests/docs/ -n auto -v -rs --tb=short
 
+      # cash ships py.typed. mypy and pyright check a sample of the documented
+      # decorator use; neither is in the dev extra (pyright downloads Node), so
+      # the test skips elsewhere and must not skip here. About 1 min.
+      - name: Type-check the documented decorator use
+        env:
+          CASH_TEST_REQUIRE_TYPE_CHECKERS: "1"
+        run: |
+          pip install mypy pyright
+          pytest tests/test_core/project/test_type_checkers_read_the_decorator.py -n 0 -q --tb=short
+
       # The test counts in the docs need `pytest --collect-only`, which cannot run
       # inside pytest. On failure run `python scripts/doc_numbers.py --update`.
       - name: Check derived doc numbers

@@ -20,7 +20,7 @@ from __future__ import annotations
 import contextlib
 import threading
 from collections.abc import Iterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ._dataclass_code import compiled_dataclass_methods
 
@@ -43,6 +43,7 @@ from .config.template import create_default_config
 from .core import CacheExplanation, Cash
 from .data_source import DataSource
 from .decorator.arg_key import Ignore
+from .decorator.cached_callable import CachedCallable
 from .effect_observer import assume_safe
 from .exceptions import (
     AmbiguousCellError,
@@ -321,7 +322,7 @@ def cleanup(max_age: int | None = None) -> int:
 from ._agent_guide import help as help
 
 
-def __getattr__(name):
+def __getattr__(name: str) -> Any:
     """Proxy module-level attribute access to the global ``Cash`` singleton.
 
     Supported attributes: ``cache``, ``show_stats``, ``register_hasher``.
@@ -335,6 +336,15 @@ def __getattr__(name):
         return _get_global_cash().register_hasher
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
+
+if TYPE_CHECKING:
+    # What a type checker and an editor see for the three names the module
+    # ``__getattr__`` below serves: the methods of a ``Cash``, signatures
+    # and overloads included. Nothing here runs.
+    _typed = Cash()
+    cache = _typed.cache
+    show_stats = _typed.show_stats
+    register_hasher = _typed.register_hasher
 
 #: Served by the module ``__getattr__``, which builds the global ``Cash``.
 _LAZY_NAMES = ("cache", "show_stats", "register_hasher")
@@ -351,6 +361,7 @@ __all__ = [
     # Core API (stable)
     "Cash",
     "CacheExplanation",
+    "CachedCallable",
     "Ignore",
     "opaque",
     "reset_session",

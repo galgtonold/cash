@@ -73,6 +73,13 @@ and also has these attributes:
 | `f.cache_clear()` | Deletes this function's entries and resets its statistics and warning log, so its warnings are shown again. |
 | `f.__wrapped__` | The undecorated function; calling it bypasses the cache. |
 
+A type checker (mypy, pyright, the editor's completion) sees the same: the
+decorated function keeps its parameters and return type, and has the four
+attributes above. Its type is `cash.CachedCallable[P, T]`, for a parameter
+or variable that holds a cached function:
+`def warm(f: cash.CachedCallable[[int], str]) -> None`.
+<!-- claim: cash/decorator/cached_callable.py:CachedCallable @72bb3e79 -->
+
 ```python
 import cash
 

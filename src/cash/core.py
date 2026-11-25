@@ -36,6 +36,7 @@ from .decorator.arg_hashing import (
 )
 from .decorator.arg_key import arg_key_spec, key_function_impurities
 from .decorator.backend_slot import BackendSlot
+from .decorator.cached_callable import CachedCallable
 from .decorator.cached_function import CHUNK_MAX_BYTES, CHUNK_MAX_ITEMS, CachedFunction, checked_ttl
 from .decorator.cash_key import KeyCheck
 from .decorator.class_data import ClassDataFold
@@ -590,7 +591,7 @@ class Cash:
         return f"Cash(backend={backend_name}, functions={n_funcs}, debug={self.debug})"
 
     @overload
-    def cache(self, func: Callable[P, T]) -> Callable[P, T]: ...
+    def cache(self, func: Callable[P, T]) -> CachedCallable[P, T]: ...
 
     @overload
     def cache(
@@ -610,7 +611,7 @@ class Cash:
         frozen: bool = ...,
         key: Callable[..., Any] | None = ...,
         ignore: str | list[str] | tuple[str, ...] | None = ...,
-    ) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
+    ) -> Callable[[Callable[P, T]], CachedCallable[P, T]]: ...
 
     def cache(
         self,
@@ -629,7 +630,7 @@ class Cash:
         frozen: bool = False,
         key: Callable[..., Any] | None = None,
         ignore: str | list[str] | tuple[str, ...] | None = None,
-    ) -> Callable[P, T] | Callable[[Callable[P, T]], Callable[P, T]]:
+    ) -> CachedCallable[P, T] | Callable[[Callable[P, T]], CachedCallable[P, T]]:
         """Cache a function's results, keyed on its arguments, code and inputs.
 
         Use it bare (``@c.cache``) or with options (``@c.cache(ttl=3600)``).

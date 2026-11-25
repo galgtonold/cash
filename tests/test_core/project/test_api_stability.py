@@ -9,6 +9,8 @@ def test_core_exports_stable():
         # Core API
         "Cash",
         "CacheExplanation",
+        # What @cash.cache returns, as a type: users annotate with it.
+        "CachedCallable",
         "reset_session",
         "configure",
         "cleanup",
