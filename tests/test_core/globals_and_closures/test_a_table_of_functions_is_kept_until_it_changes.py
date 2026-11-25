@@ -19,11 +19,19 @@ import sys
 
 import pytest
 
-from cash import Cash
+from cash import Cash, source_reading
 from tests._work_counts import hashed_bytes
 
 
 def _module(tmp_path, monkeypatch, name, n):
+    # Settled from the start. A file written under 2 s ago is read afresh
+    # on every call (`stat_has_settled`); the first read once it has settled
+    # digests its text (`_kept_block`, once a process and version: 16 KB for
+    # 300 functions). That read fell on the measured hit whenever the file
+    # settled between the warm-up calls and it -- 13.5 KB on Windows CI.
+    # The file is written once here and never again, so no edit can share
+    # its stat.
+    monkeypatch.setattr(source_reading, "SETTLED_SECONDS", -1.0)
     lines = ["K = 2"]
     lines += [f"def h{i}(x):\n    return x * K + {i}" for i in range(n)]
     lines.append("def other(x):\n    return -x")
