@@ -649,7 +649,8 @@ Checks and rules that hold for all of them:
   and `key=` (and a `cash.Ignore` annotation): they decide what the key
   reads, so adding, removing or changing one recomputes, as does adding,
   removing or changing a declared dependency.
-- Locking is not a decorator parameter: it is `Cash(use_locking=True)`, see
+- Locking is not a decorator parameter: it is the `use_locking` setting
+  (`cash.configure(use_locking=True)`), see
   [Threads and processes](tutorials/feature-guides/thread-safety.md).
 
 ### `ttl=`

@@ -291,6 +291,12 @@ class CashConfig:
     make ``%cash_on`` decline. ``CASH_DISABLE=1 pytest`` checks that tests
     pass without the cache. Read on every call."""
 
+    use_locking: bool = False
+    """Decorator only: concurrent calls with the same arguments compute
+    once. On a miss a caller takes a lock for that key and looks again; the
+    others wait and read the stored result. Within one process on every
+    backend, across processes on a bare Redis backend. Read on every call."""
+
     min_execution_time_to_cache_seconds: float = 0.01
     """Notebook only: a statement faster than this (seconds) is not cached
     at all. Whether a cached value is written to disk is decided by the

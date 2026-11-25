@@ -89,21 +89,25 @@ threads call cached functions, and what it does not.
 
 ## `use_locking=True`: compute once
 
-<!-- claim: cash/decorator/runtime.py:CallRunner.compute_with_lock @b4c5c8c2, cash/core.py:Cash.__init__ @d6897bc2 -->
-Turn on locking on the `Cash` instance. It is not a decorator parameter, and it
-applies to every function registered through that instance:
+<!-- claim: cash/decorator/runtime.py:CallRunner.compute_with_lock @b4c5c8c2, cash/config/schema.py:CashConfig.use_locking == False -->
+`use_locking` is a setting, off by default. Turn it on for the whole
+program with one line, or without touching the code with
+`CASH_USE_LOCKING=1` or `use_locking = true` under `[tool.cash]`:
 
 ```python
-from cash import Cash
+import cash
 
-app = Cash(use_locking=True)
+cash.configure(use_locking=True)
 
-@app.cache
+@cash.cache
 def train(n_trees):
     return {"trees": n_trees}
 
 train(300)   # first call: computes
 ```
+
+It is not a decorator parameter: it applies to every function of the
+instance, and `Cash(use_locking=True)` sets it for an instance of your own.
 
 On a miss, the caller takes a lock for that cache key, looks again, and only
 computes if the entry is still missing. The other callers wait for the lock,

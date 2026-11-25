@@ -36,8 +36,8 @@ new request. Edit the parsing downstream of `chat` and re-run: the request is a
 hit and only your parsing runs again.
 
 `async def` works the same way; see [Async functions](../feature-guides/async-caching.md).
-Two concurrent awaits of the same new prompt both send a request unless you
-construct `Cash(use_locking=True)`.
+Two concurrent awaits of the same new prompt both send a request unless
+locking is on: `cash.configure(use_locking=True)` or `CASH_USE_LOCKING=1`.
 
 ## What you will see
 

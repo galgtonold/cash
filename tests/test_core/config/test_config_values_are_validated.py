@@ -160,7 +160,7 @@ def test_a_keyword_that_is_not_a_setting_raises_in_code(tmp_path, kwargs, match)
 
 def test_use_locking_takes_only_a_flag(tmp_path):
     with pytest.raises(ValueError, match="use_locking"):
-        Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False, use_locking="no")
+        Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False, use_locking="sometimes")
     assert Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False, use_locking=1).use_locking is True
 
 

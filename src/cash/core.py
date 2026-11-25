@@ -178,16 +178,14 @@ class _ExitWork:
 
 def _constructor_overrides(
     backend: CacheBackend | str | None,
-    use_locking: bool,
     config_overrides: dict[str, Any],
     **convenience: Any,
-) -> tuple[CacheBackend | None, bool]:
+) -> CacheBackend | None:
     """Check `Cash`'s arguments and fold the settings among them into
-    *config_overrides*; return the backend instance (if one was given) and
-    ``use_locking`` as a bool.
+    *config_overrides*; return the backend instance, if one was given.
 
     *convenience* is the named settings `Cash` takes as its own keywords
-    (``cache_dir``, ``compress``, ``debug``, ``verbose``).
+    (``cache_dir``, ``compress``, ``debug``, ``verbose``, ``use_locking``).
     """
     # ``backend`` is also the name of a setting ("tiered", "file",
     # "sqlite", ...), and a setting may be passed by name: a string is
@@ -200,16 +198,13 @@ def _constructor_overrides(
             f"Cash(backend=...) takes a backend instance or a backend type name such as 'sqlite', "
             f"not {class_name(type(backend))}"
         )
-    if not isinstance(use_locking, bool) and use_locking not in (0, 1):
-        raise ValueError(f"Cash(use_locking={use_locking!r}): expected True or False")
-    use_locking = bool(use_locking)
     # Map the explicit convenience kwargs (cache_dir, compress, debug)
     # into the overrides dict so the config layer treats them with the
     # same priority as any other constructor-supplied override (highest).
     for key, val in convenience.items():
         if val is not None:
             config_overrides.setdefault(key, val)
-    return backend, use_locking
+    return backend
 
 
 def _summary_at_exit(ref: weakref.ref[Cash]) -> None:
@@ -275,7 +270,7 @@ class Cash:
             registers them only when an IPython session is running.
         debug: Log every cache decision (the ``debug`` setting).
         use_locking: Take a per-key lock so concurrent calls with the same
-            arguments compute once.
+            arguments compute once (the ``use_locking`` setting).
         config_path: A TOML file read above the project and user config.
         verbose: Log one line per cached call (the ``verbose`` setting).
         **config_overrides: Any other setting by name, for example
@@ -302,7 +297,6 @@ class Cash:
     data_sources: dict[str, DataSource]
     source_hashes: dict[str, str]
     debug: bool | None
-    use_locking: bool
     config: CashConfig
 
     def __reduce__(self):
@@ -341,17 +335,22 @@ class Cash:
         compress: bool | None = None,
         register_magic: bool | None = None,
         debug: bool | None = None,
-        use_locking: bool = False,
+        use_locking: bool | None = None,
         config_path: str | None = None,
         verbose: bool | None = None,
         **config_overrides: Any,
     ) -> None:
-        backend, use_locking = _constructor_overrides(
-            backend, use_locking, config_overrides, cache_dir=cache_dir, compress=compress, debug=debug, verbose=verbose
+        backend = _constructor_overrides(
+            backend,
+            config_overrides,
+            cache_dir=cache_dir,
+            compress=compress,
+            debug=debug,
+            verbose=verbose,
+            use_locking=use_locking,
         )
         self.config = get_config(config_path=config_path, overrides=config_overrides or None)
         self._init_infrastructure(backend, backends)
-        self.use_locking = use_locking
         # Asking for debug output has to produce some, also in a script that
         # configured no logging.
         debug, verbose = self.config.debug, self.config.verbose
@@ -569,6 +568,15 @@ class Cash:
     @debug.setter
     def debug(self, value: bool) -> None:
         self.config.debug = bool(value)
+
+    @property
+    def use_locking(self) -> bool:
+        """``config.use_locking``: concurrent calls of one key compute once."""
+        return bool(self.config.use_locking)
+
+    @use_locking.setter
+    def use_locking(self, value: bool) -> None:
+        self.config.use_locking = bool(value)
 
     @property
     def verbose(self) -> bool:

@@ -32,7 +32,7 @@ for some functions.
 ```text
 Cash(
     backend=None, cache_dir=None, backends=None, compress=None,
-    register_magic=None, debug=None, use_locking=False,
+    register_magic=None, debug=None, use_locking=None,
     config_path=None, verbose=None, **config_overrides)
 
 Cash.cache(
@@ -78,7 +78,7 @@ decorated function keeps its parameters and return type, and has the four
 attributes above. Its type is `cash.CachedCallable[P, T]`, for a parameter
 or variable that holds a cached function:
 `def warm(f: cash.CachedCallable[[int], str]) -> None`.
-<!-- claim: cash/decorator/cached_callable.py:CachedCallable @72bb3e79 -->
+<!-- claim: cash/decorator/cached_callable.py:CachedCallable @72bb3e79 broad="the protocol as a whole is what a type checker sees" -->
 
 ```python
 import cash

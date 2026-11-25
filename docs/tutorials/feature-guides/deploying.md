@@ -77,7 +77,7 @@ that expired entries still hold.
   gunicorn workers) share the disk cache and keep their own RAM tier, counters
   and warnings. See [Threads and processes](thread-safety.md#across-processes-pool-processpoolexecutor-joblib).
 - **Concurrent callers.** Without locking, two callers that miss the same key at
-  once both compute it. `Cash(use_locking=True)` makes one compute while the
+  once both compute it. `CASH_USE_LOCKING=1` (the `use_locking` setting) makes one compute while the
   others wait; the next section says which locks span processes.
 - **Network reads.** A cached function that calls an API or a database warns
   [`KEY-NETWORK-READ`](../../warnings.md#key-network-read) until it has a
