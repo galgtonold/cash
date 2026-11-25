@@ -195,7 +195,8 @@ def test_a_frozen_result_read_from_disk_is_decoded_once_per_process(tmp_path):
                             node = node.children.setdefault(ch, Node())
                         node.end = True
             """
-        )
+        ),
+        encoding="utf-8",
     )
     script = tmp_path / "walk.py"
     script.write_text(
@@ -214,7 +215,8 @@ def test_a_frozen_result_read_from_disk_is_decoded_once_per_process(tmp_path):
             info = trie.cache_info()
             print("RUN", info["hits"], info["misses"], len({id(t) for t in kept[1:]}), id(kept[0]) == id(kept[1]))
             """
-        )
+        ),
+        encoding="utf-8",
     )
     cache_dir = tmp_path / ".cash"
     first = run_python(script, cwd=tmp_path, cache_dir=cache_dir)

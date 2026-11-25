@@ -171,7 +171,7 @@ def _diff(cls: type, then: dict[str, Any], now: dict[str, Any]) -> list[str]:
 def _label(cls: type) -> str:
     try:
         return class_qualname(cls).replace(".<locals>", "")
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - a broken metaclass name falls back to repr
         return repr(cls)
 
 

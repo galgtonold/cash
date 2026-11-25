@@ -34,7 +34,7 @@ FROZEN_AUDIT_EVERY = 64
 _KEYED_BY_CONTENT = "from now on it is keyed by its contents."
 
 #: Every `FrozenResults`, for `_untrust_everywhere`.
-_ALL: weakref.WeakSet = weakref.WeakSet()
+_ALL: weakref.WeakSet = _weak.WeakSet()
 
 
 def _untrust_everywhere(obj: Any) -> None:
