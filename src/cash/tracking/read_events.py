@@ -192,7 +192,7 @@ def _track_read(path: Any, caller: Any, *, appends: bool) -> None:
         # ~2 us miss, 3 ms of the first 50 calls in `[f(i) for i in xs]`.
         # The tracker drops these paths anyway, after resolving them.
         return
-    found = tracker.track_path(path, read)
+    found = tracker.track_path_asked(path, read)
     if not appends and not found:
         # A file that was not there is an input too, and the docs say so --
         # but only the `os.path.exists` spelling recorded it.
