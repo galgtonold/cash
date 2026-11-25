@@ -3,9 +3,10 @@ stores are different news, under different codes.
 
 The write-back note (``clip_in_place changed 'a' in place; ... a hit writes
 it back.``) shared its code with the warnings that say a call is never
-stored. A code already shown prints only ``also on <name>`` for the next
-function, so a function calling ``np.seterr`` after it showed nothing but
-``also on quiet``: not that its calls run uncached, nor why.
+stored. A code already shown prints, for the next function, its finding and
+``Same fix as for <name>`` without the explanation, so a function calling
+``np.seterr`` after the note would be pointed at a fix the note does not
+have.
 """
 
 from __future__ import annotations
@@ -65,7 +66,7 @@ def test_a_call_never_stored_after_a_write_back_note_says_why(disk_cash):
         np.seterr(**old)
     texts = [text for code, text in shown if code == "IMPURE-OBSERVED-EFFECTS"]
     assert len(texts) == 1, shown
-    assert "also on" not in texts[0], texts[0]
+    assert "Same fix as for" not in texts[0], texts[0]
     assert "np.seterr" in texts[0] and "calls run uncached" in texts[0], texts[0]
     assert quiet.cache_info()["hits"] == 0
 
@@ -94,7 +95,7 @@ def test_a_never_stored_call_after_an_observed_effect_elsewhere_says_why(disk_ca
         np.seterr(**old)
     assert any(code == "IMPURE-OBSERVED-EFFECTS" for code, _ in first), first
     texts = [text for code, text in shown if code == "IMPURE-OBSERVED-EFFECTS"]
-    assert len(texts) == 1 and "also on" not in texts[0] and "calls run uncached" in texts[0], shown
+    assert len(texts) == 1 and "Same fix as for" not in texts[0] and "calls run uncached" in texts[0], shown
 
 
 def test_the_same_refusal_on_a_second_function_still_shortens(disk_cash):
@@ -114,9 +115,11 @@ def test_the_same_refusal_on_a_second_function_still_shortens(disk_cash):
         shown = _shown(quieter, 1)
     finally:
         np.seterr(**old)
-    assert [text for _, text in shown] == [
-        "[IMPURE-OBSERVED-EFFECTS] also on quieter (quieter.cache_info()['warnings'])"
-    ]
+    [text] = [text for _, text in shown]
+    assert text.startswith("[IMPURE-OBSERVED-EFFECTS] quieter: "), text
+    assert "np.seterr" in text, "the second function's own finding is kept"
+    assert text.endswith("Same fix as for quiet. (quieter.cache_info()['warnings'])"), text
+    assert "Fix:" not in text
 
 
 class _Model:

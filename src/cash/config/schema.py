@@ -337,8 +337,8 @@ class CashConfig:
     happened and where to read more (the docs section; for a decorated
     function also ``f.cache_info()['warnings']``, which keeps the full
     text). ``"full"``: the full text, with the fix and any list of findings.
-    In ``"short"``, a code one function already showed prints only
-    ``also on <name>`` for the next function."""
+    In ``"short"``, a code one function already showed prints, for the
+    next function, that function's finding and ``Same fix as for <name>``."""
 
     analytics: bool = True
     """Notebook only: record each statement's hit, miss and timing in

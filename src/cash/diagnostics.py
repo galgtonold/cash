@@ -559,6 +559,49 @@ def list_gist(items: list[str], noun: str = "finding") -> str:
     return f"{len(items)} {noun}s, e.g. {first}"
 
 
+def _gist(what: str) -> tuple[str, list[str]]:
+    """The first sentence of *what* and the items listed below it."""
+    head, _, rest = what.partition("\n")
+    sentences = _SENTENCE_END.split(head.strip(), maxsplit=2)
+    sentence = sentences[0]
+    # "@cash.cache on f: result not cached." says what, not why: a first
+    # sentence of a few words after its subject takes the next one along.
+    if len(sentences) > 1 and len(sentence.rpartition(": ")[2].split()) < 6:
+        sentence = f"{sentence} {sentences[1]}"
+    # A heading line ("in helper (mod.py):") groups items; it is not one.
+    items = [line.strip() for line in rest.splitlines() if line.strip() and not line.rstrip().endswith(":")]
+    return sentence, items
+
+
+#: ``@cash.cache on pkg.mod.f: `` in front of a message: its subject.
+_SUBJECT = re.compile(r"^@cash\.cache on [^:]+: ")
+
+
+def repeat_diagnostic(code: str, name: str, what: str, *, first: str, more: str) -> str:
+    """The one line of a warning whose code another function, *first*,
+    already showed with its explanation and fix::
+
+        [IMPURE-SIDE-EFFECTS] export: 3 findings, e.g. line 14: [impure_call] open() - known I/O / side-effecting. Same fix as for report. (export.cache_info()['warnings'])
+
+    The explanation and the fix are not repeated; the finding is, since it
+    is the function's own: the first function's may be a ``print``, this
+    one's a file write. A message with a list below it gives the list's
+    gist, any other its first sentence without the subject.
+    """
+    _, items = _gist(what)
+    if items:
+        finding = list_gist(items)
+    else:
+        # Without its subject, "result not cached." says what and not why,
+        # and takes the next sentence along.
+        sentences = _SENTENCE_END.split(_SUBJECT.sub("", what.strip(), count=1), maxsplit=2)
+        finding = sentences[0]
+        if len(sentences) > 1 and len(finding.split()) < 6:
+            finding = f"{finding} {sentences[1]}"
+    finding = _INLINE_CODE.sub(r"`\1`", finding).rstrip(" .:")
+    return f"[{code}] {name}: {finding}. Same fix as for {first}. ({more})"
+
+
 def short_diagnostic(code: str, what: str, fix: str | None = None, *, more: str | None = None) -> str:
     """The one-line form a warning shows by default::
 
@@ -571,15 +614,7 @@ def short_diagnostic(code: str, what: str, fix: str | None = None, *, more: str 
     clause. The rest is in the doc section the link points at; *more* names where the full text of this one is kept
     (``f.cache_info()['warnings']``). Inline code keeps one backtick a side.
     """
-    head, _, rest = what.partition("\n")
-    sentences = _SENTENCE_END.split(head.strip(), maxsplit=2)
-    sentence = sentences[0]
-    # "@cash.cache on f: result not cached." says what, not why: a first
-    # sentence of a few words after its subject takes the next one along.
-    if len(sentences) > 1 and len(sentence.rpartition(": ")[2].split()) < 6:
-        sentence = f"{sentence} {sentences[1]}"
-    # A heading line ("in helper (mod.py):") groups items; it is not one.
-    items = [line.strip() for line in rest.splitlines() if line.strip() and not line.rstrip().endswith(":")]
+    sentence, items = _gist(what)
     if items:
         sentence = f"{sentence.rstrip(' .:')}: {list_gist(items)}"
     if fix and fix.strip():

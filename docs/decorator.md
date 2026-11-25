@@ -340,8 +340,9 @@ format instead of stderr.
 prints as one line: the code, what happened, the fix, and a link to its entry
 on [Warnings](warnings.md). The `file:line` in front is the call in your code
 that set it off; a `line N` inside the message is a line of the cached
-function's own file. When a second function gets the same finding under
-the same code, its line says only `also on <name>`. `f.cache_info()["warnings"]` keeps each one's
+function's own file. When a second function gets a warning under a code
+already shown, its line names what was found in it and ends
+`Same fix as for <name>`. `f.cache_info()["warnings"]` keeps each one's
 full text, with every finding listed, and `CASH_WARNING_DETAIL=full` prints
 that instead. `logging.captureWarnings(True)` routes warnings to your
 handlers.

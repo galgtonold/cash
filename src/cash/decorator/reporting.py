@@ -17,7 +17,14 @@ from .._clock import perf_counter as _perf_counter
 from .._type_memo import class_name
 from .._user_attrs import plain_getattr, unwrapped
 from ..backends import adaptive_caps, budget_notices
-from ..diagnostics import format_diagnostic, full_warnings, short_diagnostic, warn_diagnostic, warn_diagnostic_message
+from ..diagnostics import (
+    format_diagnostic,
+    full_warnings,
+    repeat_diagnostic,
+    short_diagnostic,
+    warn_diagnostic,
+    warn_diagnostic_message,
+)
 from ..exceptions import CashCacheIneffectiveWarning, CashImpurityWarning
 from . import hit_memo
 from .cached_function import WARNINGS_MAX
@@ -110,10 +117,12 @@ class Notices:
         # What `warn_once` has shown: (category, func_name, arg_type_name, code).
         self._seen: set[tuple[type[Warning], str, str, str]] = set()
         # Each (code, kind) shown in the short form, and the function it was
-        # shown for: the next function with that code and kind prints only
-        # "also on <name>". The kind is warn_once's *arg_type_name*: one code
-        # covers different findings ("a hit will not repeat it" and "this
-        # call is never stored"), and "also on" must repeat the one shown.
+        # shown for: the next function with that code and kind prints its
+        # own finding and "Same fix as for <that function>", without the
+        # explanation and the fix. The kind is warn_once's *arg_type_name*:
+        # one code covers different findings ("a hit will not repeat it" and
+        # "this call is never stored"), and the fix referred to must be the
+        # one shown.
         self._shown_codes: dict[tuple[str, str], str] = {}
         # func_name -> the warnings asked for it while a call of it is
         # recorded (`record_warnings`), shown or not.
@@ -151,7 +160,8 @@ class Notices:
         of :func:`~cash.diagnostics.short_diagnostic`, which points at that
         log -- *short*, when given, is the what it summarizes instead of the
         first sentence of ``message``. A code already shown for another
-        function shows only ``also on <name>``.
+        function shows this function's finding and ``Same fix as for
+        <name>`` (:func:`~cash.diagnostics.repeat_diagnostic`).
 
         ``arg_type_name`` is the empty string for warnings that do not
         attach to a specific arg type (e.g. store-failed). The seen-set
@@ -286,7 +296,7 @@ class Notices:
         with self.lock:
             first = self._shown_codes.get(shown_as)
         if first is not None and first != func_name:
-            return f"[{code}] also on {name} ({more})"
+            return repeat_diagnostic(code, name, short or message, first=self._display_name(first), more=more)
         return short_diagnostic(code, short or message, fix, more=more)
 
     def _display_name(self, func_name: str) -> str:

@@ -14,7 +14,7 @@ Every cash warning starts with a code in square brackets, such as
 
 ## How much a warning says {#warning-detail}
 
-<!-- claim: cash/diagnostics.py:short_diagnostic @aa9e9b1c, cash/decorator/reporting.py:Notices._displayed @96d4fb79 -->
+<!-- claim: cash/diagnostics.py:short_diagnostic @aa9e9b1c, cash/decorator/reporting.py:Notices._displayed @f33ddf79, cash/diagnostics.py:repeat_diagnostic @cb619e23 -->
 By default a warning is one line: the code, what happened, the fix,
 and where to read more. A list of findings or effects
 is cut to how many there are and the first one. The rest is in the code's
@@ -26,11 +26,16 @@ model.py:10: CashImpurityWarning: [IMPURE-OBSERVED-EFFECTS] @cash.cache on model
 
 For a decorated function, `f.cache_info()["warnings"]` keeps the full text
 (every finding), which the line names. When a second function
-gets the same finding under a code the first already showed, its line only
-says so:
-`[IMPURE-OBSERVED-EFFECTS] also on backtest2 (backtest2.cache_info()['warnings'])`.
-A different finding under that code (the first function's effects will not
-repeat on a hit, the second's calls are never stored) gets its own line.
+gets a warning under a code the first already showed, its line keeps what
+was found in that function and leaves out the explanation and the fix:
+
+```text title="Output"
+[IMPURE-SIDE-EFFECTS] export: 2 findings, e.g. line 14: [impure_call] open() - known I/O / side-effecting. Same fix as for report. (export.cache_info()['warnings'])
+```
+
+A different kind of finding under that code (the first function's effects
+will not repeat on a hit, the second's calls are never stored) gets its
+full line.
 
 Set [`warning_detail`](getting-started/configuration.md#output-and-switches)
 to `"full"` (`CASH_WARNING_DETAIL=full`) to print the full text instead:
