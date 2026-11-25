@@ -1091,15 +1091,19 @@ class _ArrowRead:
         if key in self.refs:
             return
         signature = self.signature
+        # The two tables are bound here, not looked up when the callback
+        # runs: an array freed while the interpreter shuts down calls it
+        # after this module's globals were set to None.
+        signed, reads = _ARROW_SIGNED, _ARROW_READS
 
         def gone(_ref: Any) -> None:
             # Runs as the array is freed, before its id can be used again.
-            if _ARROW_SIGNED.get(key) == signature:
-                _ARROW_SIGNED.pop(key, None)
-            if _ARROW_READS.get(signature) is self:
+            if signed.get(key) == signature:
+                signed.pop(key, None)
+            if reads.get(signature) is self:
                 self.refs.pop(key, None)
                 if not self.refs:
-                    _ARROW_READS.pop(signature, None)
+                    reads.pop(signature, None)
 
         self.refs[key] = _weak.ref(chunked, gone)
         _ARROW_SIGNED[key] = signature
