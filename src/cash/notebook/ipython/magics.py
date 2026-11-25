@@ -28,7 +28,7 @@ from ...tracking import file_watch, io_watch, log_lines, native_reads, reader_pa
 from ...tracking.function_tracker import FunctionTracker
 from ...tracking.randomness import capture_rng_state, rng_modules_changed, rng_virtual_var
 from ...value_hash import compute_hash
-from .. import shadow
+from .. import code_read, shadow
 from .._protocols import ShellProtocol
 from ..cache_status import CacheStatus
 from ..control_structures import ControlStructureProcessor
@@ -585,6 +585,10 @@ class CashMagics(Magics):
               cells read, on by default (``CASH_FILE_WATCH=0`` turns it off):
               "on (inotify, N folders watched)", "off (CASH_FILE_WATCH=0; ...)"
               or "off: not supported on macOS; ..."
+            - library_rules: per rule that rests on a library's own pickling
+              code (scikit-learn's estimators, numpy's masked arrays): "on
+              (...)" while the installed code is a text cash read, "off:
+              ..." with what runs every time instead, or "not loaded"
         """
 
         mode = parse_mode(line, ("", "print", "json", "dict"))
@@ -605,6 +609,7 @@ class CashMagics(Magics):
             "fast_path": value_watch.status_line(),
             "native_file_hook": native_reads.status_line(),
             "file_watch": file_watch.status_line(),
+            "library_rules": code_read.status(),
         }
         shadow_status = shadow.status()
         if shadow_status is not None:

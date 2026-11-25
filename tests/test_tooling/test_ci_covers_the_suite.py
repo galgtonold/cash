@@ -566,3 +566,17 @@ class TestTheOldestPythonInstallsFromWheels:
         assert "b.ALGORITHM == 'blake3'" in install, install
         assert "tools/dependency_floor.py" in _step_run(job, "Report dependencies that left this Python behind")
         assert (REPO_ROOT / "tools" / "dependency_floor.py").is_file()
+
+
+class TestTheLibraryCodeReadIsChecked:
+    """A notebook rule that rests on a library's pickling code is off, with
+    no word, on a release that edits that code. A nightly job on the newest
+    releases is where a maintainer hears of it."""
+
+    def test_the_nightly_job_runs_the_check_on_the_newest_releases(self):
+        job = _job(NIGHTLY_YML.read_text(encoding="utf-8"), "library-code")
+        assert "pip install --upgrade numpy scikit-learn" in job
+        assert "python tools/library_code_read.py" in job
+        assert (REPO_ROOT / "tools" / "library_code_read.py").is_file()
+        # It fails the run: the fix is a maintainer reading the new code.
+        assert "continue-on-error" not in job

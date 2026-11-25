@@ -45,6 +45,7 @@ from typing import Any
 from cash import kept_state, value_hash
 from cash._user_attrs import attribute_or
 from cash.content_hashers import hash_numpy
+from cash.notebook import code_read
 from cash.notebook.borrowed_memory import MemoryHome, data_arrays, memory_home, rebuild_view
 from cash.notebook.shared_objects import check_walk_budget
 
@@ -263,9 +264,6 @@ _CLASS_DICT = frozenset(
 #: Metaclasses whose classes pickling treats as ``type``'s: neither
 #: defines how an attribute of the class is found nor how it is called.
 _METACLASSES = (type, abc.ABCMeta)
-#: The versions whose pickling code the exceptions were read in.
-_SKLEARN_READ = "1.9.1"
-_NUMPY_READ = "2.5.4"
 _HEAP_TYPE = 1 << 9  # Py_TPFLAGS_HEAPTYPE: a class made by a class statement
 
 
@@ -441,9 +439,10 @@ def _pickles_by_default(cls: type, exempt: Mapping[str, Any], keyed: bool) -> bo
 
 
 def _masked_array() -> type | None:
-    """``numpy.ma.MaskedArray`` when ``numpy.ma`` is loaded, and numpy is
-    the version read (`_NUMPY_READ`; any other: None): an array whose
-    pickling cash knows (``GridSearchCV.cv_results_`` holds them).
+    """``numpy.ma.MaskedArray`` when ``numpy.ma`` is loaded and its
+    pickling functions are a text that was read (`code_read.RULES`; any
+    other: None): an array whose pickling cash knows
+    (``GridSearchCV.cv_results_`` holds them).
 
     In numpy 2.5.4, ``MaskedArray.__reduce__`` hands pickling
     ``_mareconstruct`` with the class, ``_baseclass`` and a dtype code, and
@@ -453,15 +452,15 @@ def _masked_array() -> type | None:
     data and mask from them. So it comes back as a copy of its data, mask
     and fill value, holding the objects of an array of objects as they
     are: walked as an ``ndarray`` is, its mask and fill value with it."""
-    if attribute_or(loaded_module("numpy"), "__version__", None) != _NUMPY_READ:
+    if not code_read.is_read("masked_array_pickling"):
         return None
     return attribute_or(loaded_module("numpy.ma"), "MaskedArray", None)
 
 
 def _sklearn_pickling() -> dict[str, Any]:
     """``BaseEstimator.__getstate__`` and ``__setstate__`` when scikit-learn
-    is loaded, and is the version read (`_SKLEARN_READ`; any other: none):
-    pickling an estimator by default but for them is exact.
+    is loaded and they are a text that was read (`code_read.RULES`; any
+    other: none): pickling an estimator by default but for them is exact.
 
     In scikit-learn 1.9.1, ``__getstate__`` raises for an estimator with
     ``__slots__``, takes ``object.__getstate__()`` (or a copy of
@@ -471,7 +470,7 @@ def _sklearn_pickling() -> dict[str, Any]:
     ``__dict__`` with the rest (``super().__setstate__``, which ``object``
     lacks). The attributes are saved and rebuilt as the objects they are,
     as by default."""
-    if attribute_or(loaded_module("sklearn"), "__version__", None) != _SKLEARN_READ:
+    if not code_read.is_read("estimator_pickling"):
         return {}
     base = attribute_or(loaded_module("sklearn.base"), "BaseEstimator")
     if base is None:

@@ -9,8 +9,8 @@ name: Nightly integration
 # on the merge branch when there is one. The wheel-gate job runs alongside
 # the shards, and so do the held-unit job (the unit tests too slow for every
 # push), the self-check job (the unit suite and the core set with every memo
-# checked), the wheels-only install on the oldest Python and the speed
-# report.
+# checked), the wheels-only install on the oldest Python, the check of the
+# library code some rules were read in and the speed report.
 on:
   schedule:
     - cron: "0 2 * * *"
@@ -256,6 +256,34 @@ jobs:
       - name: Report dependencies that left this Python behind
         working-directory: ${{ runner.temp }}
         run: v/bin/python "$GITHUB_WORKSPACE/tools/dependency_floor.py"
+
+  # A few notebook rules rest on how scikit-learn and numpy pickle their
+  # objects, and hold for the text of the functions that were read
+  # (cash/notebook/code_read.py). A release that edits one turns the rule
+  # off for its users, safely and without a word. This job installs the
+  # newest releases and fails when a rule is off, with the digest to add
+  # once the new text has been read. About 2 min.
+  library-code:
+    name: Library code the notebook rules were read in
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Install cash and the newest releases
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip install --upgrade numpy scikit-learn
+
+      - name: Check the code each rule was read in
+        run: python tools/library_code_read.py
 
   # Report only: the speed set's ratios (cash over plain Python, per scenario)
   # on the tested commit against main. Both sides are measured in this job,

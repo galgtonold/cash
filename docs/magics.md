@@ -170,6 +170,15 @@ saved counts in the statement's `saved_time` and the cell's
 `total_restored_time`, and its `calls` entry counts them. Any other argument
 prints an error and returns `None`.
 
+<!-- claim: cash/notebook/code_read.py:status @75f7a454 -->
+`library_rules` has one line per rule that rests on a library's own pickling
+code: a fitted scikit-learn estimator, or a numpy masked array, that keeps a
+slice of your data can be stored only while that code is a text cash has read.
+`on` names the release it was read in and the one installed. `off` means the
+installed release changed that code: such a statement then runs every time,
+which is safe, until a cash release has read the new code. `not loaded` means
+the library has not been imported.
+
 ```python
 status = %cash_status dict
 ```
