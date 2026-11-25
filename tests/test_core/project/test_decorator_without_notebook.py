@@ -145,6 +145,7 @@ _INTO_THE_NOTEBOOK = {
 _INTO_THE_DECORATOR = {
     ("cash", "cash.core"),
     ("cash", "cash.decorator.arg_key"),
+    ("cash", "cash.decorator.cached_callable"),
     ("cash.__main__", "cash.decorator.explain"),
     ("cash._active", "cash.core"),
     ("cash.reconfigure", "cash.core"),

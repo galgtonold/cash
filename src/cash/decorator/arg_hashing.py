@@ -2295,7 +2295,7 @@ class ArgHasher:
                 continue
             try:
                 self.hash_payload((held,), {})
-            except Exception:  # noqa: BLE001 - exactly what we are looking for
+            except Exception:  # noqa: BLE001 - fails closed: only names the attribute in a warning
                 deeper = self.unhashable_attribute(held, depth - 1) if depth > 1 else None
                 return (f"{name}.{deeper[0]}", deeper[1]) if deeper is not None else (name, held)
         return None
