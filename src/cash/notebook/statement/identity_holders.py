@@ -686,7 +686,7 @@ _CHARS_AT_ONCE = 1 << 24
 assert 1000 % _ALIGNMENT == 0  # an address's last three digits tell its alignment
 
 
-def _spelled_in(text: str) -> set[int]:
+def _spelled_in(text: str, mapped_only: bool = False) -> set[int]:
     """The numbers *text* spells that could be an ``id()`` turned into text,
     alone or inside it: ``str(id(x))``, ``'k' + str(id(x))``,
     ``f"run-{id(x)}"``, ``hex(id(x))``, ``<Q object at 0x7f...>``. Each run
@@ -697,7 +697,15 @@ def _spelled_in(text: str) -> set[int]:
     after ``0x`` (``hex(id(x)) + 'ff'``).
     Restored, a value holding one spells the old process's address, where
     plain Python spells the new one's. Which of them is an object's address
-    `_candidate_ids` decides."""
+    `_candidate_ids` decides.
+
+    With *mapped_only*, the parts of many long runs are only those inside a
+    mapping of this process now (`_mapped_windows`), for Python strings read
+    as they are (`_Walk._read_texts`): a string is never rewritten, so one
+    spelling the ``id()`` of an object alive at a later check spelled it
+    while that object was alive, and its address was mapped at this read.
+    Not for a column's buffers, whose read is kept by the buffers' address
+    and is every number, whatever the mappings."""
     numbers: set[int] = set()
     runs = _DECIMAL_RUN.findall(text)
     if runs:
@@ -706,7 +714,7 @@ def _spelled_in(text: str) -> set[int]:
         shortest = _SHORTEST_RUN if _EVERY_SPELLING[0] else _ADDRESS_DIGITS
         if max(lengths) > shortest:
             longer = list(compress(runs, map(operator.lt, repeat(shortest), lengths)))
-            found = _mapped_windows(longer) if len(longer) >= _MANY_RUNS else None
+            found = _mapped_windows(longer) if mapped_only and len(longer) >= _MANY_RUNS else None
             if found is None:
                 for run in longer:
                     numbers.update(_windows(run))
@@ -2537,7 +2545,7 @@ class _Walk:
         (`_spelled_in`), searched joined a chunk at a time."""
         for text in _joined(texts):
             if _may_spell(text):
-                self.numbers.update(_spelled_in(text))
+                self.numbers.update(_spelled_in(text, mapped_only=True))
 
     def _read_ints(self, flat: Any, only: bool) -> None:
         """The ints of *flat* that could be an id(); with *only*, *flat*
