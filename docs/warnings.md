@@ -1234,7 +1234,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-INSTANCE-STATE](#key-instance-state) | decorator | a bound method's instance cannot be hashed |
 | [KEY-ITERATOR-CONSUMED](#key-iterator-consumed) | decorator | a registered hasher read an iterator argument; the call ran uncached |
 | [KEY-LIBRARY-STATE-UNREAD](#key-library-state-unread) | decorator | the body read a library setting or a `ContextVar` whose value cannot be compared; not cached |
-| [KEY-LIBRARY-STATE-UNSEEN](#key-library-state-unseen) | both | below Python 3.12, with `CASH_TRACE=0` or for a coroutine, a changed library setting is not detected; said once per process |
+| [KEY-LIBRARY-STATE-UNSEEN](#key-library-state-unseen) | both | below Python 3.12, with `CASH_TRACE=0`, for a coroutine or a returned iterator, a changed library setting is not detected; said once per process |
 | [KEY-LIBRARY-VALUE-UNREAD](#key-library-value-unread) | both | a value set on a library's module is too big to look through for an iterator; code reading it runs every time |
 | [KEY-MEMO-BEFORE-IMPORT](#key-memo-before-import) | both | a `functools` memo already held results when cash was imported |
 | [KEY-LOOP-VAR-CHANGED](#key-loop-var-changed) | notebook | a loop body changes its loop variable before work cached for each pass |
@@ -1664,10 +1664,13 @@ still keyed, and so, in a notebook, is a setting made on a module the
 statement names (`sklearn.preprocessing.StandardScaler()` after
 `sklearn.set_config(...)`).
 
-**What to do.** Run on Python 3.12 or newer with tracing on (the default),
-pass the setting in as an argument, or clear the cache after changing a
-setting. In a notebook, `# @cash:no-cache` runs a statement whose result a
-setting changes every time.
+**What to do.** Pass the setting in as an argument, or clear the cache
+after changing a setting. The message also names the way out for its case:
+below Python 3.12, run on 3.12 or newer; with `CASH_TRACE=0`, unset it; for
+an `async def`, move the part that reads the setting into a sync function
+and cache that one instead; for a returned iterator, return a finished
+value such as a list. In a notebook, `# @cash:no-cache` runs a statement
+whose result a setting changes every time.
 
 **When it is safe to ignore.** When your cached code does not depend on
 library settings, or you never change them between runs.

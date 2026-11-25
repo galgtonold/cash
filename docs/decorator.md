@@ -1359,7 +1359,7 @@ with its fix:
   a logger or a `verbose=` flag.
 - <a id="methods-and-self"></a>[Methods and `self`](decorator-limitations.md#methods-and-self)
 - <a id="code-you-pass-as-an-argument"></a>[Code you pass as an argument](decorator-limitations.md#code-you-pass-as-an-argument)
-- [Library settings before Python 3.12](decorator-limitations.md#library-settings-before-python-312)
+- [Library settings cash cannot check](decorator-limitations.md#library-settings-cash-cannot-check)
 - <a id="reads-cash-cannot-see"></a>[Reads cash cannot see](decorator-limitations.md#reads-cash-cannot-see):
   C extensions, subprocesses, threads you start.
 - [An edit that keeps the size and timestamps](decorator-limitations.md#an-edit-that-keeps-the-size-and-timestamps)

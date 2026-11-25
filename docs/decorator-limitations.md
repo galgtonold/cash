@@ -286,9 +286,9 @@ to watch:
   function's own code counts, not the functions it calls. Name each function
   whose change matters.
 
-## Library settings before Python 3.12
+## Library settings cash cannot check
 
-<!-- claim: cash/decorator/runtime.py:CallRunner._warn_settings_unseen @e86dbc89 -->
+<!-- claim: cash/decorator/runtime.py:CallRunner._warn_settings_unseen @e7105632 -->
 On Python 3.12 and newer, cash checks the library settings a call read
 (`sklearn.set_config(...)`, `pd.set_option(...)`, `np.seterr(...)`, a
 `ContextVar`) before it serves the entry. Before 3.12, with `CASH_TRACE=0`,
@@ -299,7 +299,8 @@ argument (`df.to_string()`). cash says so once per process, for the first
 call stored in such a case
 ([`KEY-LIBRARY-STATE-UNSEEN`](warnings.md#key-library-state-unseen)). Pass
 the setting in as an argument, or clear the function's entries after
-changing it.
+changing it. For an `async` function, the other way out is to move the part
+that reads the setting into a sync function and cache that one.
 
 ## Reads cash cannot see
 
@@ -540,7 +541,10 @@ paths from the project root or pass absolute paths.
 A generator result is stored in chunks as you consume it, and nothing is stored
 if you stop early; an infinite generator never finishes, so it never caches. See
 [Iterators](tutorials/feature-guides/iterator-caching.md). `async def` functions
-cache like sync ones; async generators are returned undecorated with a warning.
+cache like sync ones, with one difference: the library settings their body
+reads are not checked
+([Library settings cash cannot check](#library-settings-cash-cannot-check)).
+Async generators are returned undecorated with a warning.
 See [Async functions](tutorials/feature-guides/async-caching.md).
 
 ## Edits inside a running process
