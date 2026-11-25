@@ -10,6 +10,7 @@ runs :class:`RunInstead`'s source instead of the cell.
 from __future__ import annotations
 
 import ast
+import contextlib
 import logging
 import os
 from collections.abc import Callable
@@ -410,8 +411,25 @@ class UpstreamResolution:
         return RunInstead(raw_cell, caught)
 
 
+def _tree_walk_files() -> tuple[str, ...]:
+    """The files a walk of a syntax tree runs in: cash's own code and Python's
+    ``ast``, with the module the unparser lives in since Python 3.14."""
+    files = [os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) + os.sep, ast.__file__]
+    try:
+        import _ast_unparse
+    except ImportError:  # before Python 3.14 the unparser is in ``ast``
+        pass
+    else:
+        files.append(_ast_unparse.__file__)
+    return tuple(files)
+
+
 #: Where a walk of a syntax tree runs: cash's own code and Python's ``ast``.
-_ANALYSIS_CODE = (os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) + os.sep, ast.__file__)
+_ANALYSIS_CODE = _tree_walk_files()
+
+#: The unparser writes its brackets inside context managers, so the frame that
+#: runs out of stack can be one of ``contextlib``; the walk is the one above.
+_PASSED_THROUGH = (contextlib.__file__,)
 
 
 def _analysis_ran_out_of_stack(caught: BaseException) -> bool:
@@ -423,6 +441,10 @@ def _analysis_ran_out_of_stack(caught: BaseException) -> bool:
     tb = caught.__traceback__
     if tb is None:
         return False
-    while tb.tb_next is not None:
+    files = []
+    while tb is not None:
+        files.append(tb.tb_frame.f_code.co_filename)
         tb = tb.tb_next
-    return tb.tb_frame.f_code.co_filename.startswith(_ANALYSIS_CODE)
+    while len(files) > 1 and files[-1].startswith(_PASSED_THROUGH):
+        files.pop()
+    return files[-1].startswith(_ANALYSIS_CODE)
