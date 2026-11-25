@@ -660,6 +660,10 @@ Checks and rules that hold for all of them:
 ### `ttl=`
 
 ```python
+import requests
+
+import cash
+
 @cash.cache(ttl=300)   # five minutes
 def rates():
     return requests.get("https://api.example.com/rates").json()
@@ -686,6 +690,10 @@ After the ttl, the next call recomputes and replaces the entry.
 ### `file_depends_on=` and `depends_on=`
 
 ```python
+import yaml
+
+import cash
+
 @cash.cache(file_depends_on="config.yaml")
 def parse_config():
     return yaml.safe_load(open("config.yaml"))
@@ -704,6 +712,8 @@ run time, a library function whose code you want in the key, or a
 is keyed by its source:
 
 ```python
+import cash
+
 def score(user):             # not decorated
     return user.visits * 2
 
@@ -724,6 +734,8 @@ See [Dynamic dependencies](tutorials/feature-guides/dynamic-dependencies.md).
 ### `cache_if=`
 
 ```python
+import cash
+
 @cash.cache(cache_if=lambda r: r is not None)
 def lookup(key):
     return cache_backend.get_or_none(key)
@@ -917,6 +929,8 @@ frame is hashed on every call it is passed to. When a result comes from another
 cached function and nothing changes it afterwards, say so on the producer:
 
 ```python
+import cash
+
 @cash.cache(frozen=True)
 def train(data):
     # nothing downstream modifies the model
@@ -1149,6 +1163,10 @@ that changes nothing is keyed by its code and cached as usual, and
 is fine, put a comment on the line the warning names:
 
 ```python
+import requests
+
+import cash
+
 @cash.cache
 def fetch_user(uid):
     url = f"https://api.example.com/users/{uid}"
@@ -1207,6 +1225,8 @@ To tell cash about a helper it cannot judge, mark it with `@cash.pure` or
 **`f.cache_info()`** returns this process's counters:
 
 ```python
+import cash
+
 @cash.cache
 def double(x):
     return x * 2

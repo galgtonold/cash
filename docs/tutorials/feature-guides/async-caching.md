@@ -48,6 +48,8 @@ the process, not other processes. See
 [Threads and processes](thread-safety.md).
 
 ```python
+import asyncio
+
 from cash import Cash
 
 app = Cash(use_locking=True)
@@ -71,6 +73,10 @@ A `ttl=` works as on a sync function. After it passes, the next await runs the
 body again:
 
 ```python
+import asyncio
+
+import cash
+
 @cash.cache(ttl=3600)
 async def stock_quote(symbol):
     return await price_api.get(symbol)
@@ -90,6 +96,10 @@ asyncio.run(demo_ttl())
 ## Cache the leaves or the batch
 
 ```python
+import asyncio
+
+import cash
+
 # Each request cached on its own: adding one id computes only that one.
 @cash.cache
 async def fetch_one(uid):

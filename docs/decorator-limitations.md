@@ -192,6 +192,8 @@ is not cached:
 
 <!-- test:skip reason="a function passed as an argument is keyed through its module, which the harness's exec namespace is not; this fence is run as a script, across an edit, by tests/docs/test_dispatch_table_recipe.py instead" -->
 ```python
+import cash
+
 @cash.cache
 def _signals(strategy, prices):
     return strategy(prices)

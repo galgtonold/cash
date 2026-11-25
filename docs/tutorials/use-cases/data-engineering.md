@@ -59,6 +59,10 @@ Databases and APIs have no file to check. Three ways to handle them:
   everything downstream:
 
     ```python
+    import pandas as pd
+
+    import cash
+
     @cash.cache
     def load_snapshot():
         return pd.read_parquet("snapshot.parquet")
@@ -75,6 +79,10 @@ Databases and APIs have no file to check. Three ways to handle them:
   see when the data changes. A `ttl=` answers that and silences the warning:
 
     ```python
+    import requests
+
+    import cash
+
     @cash.cache(ttl=3600)   # refresh hourly
     def fetch_exchange_rates():
         return requests.get("https://api.exchangerate.host/latest").json()
@@ -85,6 +93,10 @@ Databases and APIs have no file to check. Three ways to handle them:
 Make the period an argument:
 
 ```python
+import pandas as pd
+
+import cash
+
 @cash.cache
 def extract_day(source_path, date):
     return pd.read_parquet(f"{source_path}/dt={date}")

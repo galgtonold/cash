@@ -161,6 +161,10 @@ call would use.
 Use a canonical serializer the type already has:
 
 ```python
+import hashlib
+
+import cash
+
 def hash_pydantic(model):
     return hashlib.sha256(model.model_dump_json().encode()).hexdigest()
 
@@ -173,6 +177,10 @@ msgspec (`msgspec.json.encode`).
 Hash the fields that decide the result:
 
 ```python
+import hashlib
+
+import cash
+
 def hash_dataset_config(cfg):
     parts = (
         cfg.path,
@@ -188,7 +196,14 @@ cash.register_hasher(DatasetConfig, hash_dataset_config)
 For a handle to outside data (a database engine, a client), hash what it points
 at, not the handle:
 
+<!-- test:skip reason="needs sqlalchemy, which the docs run does not install" -->
 ```python
+import hashlib
+
+import sqlalchemy
+
+import cash
+
 def hash_engine(engine):
     return hashlib.sha256(str(engine.url).encode()).hexdigest()
 
@@ -222,6 +237,8 @@ A plain registration for one of these types could never run, so it raises
 <!-- test:skip reason="illustrative: frames carry no dataset_version attribute here" -->
 ```python
 import pandas as pd
+
+import cash
 
 cash.register_hasher(
     pd.DataFrame,
