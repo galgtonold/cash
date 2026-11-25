@@ -1545,8 +1545,9 @@ class CallRunner:
                         cache_key,
                     )
                     return False
-        except Exception:  # noqa: BLE001 - an integrity check must not break a call
-            return True
+        except Exception:  # noqa: BLE001 - fails closed: chunks that cannot be looked for are not served
+            logger.debug("[CORE] could not look for the chunks of %s; treating the entry as a miss", cache_key)
+            return False
         return True
 
     def _wrap_iterator_hit(self, call: Call, metadata: CacheMetadata | None, hit: Any) -> Any:
