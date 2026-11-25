@@ -1638,10 +1638,10 @@ def module_globals(code: str, namespace: Mapping[str, Any] | None) -> dict[str, 
             return {}
         if isinstance(node, ast.Call) and _call_name(node.func) == "reload":
             return {}
-    try:
-        modules = reached_user_code(code, namespace, close=False).modules
-    except Exception:  # noqa: BLE001 - an analysis of arbitrary code
-        return {}
+    # Not guarded: an analysis that raises is the caller's to refuse the
+    # statement's entry over (`StatementProcessor._executing`). Answered
+    # with "no modules", a write to one of them would go unseen.
+    modules = reached_user_code(code, namespace, close=False).modules
     found: dict[str, dict[str, Any]] = {}
     for name in modules:
         module = sys.modules.get(name)
