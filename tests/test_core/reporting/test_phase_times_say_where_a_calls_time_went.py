@@ -13,6 +13,7 @@ import warnings
 import pytest
 
 from cash import Cash, phase_times
+from cash.decorator import hit_memo
 from tools import phase_report
 
 _NOT_PHASES = ("total", "cash")
@@ -216,6 +217,7 @@ def _trie(words: int) -> _TrieNode:
     return root
 
 
+@pytest.mark.skipif(not hit_memo.ENABLED, reason="the fast hit path needs the C extension")
 @pytest.mark.filterwarnings("ignore::cash.CashImpurityWarning")
 def test_a_fast_hit_shows_the_copy_it_hands_out_as_its_decode(timed):
     """A fast hit of a value the memory tier keeps as pickle bytes hands
