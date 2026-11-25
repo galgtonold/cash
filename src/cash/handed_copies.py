@@ -42,7 +42,18 @@ from typing import Any
 from . import _weak, value_watch
 from ._native import cwatch as _cw
 
-__all__ = ["Handed", "MAX_MISSES", "release", "retain", "reuse", "unwatch", "watch", "watched"]
+__all__ = [
+    "Handed",
+    "MAX_MISSES",
+    "TOO_SMALL",
+    "UNANCHORED",
+    "release",
+    "retain",
+    "reuse",
+    "unwatch",
+    "watch",
+    "watched",
+]
 
 #: Hits in a row that could not reuse the copy before an entry's copies are
 #: no longer kept.
@@ -131,45 +142,83 @@ def reuse(handed: Handed) -> Any:
     return NONE if made is None else (made, False)
 
 
-def watch(value: Any) -> tuple[object, int] | None:
-    """Arm the watchers on *value*, a copy a hit of a ``frozen=True``
-    entry just read, for `watched`: ``(token, size)``, or None when they
-    cannot follow it. Who else holds it is not asked: the frozen promise
-    waives that (`backends.frozen_handback`)."""
+#: What `watch` answers when the watchers would follow the value but it is
+#: under their floor (`value_watch`'s 64 KiB), or when nothing holds it by a
+#: name they can anchor a list, tuple or set to yet.
+TOO_SMALL = "too small"
+UNANCHORED = "unanchored"
+
+#: Each kind a kept object is watched for, and the other that keeps the
+#: watch alive when one lets go (`unwatch`).
+_OWNER_KINDS = (value_watch.KIND_HANDED, value_watch.KIND_FROZEN)
+
+#: Bytes a second a full hash of a watched value reads, roughly: what the
+#: watch of a frozen result passed on spares is priced by it, so the table
+#: does not drop it first when it runs out of room.
+_HASH_RATE = 300e6
+
+
+def watch(value: Any, kind: int = value_watch.KIND_HANDED) -> tuple[object, int] | str | None:
+    """Arm the watchers on *value* for `watched`: ``(token, size)``. For
+    *kind* `KIND_HANDED`, a copy a hit of a ``frozen=True`` entry just read;
+    `KIND_FROZEN`, a ``frozen=True`` result about to be passed on as an
+    argument (`decorator.frozen`). `TOO_SMALL` or `UNANCHORED` when the
+    watchers would follow it but not now, None when they cannot. Who else
+    holds it is not asked: the frozen promise waives that
+    (`backends.frozen_handback`)."""
     if not _ON:
         return None
     try:
         status = value_watch.arm_value(value)
+        if status == _cw.TOO_SMALL:
+            return TOO_SMALL
+        if status == _cw.NO_ANCHOR:
+            return UNANCHORED
         if status != _cw.ARMED and status != _cw.ALREADY:
-            return None
-        token = object()
-        if not _cw.commit(value, value_watch.KIND_HANDED, token, 0.0):
-            _cw.forget(value)
             return None
         info = _cw.info(value)
         if not info or info.get("views"):
-            _cw.forget(value)
+            _forget_unless_kept(value, kind)
             return None
-        return token, int(info.get("content_bytes") or 0)
+        content = int(info.get("content_bytes") or 0)
+        seconds = content / _HASH_RATE if kind == value_watch.KIND_FROZEN else 0.0
+        token = object()
+        if not _cw.commit(value, kind, token, seconds):
+            _forget_unless_kept(value, kind)
+            return None
+        return token, content
     except Exception:  # noqa: BLE001 - not kept: the next hit reads a new copy
-        unwatch(value)
+        unwatch(value, kind)
         return None
 
 
-def watched(value: Any, token: object) -> str:
+def watched(value: Any, token: object, kind: int = value_watch.KIND_HANDED) -> str:
     """Is *value*, armed by `watch` with *token*, unchanged? ``"same"``;
     ``"changed"`` when the watchers saw it written; ``"unknown"`` when they
     no longer follow it (its watch dropped for room, or armed anew)."""
-    if _cw.peek(value, value_watch.KIND_HANDED) is token:
+    if _cw.peek(value, kind) is token:
         return "same"
     info = _cw.info(value)
     return "changed" if info and info.get("dirty") else "unknown"
 
 
-def unwatch(value: Any) -> None:
-    """Disarm what `watch` armed."""
+def _forget_unless_kept(value: Any, kind: int) -> None:
+    other = _OWNER_KINDS[1] if kind == _OWNER_KINDS[0] else _OWNER_KINDS[0]
+    if _cw.peek(value, other) is not None:
+        # Still watched for the other: only this kind's token goes.
+        _cw.commit(value, kind, None, 0.0)
+        return
+    _cw.forget(value)
+
+
+def unwatch(value: Any, kind: int = value_watch.KIND_HANDED) -> None:
+    """Disarm what `watch` armed for *kind*: the watch itself goes unless
+    it is still kept for the other kind (a frozen result the memory tier
+    hands back and the decorator keys by its producer)."""
+    if not _ON:
+        return
     try:
-        _cw.forget(value)
+        _forget_unless_kept(value, kind)
     except Exception:  # noqa: BLE001 - a value the watchers never took needs no forgetting
         pass
 

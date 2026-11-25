@@ -682,7 +682,11 @@ class ResultStore:
         if func_name is not None:
             # Named in CACHE-NET-LOSS and KEY-FROZEN-MUTATED.
             tags["_cash_lineage_producer"] = func_name
-        if not set_tags(result, **tags):
+        if set_tags(result, **tags):
+            if frozen:
+                # Proved unchanged from now on, where cash can (`FrozenResults.audit`).
+                self._frozen.watch(result)
+        else:
             if frozen:
                 self._frozen.warn_has_no_effect(func_name, result)
             # Once per type, then never tried again: it logged on every call

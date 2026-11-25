@@ -23,6 +23,8 @@ refused storing; ``raised``):
 ``key.globals``  the globals the function and its helpers read
 ``key.arg_code`` the code the arguments carry (methods, passed functions)
 ``key.args``     hashing the argument values
+``key.frozen_audit``  of those, re-hashing a ``frozen=True`` result passed
+                 on that nothing proves unchanged (`decorator.frozen`)
 ``key.other``    the rest of the key build
 ``read.fetch``   finding and reading the entry (and promoting it)
 ``read.decode``  unpickling or copying the value read
@@ -85,7 +87,8 @@ BODY_SETUP = 15
 BODY = 16
 POST = 17
 STORE = 18
-_SIZE = 19
+KEY_FROZEN_AUDIT = 19
+_SIZE = 20
 
 NAMES = {
     WRAPPER: "wrapper",
@@ -95,6 +98,7 @@ NAMES = {
     KEY_GLOBALS: "key.globals",
     KEY_ARG_CODE: "key.arg_code",
     KEY_ARGS: "key.args",
+    KEY_FROZEN_AUDIT: "key.frozen_audit",
     KEY_OTHER: "key.other",
     READ_FETCH: "read.fetch",
     READ_DECODE: "read.decode",

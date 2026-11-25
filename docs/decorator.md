@@ -266,7 +266,8 @@ than repeating it.
 **Where cash's time went, by phase.** `CASH_PHASE_TIMES=1` times every
 cached call phase by phase: building the key (split into the code and helpers,
 the globals read, the code the arguments carry, and hashing the argument
-values), reading the entry (finding it, then unpickling or copying it), the
+values, of which the content checks of [frozen results](#frozen-and-large-arguments)
+passed on are `key.frozen_audit`), reading the entry (finding it, then unpickling or copying it), the
 checks before a hit is served, the body, the checks after it and the store.
 It costs a few microseconds a call, so it is off by default.
 `f.cache_info()["phase_times"]` then holds, per `"<outcome>.<phase>"`, the
@@ -864,7 +865,7 @@ a miss.
 
 ### `frozen=` and large arguments
 
-<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @e4b3659d, cash/decorator/frozen.py:FrozenResults.warn_has_no_effect @9cd1e97c -->
+<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @b021d0b5, cash/decorator/frozen.py:FrozenResults.warn_has_no_effect @9cd1e97c -->
 An argument is keyed by its content at the time of the call, so a big array or
 frame is hashed on every call it is passed to. When a result comes from another
 cached function and nothing changes it afterwards, say so on the producer:
@@ -891,7 +892,7 @@ back read-only, and
 frozen result was changed after all. [`CACHE-NET-LOSS`](warnings.md#cache-net-loss)
 warns when hashing an argument costs more than the cache saves.
 
-<!-- claim: cash/decorator/store.py:ResultStore.attach_lineage @bc0d7926, cash/decorator/frozen.py:FrozenResults.container_hash @d37ce30e -->
+<!-- claim: cash/decorator/store.py:ResultStore.attach_lineage @733fb0f7, cash/decorator/frozen.py:FrozenResults.container_hash @58600c85 -->
 `frozen=True` covers the very object the function returns, in the process
 that called it:
 
@@ -908,17 +909,30 @@ function, and build a container you pass on inside a frozen function of its
 own. `frozen=` has no effect together with `ttl=`: such a result is keyed by
 its content.
 
-<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @e4b3659d, cash/decorator/frozen.py:FrozenResults.remember_array @f16fdc8c -->
+<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @b021d0b5, cash/decorator/frozen.py:FrozenResults.remember_array @f16fdc8c -->
 A frozen numpy array comes back read-only, so a write raises. A frozen pandas
 frame or any other object stays writable, and writing into it breaks the
-promise: the calls after the write can be served results computed for its
-old content. cash sees a change of size (a frame's shape or dtypes, a list's
-or dict's length) on every use, but a value overwritten in place only when it
-checks the content, now and then;
-[`KEY-FROZEN-MUTATED`](warnings.md#key-frozen-mutated) names the producer
-when a check finds a change. Modify a copy (`df = df.copy()`).
+promise. cash checks the promise each time the result is passed to a cached
+function, without hashing it where it can, from when it was returned:
 
-<!-- claim: cash/backends/frozen_handback.py:keep @9a23e2ec, cash/backends/frozen_handback.py:check @0f37fbd7, cash/backends/memory_backend.py:InMemoryBackend._frozen_hit @8f3c79dc -->
+| The result passed on | Checked at every use by |
+|---|---|
+| A numpy array (not of objects) | nothing to check: it is read-only, and keyed by its hash |
+| A pandas frame or series (copy-on-write pandas) | its blocks, index, columns and `attrs` being the same objects, as for [a hit](#frozen-and-large-arguments) handed back |
+| Dicts, lists, sets and instances of plain classes, of 64 KiB or more | the C extension's watchers (Python 3.12+); a list, tuple or set only while a notebook or script-level variable holds it, so from its first use on |
+| The same, under 64 KiB | its content, hashed at every use (a few microseconds to about 50) |
+| Anything else (no C extension, a value holding an array inside a dict, a class with its own pickled state, a pandas frame without copy-on-write) | its size (a frame's shape or dtypes, a list's or dict's length) at every use, its content at the 8th use and every 64th after that, and at every use under `CASH_DEBUG=1` |
+
+[`KEY-FROZEN-MUTATED`](warnings.md#key-frozen-mutated) names the producer
+when a check finds a change, and the object is keyed by its content from then
+on. A watched object whose watch was dropped (the watchers ran out of room)
+is keyed by its content from then on too, without a warning. Only a change
+the content check finds late (the last row) can serve calls before it a
+result computed for the old content. Modify a copy (`df = df.copy()`).
+The full hashes those checks take are timed as `key.frozen_audit` under
+`CASH_PHASE_TIMES=1`.
+
+<!-- claim: cash/backends/frozen_handback.py:keep @45ca5494, cash/backends/frozen_handback.py:check @6c771d38, cash/backends/memory_backend.py:InMemoryBackend._frozen_hit @8f3c79dc -->
 **A hit hands back the same object.** Without `frozen=`, a hit hands back a
 new copy of the stored result whenever anything outside still holds the last
 one, so a library that keeps what it is given (a tokenizer keeping each
@@ -949,7 +963,7 @@ when the cell restores `model` from the cache instead of calling `train`. Once
 a cell changes `model` (`model.set_params(...)`), it is keyed as a changed
 value.
 
-<!-- claim: cash/decorator/frozen.py:FrozenResults.remember_container @1e8af0c7, cash/decorator/store.py:ResultStore.attach_lineage @bc0d7926 -->
+<!-- claim: cash/decorator/frozen.py:FrozenResults.remember_container @2e2ebbf4, cash/decorator/store.py:ResultStore.attach_lineage @733fb0f7 -->
 **Big inputs: path in, data passed on.** [Pass data in](#pass-data-in) and
 `frozen=` work together. Give the file path to a cached loader marked
 `frozen=True`, parse inside it, and pass what it returns to the functions
@@ -972,7 +986,7 @@ with open("prices.txt", "w") as f:
 
 prices = load_prices("prices.txt")  # first call: parses the file
 mean_price(prices)    # first call: runs the body
-mean_price(prices)    # cache hit; the list is not read again
+mean_price(prices)    # cache hit, keyed by the call that made the list
 ```
 
 The loader is keyed by the path, its code and the file's content, and

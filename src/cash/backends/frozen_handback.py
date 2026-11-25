@@ -26,6 +26,11 @@ A value none of these covers is copied on every hit, as before. A kept
 object found changed is let go: KEY-FROZEN-MUTATED names its producer
 (`warn_changed`), the next hit reads a new copy out of the stored entry,
 and the changed object is keyed by its content from then on (`on_changed`).
+
+The same proofs hold a frozen result to its promise when it is passed on
+as an argument (`prove`, `verdict`; `decorator.frozen.FrozenResults.audit`):
+its watch is kept under a kind of its own (`value_watch.KIND_FROZEN`), so
+neither user lets go of the other's (`handed_copies.unwatch`).
 """
 
 from __future__ import annotations
@@ -34,14 +39,34 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
-from .. import handed_copies
+from .. import handed_copies, value_watch
 
-__all__ = ["CHANGED", "SAME", "UNKNOWN", "Kept", "check", "keep", "mutated_text", "on_changed", "release"]
+__all__ = [
+    "CHANGED",
+    "SAME",
+    "SMALL",
+    "UNANCHORED",
+    "UNKNOWN",
+    "Kept",
+    "check",
+    "keep",
+    "let_go",
+    "mutated_text",
+    "on_changed",
+    "prove",
+    "release",
+    "verdict",
+]
 
 #: `check`'s verdicts: proved unchanged; seen changed; no longer provable.
 SAME = "same"
 CHANGED = "changed"
 UNKNOWN = "unknown"
+
+#: What `prove` answers for a value the watchers would follow, but not now:
+#: under their floor, or not yet held by a name they anchor it to.
+SMALL = handed_copies.TOO_SMALL
+UNANCHORED = handed_copies.UNANCHORED
 
 
 class Kept:
@@ -89,9 +114,7 @@ def _keep_array(value: Any) -> Kept | None:
     return Kept(handed, _ArrayProof(chain, layout), int(value.nbytes))
 
 
-def _check_array(kept: Kept) -> str:
-    proof: _ArrayProof = kept.proof
-    value = kept.value
+def _check_array(value: Any, proof: _ArrayProof) -> str:
     if any(arr.flags.writeable for arr in proof.chain):
         return CHANGED
     if (value.shape, value.dtype, value.strides) != proof.layout:
@@ -170,21 +193,21 @@ def _keep_frame(value: Any) -> Kept | None:
     return Kept(value, _FrameProof(shadow, _frame_snapshot(value)), nbytes)
 
 
-def _check_frame(kept: Kept) -> str:
-    value = kept.value
+def _check_frame(value: Any, proof: _FrameProof) -> str:
     if value.attrs:
         return CHANGED
-    return SAME if _same_snapshot(kept.proof.snapshot, _frame_snapshot(value)) else CHANGED
+    return SAME if _same_snapshot(proof.snapshot, _frame_snapshot(value)) else CHANGED
 
 
 # -- watched object graphs ---------------------------------------------------
 
 
 class _WatchProof:
-    __slots__ = ("token",)
+    __slots__ = ("kind", "token")
 
-    def __init__(self, token: object) -> None:
+    def __init__(self, token: object, kind: int) -> None:
         self.token = token
+        self.kind = kind
 
 
 def _np() -> Any:
@@ -205,30 +228,70 @@ def keep(value: Any) -> Kept | None:
         found = handed_copies.watch(value)
     except Exception:  # noqa: BLE001 - not provable: copied as before
         return None
-    if found is None:
+    if type(found) is not tuple:
         return None
     token, content = found
-    return Kept(value, _WatchProof(token), content)
+    return Kept(value, _WatchProof(token, value_watch.KIND_HANDED), content)
+
+
+def prove(value: Any) -> object | str | None:
+    """What proves *value*, a ``frozen=True`` result about to be passed on
+    as an argument, unchanged at each use after (`verdict`), as for a kept
+    copy: a copy-on-write pandas frame or series by its blocks, a
+    watched value by the watchers (`value_watch.KIND_FROZEN`, its own token
+    beside the memory tier's). `SMALL` when the watchers would follow it
+    but it is under their floor, `UNANCHORED` when they would once a name
+    holds it, None when nothing can prove it. A numpy array is None: it is
+    read-only, and keyed by its hash (`FrozenResults.array_hash`)."""
+    kind = type(value)
+    module = getattr(kind, "__module__", "") or ""
+    try:
+        if module.startswith("numpy") and kind is _np().ndarray:
+            return None
+        if module.startswith("pandas") and kind.__name__ in ("DataFrame", "Series"):
+            kept = _keep_frame(value)
+            return None if kept is None else kept.proof
+        found = handed_copies.watch(value, value_watch.KIND_FROZEN)
+    except Exception:  # noqa: BLE001 - not provable: audited instead
+        return None
+    if found is handed_copies.TOO_SMALL:
+        return SMALL
+    if found is handed_copies.UNANCHORED:
+        return UNANCHORED
+    if type(found) is not tuple:
+        return None
+    return _WatchProof(found[0], value_watch.KIND_FROZEN)
 
 
 def check(kept: Kept) -> str:
     """Is *kept*'s object unchanged since it was kept? `SAME`, `CHANGED`
     (seen changed), or `UNKNOWN` (no longer provable either way)."""
-    proof = kept.proof
+    return verdict(kept.value, kept.proof)
+
+
+def verdict(value: Any, proof: Any) -> str:
+    """Is *value* unchanged since *proof* (`keep`'s, or `prove`'s) was
+    taken? `SAME`, `CHANGED` (seen changed), or `UNKNOWN` (no longer
+    provable either way)."""
     try:
         if type(proof) is _ArrayProof:
-            return _check_array(kept)
+            return _check_array(value, proof)
         if type(proof) is _FrameProof:
-            return _check_frame(kept)
-        return handed_copies.watched(kept.value, proof.token)
+            return _check_frame(value, proof)
+        return handed_copies.watched(value, proof.token, proof.kind)
     except Exception:  # noqa: BLE001 - not provable: a new copy
         return UNKNOWN
 
 
+def let_go(value: Any, proof: Any) -> None:
+    """Stop proving *value* unchanged by *proof*."""
+    if type(proof) is _WatchProof:
+        handed_copies.unwatch(value, proof.kind)
+
+
 def release(kept: Kept) -> None:
     """Stop keeping *kept*'s object."""
-    if type(kept.proof) is _WatchProof:
-        handed_copies.unwatch(kept.value)
+    let_go(kept.value, kept.proof)
     kept.value = kept.proof = kept.stored = None
 
 

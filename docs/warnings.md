@@ -1404,14 +1404,19 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @e4b3659d, cash/backends/memory_backend.py:InMemoryBackend._frozen_hit @8f3c79dc -->
+<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @b021d0b5, cash/backends/memory_backend.py:InMemoryBackend._frozen_hit @8f3c79dc -->
 **What happened.** A function marked `@cash.cache(frozen=True)` promised its
 result is not modified, and a later check found one of its results modified.
 
 **Why it matters.** Until the check, cached functions receiving that object
 could be served results computed for the unmodified object. From the check on,
-it is keyed by content, so later calls are correct. Checks run at the 8th use
-and every 64th after that, or every use under `CASH_DEBUG=1`. A hit of the
+it is keyed by content, so later calls are correct. Where cash can, the check
+runs at every use as an argument, so the call right after the change is
+keyed correctly: a copy-on-write pandas frame, and a dict, list, set or plain
+instance (by the C extension's watchers, on Python 3.12+; under 64 KiB by
+hashing it). For anything else checks run at the 8th use and every 64th after
+that, or every use under `CASH_DEBUG=1`
+([which results](decorator.md#frozen-and-large-arguments)). A hit of the
 frozen function checks the object it handed out before, whenever it would
 hand it back again: once changed, that object is not handed out again, and
 the hit gets a new copy of the stored result.

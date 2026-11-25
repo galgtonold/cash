@@ -74,7 +74,7 @@
 
 #include "cwalk.h"
 
-#define CWATCH_API_VERSION 9
+#define CWATCH_API_VERSION 10
 #define CWATCH_VERSION "0.1.0"
 
 #if PY_VERSION_HEX < 0x030C0000
@@ -94,7 +94,7 @@
 #define TOMB32 0xFFFFFFFEu
 #define KBIT 0x80000000u     /* node index: keyed pool */
 #define DEADBIT 0x80000000u  /* node root field: object gone */
-#define NKINDS 5
+#define NKINDS 6
 
 /* check() answers besides a digest */
 enum { ST_FIRST = 0, ST_ARM = 1, ST_SKIP = 2, ST_BUSY = 3, ST_OFF = 4 };
