@@ -144,6 +144,12 @@ def _added(before: dict | None, now: dict | None) -> dict:
     return {k: v for k, v in now.items() if k not in before or before[k] is not v}
 
 
+def _under_method(func: Any) -> Any:
+    """The function a bound method runs, or *func* itself: what a fold of
+    its reads is remembered by within one key (`READS_FOLDED`)."""
+    return func.__func__ if type(func) is types.MethodType else func
+
+
 def _replay(entry: _HeldTable, folded: dict | None) -> None:
     """Leave behind what building *entry* left: its watch, ledger and folds."""
     watch = CAPTURE_WATCH.get()
@@ -272,10 +278,15 @@ class GlobalsFold:
         folded = READS_FOLDED.get() if seen is not None else None
         if folded is None:
             return self._fold_read_globals(func, func_name, state_hash, owner_code, seen, extra_names)
-        done_key = (id(func), id(owner_code), extra_names)
+        # By the function under a bound method: ``Table.build`` read off its
+        # class is a new method object on every read, and by its own id the
+        # fold was never found again (and a fold made twice left two
+        # different records, which the class-fold check took for a change).
+        anchor = _under_method(func)
+        done_key = (id(anchor), id(owner_code), extra_names)
         done = folded.get(done_key)
         pairs = self._read_pairs(func, extra_names)
-        if done is not None and done[0] is func and done[1] <= seen:
+        if done is not None and done[0] is anchor and done[1] <= seen:
             # Folded earlier in this key, for the same cached function. Each
             # global and default that fold skipped as seen is skipped here too;
             # everything else it hashed and put into this key, the same values.
@@ -284,7 +295,7 @@ class GlobalsFold:
             return state_hash
         skipped = frozenset(p for p in pairs if p in seen)
         state_hash = self._fold_read_globals(func, func_name, state_hash, owner_code, seen, extra_names)
-        folded[done_key] = (func, skipped)
+        folded[done_key] = (anchor, skipped)
         return state_hash
 
     def _read_pairs(self, func: Callable, extra_names: tuple[str, ...]) -> list[tuple]:
@@ -784,7 +795,7 @@ class GlobalsFold:
         if type(seen) is not LoggedSeen or walk_scope.walk_local(self, set):
             return compute()
         folded = READS_FOLDED.get()
-        if folded is not None and (id(target), id(owner_code), extra_names) in folded:
+        if folded is not None and (id(_under_method(target)), id(owner_code), extra_names) in folded:
             return compute()  # folded earlier in this key: `_fold_once` adds nothing new
         key = (id(target), id(owner_code), extra_names, func_name)
         module = plain_getattr(func, "__module__", None)

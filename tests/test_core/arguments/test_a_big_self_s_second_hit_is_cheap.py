@@ -22,7 +22,7 @@ import pytest
 
 from cash import Cash, FileBackend
 from cash.analysis.helper_walk import HelperWalk
-from cash.decorator import arg_hashing
+from cash.decorator import arg_hashing, class_memo
 from cash.decorator.arg_hashing import is_cow_pandas
 
 pytestmark = pytest.mark.core
@@ -152,3 +152,18 @@ def test_rebinding_the_classmethod_the_code_calls_still_misses(tmp_path, monkeyp
     after = f(1000)
     assert f.cache_info()["misses"] == 2, "a classmethod rebound on its class was served the old result"
     assert after > before
+
+
+def test_the_class_fold_check_finds_the_remembered_fold_the_same(tmp_path, monkeypatch):
+    """With the self-checks on, each hit builds the class's part of the key
+    again and compares. ``Table.build`` is a new method object on every read:
+    what was folded for it has to be remembered by the function under it, or
+    the two builds leave different records and the check reports a change
+    that is none."""
+    monkeypatch.setattr(class_memo, "VERIFY", True)
+    c = Cash(backend=FileBackend(cache_dir=str(tmp_path)))
+    f = c.cache(Estimator().fit)
+    expected = f(1000)
+    assert f(1000) == expected
+    assert c.cache(Estimator().fit)(1000) == expected
+    assert f.cache_info()["hits"] == 1
