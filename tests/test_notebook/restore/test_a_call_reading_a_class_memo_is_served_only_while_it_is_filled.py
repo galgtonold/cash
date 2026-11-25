@@ -20,7 +20,13 @@ import pytest
 
 from cash.notebook import shadow
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S as SLEEP
-from tests.test_notebook.restore.test_a_memo_filling_helper_with_defaults_runs_as_plain import NAMES, _clean, _plain, _restart, _run_all
+from tests.test_notebook.restore.test_a_memo_filling_helper_with_defaults_runs_as_plain import (
+    NAMES,
+    _clean,
+    _plain,
+    _restart,
+    _run_all,
+)
 
 MODEL = """
 import functools
