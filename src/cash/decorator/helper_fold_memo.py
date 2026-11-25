@@ -26,9 +26,10 @@ serves only a build that answers alike (`class_memo.replayable`). Left out,
 a class a helper's fold had folded was folded again by the next step after
 every reuse, and the same call keyed differently from the second time on.
 An entry is looked up by the helper, the cached function's code and name,
-the decorator names folded with it, the state hash it started from and what
-the build had folded before it, so a reuse is the same step of the same
-build. ``CASH_HITPATH_VERIFY=1`` folds again behind every reuse and raises
+the decorator names folded with it, the state hash it started from, what
+the build had folded before it and which records the build keeps (a real
+call's, an ``explain()``'s, verify mode's), so a reuse is the same step of
+the same kind of build. ``CASH_HITPATH_VERIFY=1`` folds again behind every reuse and raises
 `HitMemoMismatch` when anything differs.
 
 A step is watched and recorded only the second time it runs, and not while
@@ -139,7 +140,10 @@ class HelperFoldMemo:
         if epochs is None:
             return compute()
         world, cash = epochs
-        full_key = (*key, state_in, seen.fingerprint(), held_by_name())
+        # What the fold leaves in records this build does not keep is not
+        # captured (`class_memo.collecting`): an entry from an explain() or a
+        # verify build served a real call an empty drift-guard watch.
+        full_key = (*key, state_in, seen.fingerprint(), held_by_name(), class_memo.collecting())
         entry = self._entries.get(full_key)
         if (
             entry is not None
