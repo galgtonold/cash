@@ -94,7 +94,7 @@ def _run_all_twice_across_a_restart(nb_runner, cells):
 
 def _lines(nb_runner, name: str) -> int:
     path = nb_runner.work_dir / name
-    return len(path.read_text().splitlines()) if path.exists() else 0
+    return len(path.read_text(encoding="utf-8").splitlines()) if path.exists() else 0
 
 
 #: label -> (the statement, the file or the server path that counts its runs)
