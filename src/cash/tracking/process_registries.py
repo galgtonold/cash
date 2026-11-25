@@ -576,7 +576,8 @@ def _load_unlocked(spec: Any) -> Any:
     after is where it starts from."""
     if not _open or attribute_or(_importing, "depth", 0):
         return _original_load(spec)
-    watching = list(_open)
+    with _open_lock:
+        watching = list(_open)
     pre = _read()
     _importing.depth = 1
     first = finalizers_made()
@@ -672,26 +673,45 @@ def finalizers_made() -> int | None:
 _original_load: Callable[[Any], Any] | None = None
 
 
+#: Held while the open snapshots are added to, taken from or listed, and
+#: while the import step is put in place: snapshots are taken on every
+#: thread that runs a cached call, and a set changed by one thread while
+#: another lists it raises. Re-entrant: listing can start a collection,
+#: whose finalizers may import.
+_open_lock = threading.RLock()
+
+
 def _watch_imports() -> None:
     global _open, _original_load
     if _open is not None:
         return
     from .._weak import WeakSet
 
-    _open = WeakSet()
-    bootstrap = sys.modules["importlib._bootstrap"]
-    _original_load = bootstrap._load_unlocked
-    bootstrap._load_unlocked = _load_unlocked
+    with _open_lock:
+        if _open is not None:
+            return
+        bootstrap = sys.modules["importlib._bootstrap"]
+        current = bootstrap._load_unlocked
+        # Never this module's own step as the one it calls on: two threads
+        # taking their first snapshot at once each put it in place, the
+        # second over the first, and every import after that called itself
+        # until the stack ran out.
+        if current is not _load_unlocked:
+            _original_load = current
+            bootstrap._load_unlocked = _load_unlocked
+        # Last: the step passes straight through until there is a set.
+        _open = WeakSet()
 
 
 def snapshot() -> Snapshot:
     """Each registry as it is now, for `changed`."""
     _count_calls()
     _watch_imports()
-    if not _open:
-        IMPORT_FINALIZERS.clear()
     taken = Snapshot()
-    _open.add(taken)
+    with _open_lock:
+        if not _open:
+            IMPORT_FINALIZERS.clear()
+        _open.add(taken)
     return taken
 
 
@@ -708,6 +728,7 @@ def registering_imports(before: Snapshot) -> list[str]:
 def changed(before: Snapshot) -> list[str]:
     """The registries not as *before* (`snapshot`) found them, by name,
     but for what an import made in between did to them."""
-    _open.discard(before)
+    with _open_lock:
+        _open.discard(before)
     _compare(before.before, before.found)
     return [name for name, _read_it, _same in _REGISTRIES if name in before.found]
