@@ -842,6 +842,16 @@ def _probe_handler(original_func: Callable[..., Any], kind: str) -> Callable[...
 _PATH_MACHINERY = frozenset({"os", "posixpath", "ntpath", "genericpath", "pathlib", "pathlib._local", "pathlib._abc"})
 
 
+#: Python's import system, which stats through the platform module itself
+#: (``posix.stat``, the name ``os.stat`` points at). What it looks for while
+#: finding a module is not a question the program asked: a ``__pycache__``
+#: folder or a ``.pyc`` that is not there on the first import is there on
+#: the next, and recorded as absent it made every statement that imported
+#: one of the user's modules stale in the next process. The module's source
+#: is a dependency through the module's own fingerprint.
+_IMPORT_MACHINERY = frozenset({"importlib._bootstrap_external", "importlib._bootstrap", "zipimport"})
+
+
 #: The name prefix of a notebook statement cash compiled
 #: (``cash.notebook.compiled_source.is_cash_filename``): code the user wrote in
 #: a cell, though it has no file.
@@ -906,6 +916,8 @@ def _record_path_answer(path: Any, answer: str | None, caller: Any) -> None:
     """
     tracker = active_tracker.get()
     if tracker is None or not isinstance(path, (str, bytes, os.PathLike)):
+        return
+    if caller is not None and caller.f_globals.get("__name__") in _IMPORT_MACHINERY:
         return
     who = _who_asked(caller)
     if answer is None:
