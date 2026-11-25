@@ -137,7 +137,7 @@ if ENABLED:
     _cw.world_scope(_SCOPED_NAMES)
 
 
-class HitMemoMismatch(AssertionError):
+class HitMemoMismatch(_verify.Mismatch):
     """``CASH_HITPATH_VERIFY=1``: the fast path served a key the ordinary
     key build no longer gives."""
 

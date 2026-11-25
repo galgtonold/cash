@@ -246,7 +246,7 @@ def status() -> dict:
     return {"enabled": ENABLED, "verify": VERIFY, "generation": GEN[0], **STATS, **WHY}
 
 
-class StateMemoMismatch(AssertionError):
+class StateMemoMismatch(_verify.Mismatch):
     """``CASH_STATE_MEMO_VERIFY=1``: a reused state segment, or what it
     left behind, is not what building it again gives."""
 

@@ -81,7 +81,7 @@ KIND_HANDED = 4  # a copy the memory tier handed out, unchanged since (handed_co
 KIND_FROZEN = 5  # a frozen=True result passed on as an argument, unchanged since (decorator.frozen)
 
 
-class WatchMismatch(AssertionError):
+class WatchMismatch(_verify.Mismatch):
     """``CASH_CWATCH_VERIFY=1``: a digest the watchers called unchanged is
     not the digest hashing the value again gives."""
 

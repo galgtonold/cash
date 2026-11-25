@@ -45,6 +45,7 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
+from .. import _verify
 from .._active import active_config
 from ..backends.cache_dir import ANALYSIS_DIRNAME
 from ..tracking import io_watch
@@ -72,7 +73,7 @@ _FORMAT = 1
 STATS = {"loaded": 0, "stored": 0, "missed": 0, "verified": 0}
 
 
-class StoredScanMismatch(AssertionError):
+class StoredScanMismatch(_verify.Mismatch):
     """``CASH_ANALYSIS_MEMO_VERIFY=1``: a stored module scan is not what
     scanning the module again gives."""
 

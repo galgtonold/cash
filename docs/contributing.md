@@ -224,6 +224,9 @@ CASH_VERIFY=1 pytest tests/test_core/globals_and_closures tests/test_core/argume
 | `CASH_CWATCH_VERIFY` | a digest the C extension's watchers call unchanged | `WatchMismatch` |
 | `CASH_VERIFY_INCREMENTAL_SIM` | a notebook cell's simulation reused after an edit | fails the test (`tests/conftest.py`) |
 
+Each exception is a `cash._verify.Mismatch`, and a key build that raises one
+raises it to the caller of the cached function: it is not turned into a
+warning and an uncached call, as other key-build errors are.
 A switch set to `0` stays off under `CASH_VERIFY=1`. A checked run is several
 times slower and does more work, so the work-count tests
 (`tests/test_*/internals/`) are not run with it, and a script a test starts

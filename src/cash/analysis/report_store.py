@@ -61,7 +61,7 @@ import weakref
 from collections.abc import Callable
 from typing import Any
 
-from .. import _weak, source_reads
+from .. import _verify, _weak, source_reads
 from .._memo import CODE_OBJECTS, MODULE_ANALYSES, LruMemo
 from .._paths import is_pseudo_filename
 from .._type_memo import class_dict, class_qualname, module_of_class
@@ -100,7 +100,7 @@ _MAX_STEPS = 8
 STATS = {"loaded": 0, "stored": 0, "missed": 0, "stale": 0, "refused": 0, "cheap": 0, "failed": 0, "verified": 0}
 
 
-class StoredReportMismatch(AssertionError):
+class StoredReportMismatch(_verify.Mismatch):
     """``CASH_ANALYSIS_MEMO_VERIFY=1``: a stored report is not what walking
     the function again gives."""
 

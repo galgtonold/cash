@@ -88,7 +88,7 @@ STATS = {"scans": 0, "refused": 0, "served": 0, "recorded": 0, "verified": 0}
 CALLEE_STATES_BUILT = [0]
 
 
-class ClassMemoMismatch(AssertionError):
+class ClassMemoMismatch(_verify.Mismatch):
     """``CASH_CLASS_MEMO_VERIFY=1``: a remembered class fold is not what
     folding it again gives."""
 

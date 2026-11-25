@@ -15,6 +15,14 @@ from __future__ import annotations
 
 import os
 
+
+class Mismatch(AssertionError):
+    """A check found a reused answer that is not what the slow path gives:
+    the base of every check's own exception. It is a finding about cash,
+    so no handler that turns a failed key build into "this call runs
+    uncached" may take it: it reaches the caller (`KeyBuilder`)."""
+
+
 #: The switch that turns on every check not set itself.
 ALL = "CASH_VERIFY"
 

@@ -46,7 +46,7 @@ ENABLED = _flag("CASH_ANALYSIS_MEMO", "1")
 VERIFY = _verify.requested("CASH_ANALYSIS_MEMO_VERIFY")
 
 
-class TreeMemoMismatch(AssertionError):
+class TreeMemoMismatch(_verify.Mismatch):
     """``CASH_ANALYSIS_MEMO_VERIFY=1``: a reused tree or fact is not what working
     it out again gives."""
 
