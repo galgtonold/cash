@@ -80,6 +80,7 @@ from .callee_effects import (
     source_global_mutations,
 )
 from .mutations import MUTATING_METHODS, chain_is_pure
+from .scope_model import bound_names
 
 __all__ = [
     "HandedCallables",
@@ -3203,7 +3204,7 @@ def _read_call_facts(node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda) 
     global_methods: set[tuple[str, str]] = set()
     named_calls: set[str] = set()
     super_methods: set[str] = set()
-    local = params | {n.id for n in walk_tree(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+    local = params | bound_names(node)
     for call in walk_tree(node):
         if not isinstance(call, ast.Call):
             continue

@@ -35,6 +35,7 @@ from typing import Any
 from .. import source_reads
 from .._type_memo import class_name
 from .._user_attrs import named_attr, plain_getattr
+from .scope_model import bound_names
 
 __all__ = [
     "fresh_name_nodes",
@@ -556,8 +557,7 @@ def fresh_call_candidates(func_def: ast.AST) -> tuple[ast.Call, ...]:
     """The calls in *func_def* `library_fresh_calls` resolves: rooted at a
     name the body does not rebind, not a view by name, not told to share. A
     function of the tree alone."""
-    rebound = {n.id for n in ast.walk(func_def) if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del))}
-    rebound |= {a.arg for a in ast.walk(func_def) if isinstance(a, ast.arg)}
+    rebound = bound_names(func_def)
     found: list[ast.Call] = []
     for node in ast.walk(func_def):
         if not isinstance(node, ast.Call):

@@ -189,3 +189,21 @@ def test_the_corpus_uses_every_kind_of_syntax_node_this_python_has():
 
 def _is_abstract(kind: type) -> bool:
     return kind in (ast.stmt, ast.expr, ast.pattern, ast.excepthandler)
+
+
+def test_a_single_def_does_not_count_its_own_name_among_what_it_binds():
+    node = ast.parse("def walk(n, acc=()):\n    for child in n: walk(child)\n    import os").body[0]
+    assert sm.bound_names(node) == {"n", "acc", "child", "os"}
+
+
+def test_the_globals_a_function_rebinds_follow_the_scope_that_declares_them():
+    from cash.analysis.callee_effects import source_global_rebinds
+
+    assert source_global_rebinds(
+        "def f():\n    global a, b, c, d, untouched\n    a = 1\n    import b\n    def c(): pass\n    for d in (): pass\n"
+    ) == {"a", "b", "c", "d"}
+    assert source_global_rebinds("def f(v):\n    global m\n    match v:\n        case [m, *_]: pass\n") == {"m"}
+    # A local of an inner function is not the global an outer one declares.
+    assert (
+        source_global_rebinds("def f():\n    global g\n    def inner():\n        g = 1\n    return g\n") == frozenset()
+    )

@@ -649,9 +649,15 @@ def function_locals(node: ast.AST) -> set[str]:
 def bound_names(tree: ast.AST) -> set[str]:
     """Every name *tree* binds or unbinds in any of its scopes, parameters
     and comprehension targets included: the names that may not mean, inside
-    the tree, what they mean outside it."""
+    the tree, what they mean outside it. For a single ``def`` or ``class``,
+    not its own name, which it binds in the scope around it."""
+    model = scope_model(tree)
     found: set[str] = set()
-    for scope in scope_model(tree).scopes:
+    for scope in model.scopes:
         found |= scope.params
         found |= scope.stores.keys()
+    if isinstance(tree, (*_FUNCTION_DEFS, ast.ClassDef)):
+        own = sum(1 for e in model.events if e.kind == BIND and e.name == tree.name)
+        if own == 1:
+            found.discard(tree.name)
     return found
