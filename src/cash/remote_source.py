@@ -321,6 +321,16 @@ def warn_validation_cost_once(label: str, count: int, seconds: float, saved_seco
     )
 
 
+def token_before_read(url: str, storage_options: dict[str, Any] | None = None) -> str:
+    """The state token of *url* now, for cash's own record of what a read is
+    about to find. A state that cannot be read does not warn
+    (``REMOTE-STATE-UNREADABLE``) here: the read itself reports an object it
+    cannot reach, and the entry's own token, taken as it is stored, warns."""
+    source = RemoteFileDataSource(url, storage_options=storage_options)
+    source._warn_unreadable = False
+    return source.state_token()
+
+
 class _NoTokenError(ValueError):
     """The object was reachable but exposed nothing that tracks its content."""
 
@@ -553,6 +563,8 @@ class RemoteFileDataSource(DataSource):
         self._pinned = pinned_version(self.url)
         self.immutable = bool(self._pinned) if immutable is None else bool(immutable)
         self._cached_token: str | None = None
+        # Whether a state that cannot be read warns (`token_before_read`).
+        self._warn_unreadable = True
 
     def get_id(self) -> str:
         """Identity of the dependency - the URL, so it matches across machines."""
@@ -632,6 +644,9 @@ class RemoteFileDataSource(DataSource):
 
     def _warn_failure(self, exc: BaseException) -> None:
         """Warn once per URL and failure kind that freshness went unverified."""
+        if not self._warn_unreadable:
+            logger.debug("[REMOTE] %s unresolvable before its read: %s", self.url, exc)
+            return
         ledger_key = f"{self.url}|{class_name(type(exc))}"
         if not REMOTE_LEDGER.first_time(REMOTE_LEDGER.warned_failures, ledger_key):
             logger.debug("[REMOTE] %s still unresolvable: %s", self.url, exc)

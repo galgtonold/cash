@@ -1327,8 +1327,15 @@ class FileAccessTracker:
             return
         if token is None:
             # Cash's own request: not a file or a connection of the block's.
-            with untracked():
-                token = file_dep_snapshot.remote_token_now(url)
+            try:
+                with untracked():
+                    token = file_dep_snapshot.remote_token_now(url, warn=False)
+            except Exception:  # noqa: BLE001 - recording a read never fails the read
+                # The store cannot be asked at all (no filesystem package
+                # for the scheme): the snapshot says so when the entry is
+                # stored, as it did before a token was taken here.
+                logger.debug("[TRACKER] No token before the read of %r", url, exc_info=True)
+                return
         for tracker in self._self_and_parents():
             tracker.remote_as_read.setdefault(url, token)
 
