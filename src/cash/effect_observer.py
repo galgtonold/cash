@@ -492,8 +492,13 @@ class EffectObserver:
         #: (`process_registries.snapshot`), set by the decorator: a waived
         #: stretch of the call is left out of them (`open_waiver`).
         self.registries: Any = None
+        #: What the user's classes bound as the call began
+        #: (`class_writes.ClassState`), set by the decorator: a waived
+        #: stretch of the call is left out of it too.
+        self.class_state: Any = None
         self._waiver_depth = 0
         self._waiver_start: list[Any] | None = None
+        self._class_start: Any = None
         #: A ``unittest.mock`` object was called while the block ran: the
         #: result may be a test's fake, and must not be stored as the answer.
         self.mock_called = False
@@ -579,6 +584,10 @@ class EffectObserver:
         self._waiver_depth += 1
         if self._waiver_depth == 1 and self.registries is not None:
             self._waiver_start = process_registries.read_registries()
+        if self._waiver_depth == 1 and self.class_state is not None:
+            from .decorator import class_writes
+
+            self._class_start = class_writes.read(self.class_state)
 
     def close_waiver(self) -> None:
         """The stretch `open_waiver` began ends."""
@@ -588,11 +597,17 @@ class EffectObserver:
         if self._waiver_depth == 0 and self._waiver_start is not None:
             start, self._waiver_start = self._waiver_start, None
             process_registries.waive_since(self.registries, start)
+        if self._waiver_depth == 0 and self._class_start is not None:
+            from .decorator import class_writes
+
+            class_start, self._class_start = self._class_start, None
+            class_writes.waive_since(self.class_state, class_start)
 
     def drop_waivers(self) -> None:
         """Forget a stretch still open as the call ends: not waived."""
         self._waiver_depth = 0
         self._waiver_start = None
+        self._class_start = None
 
     # -- recording ---------------------------------------------------------
     @property

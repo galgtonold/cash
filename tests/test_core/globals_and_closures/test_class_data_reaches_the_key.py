@@ -331,7 +331,11 @@ def test_a_class_attribute_changed_in_process_is_seen():
 
 
 def test_a_counter_the_class_keeps_does_not_miss_every_call():
-    """A class attribute its own code writes is state, not an input."""
+    """A class attribute its own code writes is state, not an input.
+
+    Waived where it is written: unwaived, a call that rebinds a class
+    attribute is not stored, as a hit would leave the count behind
+    (`test_a_call_that_rebinds_a_class_attribute_is_not_stored`)."""
     import cash
 
     c = cash.Cash(backend=cash.InMemoryBackend())
@@ -342,7 +346,7 @@ def test_a_counter_the_class_keeps_does_not_miss_every_call():
         FACTOR = 2
 
         def bump(self, x):
-            type(self).calls += 1
+            type(self).calls += 1  # @cash:assume-safe
             return x * self.FACTOR
 
     @c.cache

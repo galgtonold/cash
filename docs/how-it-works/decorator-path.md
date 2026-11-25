@@ -308,7 +308,7 @@ side effects and still caches:
 - a clock read or a fresh UUID warns
   [`KEY-AMBIENT-READ`](../warnings.md#key-ambient-read).
 
-<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @1938b99d, cash/tracking/process_registries.py:changed @8df4390a, cash/tracking/process_registries.py:waive_since @d2426c38, cash/effect_observer.py:EffectObserver.open_waiver @8142c6ef -->
+<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @1938b99d, cash/tracking/process_registries.py:changed @8df4390a, cash/tracking/process_registries.py:waive_since @d2426c38, cash/effect_observer.py:EffectObserver.open_waiver @e8019660 -->
 While a miss runs, cash also compares the settings the process keeps
 outside any variable, such as NumPy's error handling and print options, a logger's
 level, handlers or filters, the warnings filters and how warnings are shown,
@@ -318,6 +318,16 @@ matplotlib's `rcParams`, `decimal`'s context. A call that changed one is not
 stored, and the function runs every time from then on, with an
 [`IMPURE-OBSERVED-EFFECTS`](../warnings.md#impure-observed-effects) warning:
 a hit, or a new process, would leave the setting unmade.
+
+<!-- claim: cash/decorator/class_writes.py:candidates @2e821727, cash/decorator/class_writes.py:changed @b243ace2 -->
+It also reads what each of your classes the call can reach binds (those
+in the module globals and closures of the functions it runs, and the
+classes of its arguments). A call that bound one of their attributes to
+another object (`Cfg.items = Cfg.items + [x]`, `Cfg.count += 1`, an equal
+new list), bound a new one or deleted one is not stored, with an
+[`IMPURE-SCOPE-MUTATION`](../warnings.md#impure-scope-mutation) warning:
+plain Python leaves the class holding the new binding, a hit would not.
+Dunder names (`__slotnames__`, which `copy` caches on a class) are left out.
 
 The waivers that accept a file write accept such a change too, with the
 same reach. `# @cash:assume-safe` on a line waives the changes that line

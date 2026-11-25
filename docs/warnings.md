@@ -1064,6 +1064,16 @@ wrapper filling its cache) is not reported: cash just stops folding what it
 holds, after one extra miss. Nor is a random generator the body draws from:
 it stays in the key, and a hit moves it on as the computed call did.
 
+<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_class_writes @1376edfd, cash/decorator/class_writes.py:changed @b243ace2 -->
+A call that binds an attribute of one of your classes (`Cfg.items =
+Cfg.items + [x]`, `Cfg.count += 1`, `setattr(Cfg, "k", v)`, a classmethod's
+`cls.items = ...`, an equal new list included) is also reported here, and is
+not stored: a hit, or a new process, would leave the class as it was, where
+plain Python leaves the new binding. Calls that do this run uncached. A
+waiver where the write is made (`# @cash:assume-safe` on its line, `with
+cash.assume_safe():` around it, `assume_safe=True`) stores it again, and a
+hit then skips the write.
+
 **Why it matters.** A hit skips the change, so a counter stops counting. cash
 also stops folding that variable into the key, so a change you make to it
 elsewhere no longer invalidates the entry. While other threads are running,
