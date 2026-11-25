@@ -52,6 +52,37 @@ That is all the setup there is. A few rules hold for every cached function:
   back as an instance of the class its module names now, as it does when
   read from disk.
 
+### What you can decorate
+
+<!-- claim: cash/decorator/cached_function.py:checked_target @1e4b8126 -->
+`@cash.cache` goes directly on a function: a `def`, an `async def`, a
+method, a `lambda` or another callable object. Anything else raises a
+`TypeError` on the decorator line, with the fix in the message:
+
+- **`@property`, `@classmethod` and `@staticmethod` go above it**, so cash
+  wraps the plain function:
+
+    ```python
+    import cash
+
+    class Report:
+        @property
+        @cash.cache
+        def total(self):
+            return 42
+
+        @staticmethod
+        @cash.cache
+        def split_row(text):
+            return text.split(",")
+    ```
+
+- **Options are named.** `@cash.cache(128)`, the `functools.lru_cache`
+  habit, is refused: there is no `maxsize`, entries live on disk and the
+  [cache size limit](#cache-size-limit) bounds the folder.
+- **A class is not a function.** Decorate the function that builds the
+  instance, or the slow methods.
+
 To configure your own instance instead of the shared default, create a `Cash`
 and use its `cache` method:
 

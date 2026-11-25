@@ -37,7 +37,7 @@ from .decorator.arg_hashing import (
 from .decorator.arg_key import arg_key_spec, key_function_impurities
 from .decorator.backend_slot import BackendSlot
 from .decorator.cached_callable import CachedCallable
-from .decorator.cached_function import CHUNK_MAX_BYTES, CHUNK_MAX_ITEMS, CachedFunction, checked_ttl
+from .decorator.cached_function import CHUNK_MAX_BYTES, CHUNK_MAX_ITEMS, CachedFunction, checked_target, checked_ttl
 from .decorator.cash_key import KeyCheck
 from .decorator.class_data import ClassDataFold
 from .decorator.closure_fold import CaptureAnalysis, ClosureFold, HelperIdentity
@@ -678,11 +678,15 @@ class Cash:
             ValueError: ``strict`` and ``assume_safe`` are both set,
                 ``ttl`` is negative, NaN or infinite, or ``ignore`` names a
                 parameter the function does not have.
-            TypeError: ``ttl`` is not a number, timedelta or ``None``, a
+            TypeError: ``func`` is not a function (a class, a ``property`` or
+                ``classmethod`` object, a number passed positionally),
+                ``ttl`` is not a number, timedelta or ``None``, a
                 ``depends_on`` entry is neither a callable nor a `DataSource`,
                 ``key`` is combined with ignored parameters, or ``key`` is not
                 a plain function.
         """
+        if func is not None:
+            checked_target(func)
         ttl = checked_ttl(ttl)
         depends_on = checked_depends_on(depends_on)
         if strict and assume_safe:

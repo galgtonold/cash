@@ -25,6 +25,7 @@ __all__ = [
     "WARNINGS_MAX",
     "CachedFunction",
     "PurityMode",
+    "checked_target",
     "checked_ttl",
     "new_stats",
 ]
@@ -186,6 +187,42 @@ def call_signature(func: Callable[..., Any]) -> inspect.Signature:
             continue
         kept.append(param)
     return sig.replace(parameters=kept)
+
+
+def checked_target(func: Any) -> None:
+    """Refuse what ``@cash.cache`` cannot wrap, when it is decorated.
+
+    Each of these otherwise fails later and far from the cause: a property
+    reads as a bound method, a classmethod raises at its first call, a class
+    stops being a class (``isinstance`` and subclassing fail), and a number
+    passed the ``functools.lru_cache(128)`` way raises ``'int' object is not
+    callable``.
+
+    Raises:
+        TypeError: *func* is not callable, is a ``property``, ``classmethod``
+            or ``staticmethod`` object, or is a class.
+    """
+    if isinstance(func, (property, classmethod, staticmethod)):
+        kind = class_name(type(func))
+        raise TypeError(
+            f"@cash.cache cannot wrap a {kind} object: put @{kind} above @cash.cache, "
+            f"so cash decorates the plain function.\n"
+            f"    @{kind}\n"
+            f"    @cash.cache\n"
+            f"    def ...:"
+        )
+    if isinstance(func, type):
+        raise TypeError(
+            f"@cash.cache decorates functions, not classes: {func.__name__} would stop being a class "
+            "(isinstance and subclassing would fail). Decorate the function that builds the "
+            "instance, or the methods that are slow."
+        )
+    if not callable(func):
+        raise TypeError(
+            f"@cash.cache: options are keyword-only, but got {class_name(type(func))} {func!r} as the first "
+            "argument. Write @cash.cache(ttl=...) or another named option. There is no maxsize: "
+            "entries live on disk, and the max_cache_size setting bounds the folder."
+        )
 
 
 def checked_ttl(ttl: Any) -> float | None:
