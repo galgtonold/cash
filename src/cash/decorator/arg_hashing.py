@@ -989,9 +989,11 @@ def watch_array_handles() -> None:
     ``arr.flags.writeable = True`` make one writable again (the block under
     it is), which is the usual answer to pandas' "assignment destination is
     read-only". pandas reads these itself all the time, so they are recorded
-    only when code outside pandas and cash asks, and only a read-only view --
-    or, for strings held as Python objects, the column's own array, which
-    ``.values`` hands out as it is.
+    only when code outside pandas and cash asks. A writable array one of
+    them returns is recorded as well: it is a copy, which no frame keeps,
+    or the array pandas keeps itself (``np.asarray`` of a numeric index
+    under pandas 3.1; strings held as Python objects, which ``.values``
+    hands out as they are).
 
     A categorical column is reached the same ways: ``.values`` and
     ``.array`` hand out the categorical pandas keeps, ``Categorical.codes``
@@ -1451,8 +1453,12 @@ def _noting(accessor: Callable, outside_only: bool | str) -> Callable:
                 flags = getattr(handle, "flags", None)
                 if caller.startswith("cash."):
                     return handle  # cash's own read
-                if flags.writeable if flags is not None else not _handed_out_as_kept(handle):
-                    return handle  # a copy, or an extension array the memo never vouches for
+                if flags is None and not _handed_out_as_kept(handle):
+                    return handle  # an extension array the memo never vouches for
+                # A writable ndarray is a copy, which shares nothing with a
+                # frame and is recorded for nothing, or the very array pandas
+                # keeps: ``np.asarray(df.index)`` of a numeric index (pandas
+                # 3.1), which a write through it changes under the memo.
         try:
             _note_exposed(handle)
         except Exception:  # noqa: BLE001 - recording must never break the user's read
