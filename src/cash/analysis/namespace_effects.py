@@ -23,6 +23,7 @@ from collections.abc import Callable, Container, Iterable, Iterator, Mapping
 from typing import Any
 
 from cash._user_attrs import attribute_or, instance_of, is_routine
+from cash.builtin_calls import HAND_NOTHING_ON
 
 from .. import source_reads
 from .._memo import STATEMENTS, USER_CALLEES, LruMemo
@@ -1655,14 +1656,10 @@ def _live_user_function_source(user_ns: Mapping[str, Any]) -> Callable[[str], st
 _USER_SOURCES: dict[types.CodeType, str | None] = {}
 
 
-#: Builtins that read what they are handed and change none of it, unshadowed.
-ARGUMENT_READING_BUILTINS = frozenset(
-    {
-        "abs", "all", "any", "bool", "dict", "divmod", "enumerate", "float", "format", "frozenset", "hash",
-        "int", "isinstance", "issubclass", "len", "list", "max", "min", "print", "range", "repr", "reversed",
-        "round", "set", "sorted", "str", "sum", "tuple", "type", "zip", "id", "callable", "chr", "ord",
-    }
-)  # fmt: skip
+#: Builtins that change nothing they are handed, hand back no part of it to
+#: change it through, and hand it to no function (``map`` and ``filter`` are
+#: read for theirs, `_maps_a_reading_lambda`), unshadowed.
+ARGUMENT_READING_BUILTINS = HAND_NOTHING_ON
 
 
 def function_handoffs(

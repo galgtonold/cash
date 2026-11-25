@@ -751,6 +751,11 @@ class PurityVisitor(ast.NodeVisitor):
         env = environment_input(node, self._namespace, resolve_constants=True)
         if env is None:
             return False
+        if env[0] == "hash_seed" and self._qualname.rsplit(".", 1)[-1] == "__hash__":
+            # A class saying how its objects hash: where a set or a dict
+            # puts them, which is no result. Keyed on the seed, every
+            # function reaching such a class would run again in each process.
+            return True
         if id(node) not in self._log_only:
             self.environment_reads.add(env)
         if dotted in ("os.environ.setdefault", "os.environb.setdefault"):

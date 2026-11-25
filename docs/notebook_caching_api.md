@@ -110,9 +110,9 @@ they talk to the outside world.
 | A statement that... | What cash does |
 |---|---|
 | writes a file (`open(p, "w")`, `df.to_csv`, `fig.savefig`), directly or through a function you wrote (in the notebook or your own module) | runs every time |
-| sends something over the network (`requests.post`, `session.post`, `client.publish`, `s3.upload_file`) | runs every time |
+| sends something over the network (`requests.post`, `session.post`, `client.publish`, `s3.upload_file`), under whatever name it is imported (`from requests import post`). A request your own code sends through `requests`, `urllib3` or `urllib` that is not a `GET`, `HEAD` or `OPTIONS` is also seen as it is sent: `session.request("POST", url)`, `urlopen(req)` with a request built in another cell, a function you wrote | runs every time |
 | writes to a database (`INSERT`, `commit`, `df.to_sql`) | runs every time |
-| starts a process (`subprocess.run`, `os.system`) | runs every time |
+| starts a process (`subprocess.run`, `os.system`), under whatever name it is imported (`from subprocess import run`, `import subprocess as sp`) or in a function you wrote. A process a library starts for its own use (`platform.processor()`, a worker pool) does not count | runs every time |
 | reads the clock (`datetime.now()`, `time.time()`, `uuid4()`), random bytes from the system (`os.urandom()`, `secrets.token_hex()`) or asks for `input()` | runs every time |
 | makes, picks or draws on the current pyplot figure (`plt.figure`, `plt.subplots`, `plt.subplot`, `plt.plot`, `plt.show`), directly or through a library or a function you wrote (`sns.barplot(...)`, `s.plot()`) | not stored on its own: a hit would leave the next drawing on another figure. Cash compares pyplot's open figures, the current one and what its axes hold before and after the statement. With the inline backend, a whole plot whose inputs did not change is [shown from the cache](#plots-shown-from-the-cache) instead of drawn again |
 | calls a function you wrote that reads pyplot's current figure (`len(plt.gca().lines)`, `plt.gcf().axes`), however deep the call: a method of your class, pyplot handed in (`nlines(plt)`), kept as a default (`get=plt.gca`) or imported inside it included | runs every time, as `plt.gca()` in the statement does: no key holds the figure it reads. On Python 3.12+, where cash records what runs, only a run that reached pyplot counts: `run(tsp, cities, plot=False)`, whose plotting branch is not taken, is cached |
@@ -133,6 +133,7 @@ they talk to the outside world.
 | prints | cached; the output is replayed on a hit |
 | reads a file | cached; runs again when the file's contents change |
 | reads an environment variable (`os.getenv`) | cached; the value is part of the key, so a new value runs it again |
+| reads the process's id (`os.getpid()`) or takes the `hash()` of text, which Python salts per process | cached for this kernel; after a restart it runs again, as the value is another one (`hash()` of text is reused across restarts when `PYTHONHASHSEED` is fixed) |
 
 Only effects written in the statement count, plus file writes and clock or
 UUID reads in your own functions. A function of yours that reads the clock

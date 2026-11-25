@@ -1250,7 +1250,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/effects.py:MODULE_CALLS @91df07f5, cash/analysis/purity_visitor.py:PurityVisitor.visit_Subscript @3b13759e -->
+<!-- claim: cash/effects.py:MODULE_CALLS @635ceceb, cash/analysis/purity_visitor.py:PurityVisitor.visit_Subscript @3b13759e -->
 <!-- claim: cash/analysis/ambient_reads.py:ambient_call @00d7cd08, cash/effects.py:_canonical_names @afe31e4b -->
 <!-- claim: cash/effects.py:CLOCK_WHEN_ARGS_OMITTED @3c78d511, cash/effects.py:_reads_clock_when_omitted @b543a896 -->
 **What happened.** The function reads the clock, a fresh UUID or random
@@ -1266,7 +1266,7 @@ passed as an argument, and a property or dunder method (`settings.stamp`,
 `settings["KEY"]`, `with settings as mode:`) of an object the function reads
 or is given.
 
-<!-- claim: cash/effects.py:environment_input @cc5c0e0f, cash/decorator/environment_fold.py:EnvironmentFold.fold_environment @db1c6b07 -->
+<!-- claim: cash/effects.py:environment_input @3b23d3f4, cash/decorator/environment_fold.py:EnvironmentFold.fold_environment @db1c6b07 -->
 <!-- claim: cash/analysis/purity_flow.py:is_log_helper @6bf250bd, cash/analysis/ambient_reads.py:log_helper_names @8960a844 -->
 <!-- claim: cash/analysis/ambient_reads.py:clock_helper_read @a0285688 -->
 An environment read with the name written out (`os.getenv("TENANT")`,
@@ -1275,8 +1275,10 @@ An environment read with the name written out (`os.getenv("TENANT")`,
 (`os.path.expandvars("$DATA_DIR/x")`, `os.path.expanduser`, `Path.home()`,
 `tempfile.gettempdir()`, `shutil.which`), a read of the working directory
 (`os.getcwd()`, `Path.cwd()`, `os.path.abspath(p)` or `Path(p).resolve()` on
-a path that may be relative) and a read of the command line (`sys.argv`, or
-`parser.parse_args()` with no list of its own) are not reported: their values are folded into
+a path that may be relative), a read of the command line (`sys.argv`, or
+`parser.parse_args()` with no list of its own) and a read of the process
+itself (`os.getpid()`, `threading.get_ident()`, `hash()` of text, which
+depends on `PYTHONHASHSEED`) are not reported: their values are folded into
 the key. A
 reading that only goes into a log line is not reported either.
 
@@ -1775,7 +1777,7 @@ it: the statement's result is right.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @045afef4, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @91df07f5 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @045afef4, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @635ceceb -->
 <!-- claim: cash/analysis/purity_visitor.py:_opens_tracked_database @1205d3ff -->
 **What happened.** The function fetches from a server (`requests.get`,
 `httpx.get`, `urlopen(url)`) or queries a database (`cur.execute("SELECT
@@ -1784,8 +1786,8 @@ is not reported: that file is tracked. Writes (`requests.post`, `INSERT`) are
 [IMPURE-SIDE-EFFECTS](#impure-side-effects) instead.
 
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks._report_observed_network @23e868ea -->
-A fetch the source does not name (`requests.Session().get(url)`, `from
-requests import get`, a client library) is caught when the first call runs:
+A fetch the source does not name (`requests.Session().get(url)`, a client
+library) is caught when the first call runs:
 the message then lists the `socket connect` and the line of yours that led to
 it. A remote file a reader opened by URL (`pd.read_csv("s3://...")`) is not
 reported: it is tracked by its ETag.

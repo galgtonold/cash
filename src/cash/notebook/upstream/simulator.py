@@ -23,6 +23,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from cash._user_attrs import attribute_or, instance_of
+from cash.builtin_calls import FOLLOW_FROM_ARGUMENTS
 from cash.control_markers import strip_markers
 
 from ...analysis.ast_util import parse_cached, resolve_callee, walk_tree
@@ -949,25 +950,7 @@ class NotebookSimulator:
 
 #: Builtins a ``%cash_on``-cell binding may call and still count as reading
 #: nothing. Classes are judged separately (``_binds_without_reading``).
-_PURE_BUILTINS = frozenset(
-    {
-        "len",
-        "range",
-        "min",
-        "max",
-        "abs",
-        "round",
-        "sorted",
-        "sum",
-        "zip",
-        "enumerate",
-        "reversed",
-        "repr",
-        "hash",
-        "isinstance",
-        "getattr",
-    }
-)
+_PURE_BUILTINS = FOLLOW_FROM_ARGUMENTS
 
 #: ``os.path`` functions that only compute a string -- ``DATA =
 #: os.path.join(ROOT, "data")`` is as common in a setup cell as ``Path(...)``.

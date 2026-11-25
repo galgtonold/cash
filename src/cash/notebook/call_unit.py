@@ -1287,6 +1287,10 @@ class CallUnit:
         root = attribute_or(attribute_or(self._cash, "backend", None), "local_dir", None)
         if kept_writes(written, root, written.appended, written.waived):
             return True
+        if written.effect is not None:
+            # A program it started, a request it sent that is not a fetch
+            # (`WrittenPaths.effect`): a hit would do neither.
+            return True
         try:
             # What workers it starts write is not seen here (`_workers_reason`).
             return user_callee_starting_workers(call.fn) is not None

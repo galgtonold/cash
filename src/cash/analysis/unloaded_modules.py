@@ -28,6 +28,7 @@ import types
 
 from .._type_memo import class_module
 from .._user_attrs import attribute_or, plain_getattr
+from ..builtin_calls import FOLLOW_FROM_ARGUMENTS
 from ..install_paths import in_own_package, top_package
 from ..tracking.function_tracker import is_local_module
 from ..value_types import BUILTIN_NAMES
@@ -36,14 +37,8 @@ from ..value_types import BUILTIN_NAMES
 #: alone. A call not listed makes the module's values unvouched for.
 _SOURCE_ONLY_CALLS = frozenset(
     {
-        *(
-            f"builtins.{n}"
-            for n in (
-                "abs all any bool bytes chr classmethod complex dict divmod enumerate filter float format frozenset "
-                "int isinstance issubclass len list map max min object ord pow property range repr reversed round "
-                "set slice sorted staticmethod str sum tuple type zip"
-            ).split()
-        ),
+        *(f"builtins.{n}" for n in FOLLOW_FROM_ARGUMENTS),
+        *(f"builtins.{n}" for n in ("classmethod", "object", "property", "staticmethod")),
         "abc.abstractmethod",
         "collections.Counter",
         "collections.OrderedDict",

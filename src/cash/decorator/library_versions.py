@@ -23,7 +23,6 @@ and the same files reinstalled key as before (`_files_digest`).
 from __future__ import annotations
 
 import csv
-import dis
 import hashlib
 import importlib.machinery as importlib_machinery
 import inspect
@@ -40,7 +39,7 @@ from .._lazy_module import LazyModule
 from .._location import per_user_cache_root
 from .._type_memo import TypeMemo, class_module, class_qualname, type_key
 from .._user_attrs import importable_attr, plain_getattr
-from ..analysis.bytecode import instructions
+from ..analysis.bytecode import imports_of
 from ..backends.cache_dir import LIBRARY_MAP_FILENAME, LIBRARY_RECORDS_FILENAME
 from ..install_paths import in_own_package, is_cash_path, is_user_path, top_package
 from ..jit_functions import jit_python_function
@@ -883,8 +882,6 @@ def library_owns(bound: Any, imported: tuple[str, tuple[str, ...]]) -> bool:
     return isinstance(owner, str) and top_package(owner) == top and expected is not None and name == expected
 
 
-#: The ``IMPORT_NAME`` opcode, as a byte string to look for.
-_IMPORT_NAME = bytes([dis.opmap["IMPORT_NAME"]])
 #: code -> the absolute module names it and the code nested in it import.
 _IMPORTED: dict[int, tuple[types.CodeType, tuple[str, ...]]] = {}
 
@@ -898,27 +895,13 @@ def _imported_modules(code: types.CodeType) -> tuple[str, ...]:
     while stack:
         c = stack.pop()
         stack.extend(k for k in c.co_consts if isinstance(k, types.CodeType))
-        # Most code imports nothing: a scan of the opcode bytes (every
-        # other byte of ``co_code``, which holds no specialised or
-        # instrumented opcode) rules it out before `dis` decodes it.
-        if not c.co_names or _IMPORT_NAME not in c.co_code[::2]:
-            continue
         try:
-            # ``dis.get_instructions``'s (opname, argval), read in one loop:
-            # it built an object per instruction, and a fresh process's
-            # first keys read the code of every helper they reach. Without
-            # the ``EXTENDED_ARG`` prefixes, whose argument is folded into
-            # the instruction after them: past 255 names, one stood between
-            # the import and its level, and the import went unseen.
-            ins = [i for i in instructions(c) if i[0] != "EXTENDED_ARG"]
-        except Exception:  # noqa: BLE001 - code dis cannot read imports nothing it can name
+            imports = imports_of(c)
+        except Exception:  # noqa: BLE001 - code that cannot be read imports nothing it can name
             continue
-        for k, (opname, argval) in enumerate(ins):
-            # ``LOAD_CONST level`` comes before ``IMPORT_NAME``: 0 is absolute.
-            if opname == "IMPORT_NAME" and isinstance(argval, str) and k >= 2:
-                level = ins[k - 2][1]
-                if level == 0:
-                    found[argval] = None
+        for level, module, _names in imports:
+            if level == 0:  # absolute
+                found[module] = None
     out = tuple(found)
     if len(_IMPORTED) > 4096:
         _IMPORTED.clear()

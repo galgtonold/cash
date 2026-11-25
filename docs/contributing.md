@@ -97,6 +97,8 @@ src/cash/
 ├── units.py            # byte sizes: "2GB" read, and written back
 ├── effects.py          # which calls write files, send requests, read
 │                       #   the clock or environment
+├── builtin_calls.py    # what each builtin does with its arguments: the
+│                       #   one table every analysis reads
 ├── effect_observer.py  # side effects a cached function performs on
 │                       #   its first call
 ├── purity.py           # @pure, @stateful and the known-pure registry

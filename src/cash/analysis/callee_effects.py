@@ -12,6 +12,8 @@ import functools
 import textwrap
 from collections.abc import Callable, Iterable
 
+from cash.builtin_calls import HOLD_NOTHING_HANDED
+
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from .analysis_budget import check_analysis_budget
 from .ast_util import CallScope, called_names, handed_names, plain_statement, walk_tree
@@ -484,10 +486,7 @@ _NEW_VALUES = (ast.Constant, ast.JoinedStr, ast.Compare, ast.UnaryOp)
 
 #: Builtins that hand back a new number, text or truth value: nothing they
 #: are given is in it (``write(str(scores))``).
-_SCALAR_BUILTINS = frozenset(
-    ("str", "repr", "ascii", "format", "len", "int", "float", "complex", "bool", "round", "abs", "hash", "id")
-    + ("ord", "chr", "bin", "hex", "oct", "isinstance", "issubclass", "callable", "hasattr")
-)
+_SCALAR_BUILTINS = HOLD_NOTHING_HANDED
 
 
 def _names_inside(node: ast.AST) -> set[str]:

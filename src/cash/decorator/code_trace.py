@@ -2280,7 +2280,10 @@ def import_reads_now(code: types.CodeType, g: Mapping[str, Any]) -> list[tuple[s
     loads ``a.b`` and binds ``a``). Only the code's own instructions: a
     nested function's are its own code."""
     try:
-        ins = list(dis.get_instructions(code))
+        # Without the ``EXTENDED_ARG`` prefixes, as `bytecode.imports_of`
+        # reads an import: past 255 names one stands between an import and
+        # the constants and stores around it.
+        ins = [i for i in dis.get_instructions(code) if i.opname != "EXTENDED_ARG"]
     except Exception:  # noqa: BLE001 - code dis cannot read takes nothing cash can name
         return []
     package = g.get("__package__") or ""

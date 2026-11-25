@@ -22,7 +22,8 @@ names for it are :data:`MUTATOR_METHODS`, kept apart from the effect verbs.
 **Matching is by name.** A call is matched by how it is spelled
 (``requests.post``), by a method name that means the same thing on every
 receiver that has it (``df.to_csv``, ``session.post``), and -- when a namespace
-is given -- by what its names are bound to (``import time as t; t.time()``).
+is given -- by what its names are bound to (``import time as t; t.time()``,
+``from subprocess import run; run(cmd)``), whatever the kind.
 Nothing here imports a library the program has not imported itself, and no
 attribute is read from anything but a module or a class, so classifying a call
 never runs the user's code.
@@ -38,11 +39,15 @@ import contextvars
 import functools
 import hashlib
 import os
+import re
 import sys
+import threading
 import types
 from collections.abc import Callable, Iterable, Mapping
 from enum import Enum
 from typing import Any, NamedTuple
+
+from cash.builtin_calls import NUMBER_MAKERS
 
 from ._user_attrs import plain_getattr
 
@@ -59,6 +64,7 @@ __all__ = [
     "STDIN_NAMES",
     "Action",
     "EffectKind",
+    "canonical_spellings",
     "classify_call",
     "dotted_name",
     "environ_membership",
@@ -102,7 +108,8 @@ class EffectKind(str, Enum):
     SUBPROCESS = "subprocess"
     #: Reads the clock or makes a fresh id: ``time.time``, ``uuid4``.
     CLOCK = "clock"
-    #: Reads the process environment: ``os.getenv``, ``os.getcwd``.
+    #: Reads the process environment: ``os.getenv``, ``os.getcwd``; or the
+    #: process itself: ``os.getpid``, ``hash()`` of text.
     ENVIRONMENT = "environment"
     #: Writes to the console: ``print``, ``logging.info``, ``sys.stdout.write``.
     CONSOLE = "console"
@@ -285,6 +292,16 @@ MODULE_CALLS: dict[str, EffectKind] = {
     "tempfile.gettempdirb": _EV,
     "shutil.which": _EV,
     "getpass.getuser": _EV,
+    # What differs in every process, and is the same within one: its id, the
+    # caller's thread, and the hash of text, which Python salts per process
+    # (`PYTHONHASHSEED`). Each goes into the key by its value now
+    # (`_PROCESS_READS`), so another process, or another thread, computes
+    # its own. ``hash()`` of a number is the number's own (`_hash_is_unsalted`).
+    "os.getpid": _EV,
+    "os.getppid": _EV,
+    "threading.get_ident": _EV,
+    "threading.get_native_id": _EV,
+    "hash": _EV,
     # -- the console --
     "print": _CO,
     "logging.debug": _CO,
@@ -510,6 +527,20 @@ _HELPER_READS: dict[str, tuple[str, str | None]] = {
     "getpass.getuser": ("user", ""),
 }
 
+#: Reads of the process itself, and the part of it each one's answer is
+#: (`environment_input`, `_environment_value`).
+_PROCESS_READS: dict[str, str] = {
+    "os.getpid": "pid",
+    "os.getppid": "parent_pid",
+    "threading.get_ident": "thread",
+    "threading.get_native_id": "native_thread",
+    "hash": "hash_seed",
+}
+
+#: A string whose hash stands for the process's hash seed: the same in two
+#: processes exactly when ``hash()`` of text is.
+_HASH_SEED_PROBE = "cash:hash-seed-probe"
+
 # matplotlib.pyplot module aliases. EVERY module-level ``plt.*`` call operates on
 # pyplot's PROCESS-GLOBAL current figure -- making a new current figure or axes
 # (``plt.figure``, ``plt.subplots``, ``plt.subplot``, ``plt.axes``), fetching
@@ -519,11 +550,6 @@ _HELPER_READS: dict[str, tuple[str, str | None]] = {
 # leaves the next drawing on another figure than plain Python's. They all
 # always run. ``plt.savefig`` is a file write (a method verb), not a display.
 PYPLOT_MODULE_ALIASES: frozenset[str] = frozenset({"plt", "pyplot", "matplotlib.pyplot"})
-
-#: The kinds a namespace is consulted for: a call to one is recognised through
-#: what its names are bound to (``from time import time as now; now()``), not
-#: only by its spelling.
-_RESOLVED_KINDS: frozenset[EffectKind] = frozenset({EffectKind.CLOCK, EffectKind.ENVIRONMENT, EffectKind.INTERACTIVE})
 
 
 def dotted_name(func: ast.AST) -> str | None:
@@ -757,6 +783,9 @@ def environment_input(
         return None
     if effect.name in _CWD_CALLS or effect.name in _CWD_RESOLVERS:
         return ("cwd", "")
+    process = _PROCESS_READS.get(effect.name)
+    if process is not None:
+        return (process, "")
     helper = _HELPER_READS.get(effect.name)
     if helper is not None and helper[1] is not None:
         return helper
@@ -812,6 +841,11 @@ _ENVIRONMENT_LABELS = {
     "user": "the login name",
     "env_global": "the environment variable {name}",
     "argv": "the command line",
+    "pid": "the process id",
+    "parent_pid": "the parent process's id",
+    "thread": "the calling thread",
+    "native_thread": "the calling thread",
+    "hash_seed": "Python's hash seed (PYTHONHASHSEED), which hash() of text depends on",
 }
 
 
@@ -841,6 +875,16 @@ def _environment_value(kind: str, name: str) -> str | None:
         return getpass.getuser()
     if kind == "argv":
         return repr(sys.argv)
+    if kind == "pid":
+        return str(os.getpid())
+    if kind == "parent_pid":
+        return str(os.getppid())
+    if kind == "thread":
+        return str(threading.get_ident())
+    if kind == "native_thread":
+        return str(threading.get_native_id())
+    if kind == "hash_seed":
+        return str(hash(_HASH_SEED_PROBE))
     if kind == "env_global":
         module, _, constant = name.partition(":")
         variable = getattr(sys.modules.get(module), constant, None)
@@ -979,11 +1023,58 @@ def _named_kind(name: str, call: ast.Call) -> EffectKind | None:
         if isinstance(method, ast.Constant) and isinstance(method.value, str):
             return _NR if method.value.upper() in _READ_METHODS else _NW
         return EffectKind.NETWORK  # a computed method: the direction is unknown
-    if name.endswith("urlopen") and _literal_arg(call, 1, "data") is not None:
-        return _NW
+    if name.endswith("urlopen"):
+        if _literal_arg(call, 1, "data") is not None:
+            return _NW
+        return _request_object_kind(_literal_arg(call, 0, "url")) or kind
+    if name == "hash" and _hash_is_unsalted(call.args[0] if len(call.args) == 1 else None):
+        return None  # `hash(42)`, `hash((row, col))` of numbers: the same in every process
     if name in _CWD_RESOLVERS and _surely_absolute(_literal_arg(call, 0, "path")):
         return None  # `os.path.abspath(__file__)` reads no working directory
     return kind
+
+
+#: Builtins whose answer is a number.
+_NUMBER_MAKERS = NUMBER_MAKERS
+
+
+def _hash_is_unsalted(node: ast.expr | None) -> bool:
+    """Is ``hash(node)`` provably the same in every process: *node* is a
+    number, or a tuple of them, as written? The hash of a number is
+    arithmetic on it; that of text, bytes and dates is salted with the
+    process's seed, and that of a plain object is its address."""
+    if isinstance(node, ast.Constant):
+        return isinstance(node.value, (int, float, complex)) or (node.value is None and sys.version_info >= (3, 12))
+    if isinstance(node, ast.UnaryOp):
+        return _hash_is_unsalted(node.operand)
+    if isinstance(node, ast.BinOp):
+        return _hash_is_unsalted(node.left) and _hash_is_unsalted(node.right)
+    if isinstance(node, ast.Tuple):
+        return all(_hash_is_unsalted(item) for item in node.elts)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        return node.func.id in _NUMBER_MAKERS
+    return False
+
+
+def _request_object_kind(node: ast.expr | None) -> EffectKind | None:
+    """What ``urlopen(Request(url, data, headers, ..., method=...))`` does,
+    read from the ``Request(...)`` written as its argument; None when *node*
+    is not one, or says nothing (a fetch). A method computed at run time is
+    a request of unknown direction."""
+    if not isinstance(node, ast.Call):
+        return None
+    name = dotted_name(node.func)
+    if name is None or name.rsplit(".", 1)[-1] != "Request":
+        return None
+    method = _literal_arg(node, 5, "method")
+    if method is not None and not (isinstance(method, ast.Constant) and method.value is None):
+        if isinstance(method, ast.Constant) and isinstance(method.value, str):
+            return _NR if method.value.upper() in _READ_METHODS else _NW
+        return EffectKind.NETWORK
+    data = _literal_arg(node, 1, "data")
+    if data is not None and not (isinstance(data, ast.Constant) and data.value is None):
+        return _NW
+    return None
 
 
 # -- resolving names through a namespace ------------------------------------
@@ -997,11 +1088,7 @@ def _resolution_table() -> tuple[frozenset[str], tuple[str, ...]]:
     (sorted). Built once: the tables are constants, and `_roots` runs for
     every call the walk classifies, where rebuilding them was most of its
     cost."""
-    table = frozenset(
-        {name for name, kind in MODULE_CALLS.items() if kind in _RESOLVED_KINDS}
-        | set(CLOCK_WHEN_ARG_CALLS)
-        | set(CLOCK_WHEN_ARGS_OMITTED)
-    )
+    table = frozenset(set(MODULE_CALLS) | set(CLOCK_WHEN_ARG_CALLS) | set(CLOCK_WHEN_ARGS_OMITTED))
     return table, tuple(sorted({entry.split(".", 1)[0] for entry in table}))
 
 
@@ -1076,12 +1163,52 @@ def _shadowed(name: str, namespace: Mapping[str, Any] | None) -> bool:
     return namespace[name] is not getattr(builtins, name, None)
 
 
-def classify_call(call: ast.Call, namespace: Mapping[str, Any] | None = None) -> Effect | None:
+#: A name chain as written in source: ``sp.check_call``, ``run``.
+_NAME_CHAIN = re.compile(r"(?<![\w.])[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*")
+_RESOLVABLE_TYPES = (types.ModuleType, type, types.FunctionType, types.BuiltinFunctionType, types.MethodType)
+
+
+def canonical_spellings(code: str, namespace: Mapping[str, Any]) -> dict[str, str]:
+    """``{name chain as written in code: the known call it is bound to}`` for
+    the chains of *code* that reach a call this module names under another
+    spelling: ``{"sp.check_call": "subprocess.check_call", "run":
+    "subprocess.run", "post": "requests.post"}`` after ``import subprocess
+    as sp``, ``from subprocess import run`` and ``from requests import post``.
+
+    Everything :func:`classify_call` reads from a namespace, as plain data:
+    an analysis memoised on the statement's text keys on this and hands it
+    back as *aliases*. A chain spelled as a known call already is left to
+    its spelling."""
+    found: dict[str, str] = {}
+    if not namespace:
+        return found
+    table, _tops = _resolution_table()
+    for chain in set(_NAME_CHAIN.findall(code)):
+        if chain in table:
+            continue
+        parts = chain.split(".")
+        try:
+            root = namespace[parts[0]]
+        except KeyError:
+            continue
+        if not issubclass(type(root), _RESOLVABLE_TYPES):
+            continue
+        for canonical in reversed(_canonical_names(parts, namespace)):
+            if canonical in table and canonical != chain:
+                found[chain] = canonical
+                break
+    return found
+
+
+def classify_call(
+    call: ast.Call, namespace: Mapping[str, Any] | None = None, aliases: Mapping[str, str] | None = None
+) -> Effect | None:
     """What *call* does, or None when it is none of the :class:`EffectKind`\\ s.
 
     *namespace*, when given, is what the call's names are bound to; with it,
-    ``import time as t; t.time()`` is recognised as ``time.time``. Only the
-    kinds in ``_RESOLVED_KINDS`` are looked up that way.
+    ``import time as t; t.time()`` is recognised as ``time.time`` and ``from
+    subprocess import run; run(cmd)`` as ``subprocess.run``. *aliases* is
+    the same knowledge read ahead of time (:func:`canonical_spellings`).
     """
     func = call.func
     if isinstance(func, ast.Name) and func.id == "open":
@@ -1101,8 +1228,12 @@ def classify_call(call: ast.Call, namespace: Mapping[str, Any] | None = None) ->
         if namespace is not None and chain[0] in namespace:
             for canonical in reversed(_canonical_names(chain, namespace)):
                 kind = _named_kind(canonical, call)
-                if kind in _RESOLVED_KINDS:
+                if kind is not None:
                     return Effect(kind, canonical)
+        if aliases and dotted in aliases:
+            kind = _named_kind(aliases[dotted], call)
+            if kind is not None:
+                return Effect(kind, aliases[dotted])
     if not isinstance(func, ast.Attribute):
         return None
     method = func.attr

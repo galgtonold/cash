@@ -36,42 +36,14 @@ from typing import Any
 
 from cash._user_attrs import attribute_or
 from cash.analysis.ast_util import walk_tree
+from cash.builtin_calls import STORE_NOTHING
 
 __all__ = ["share_candidates"]
 
 #: Builtins whose call stores no reference to its arguments anywhere a
 #: variable could reach: what they return is bound by an assignment, which is
 #: a candidate of its own.
-_STORE_NOTHING = frozenset(
-    {
-        "abs",
-        "all",
-        "any",
-        "bool",
-        "callable",
-        "chr",
-        "divmod",
-        "float",
-        "format",
-        "hasattr",
-        "hash",
-        "id",
-        "int",
-        "isinstance",
-        "issubclass",
-        "len",
-        "max",
-        "min",
-        "ord",
-        "pow",
-        "print",
-        "range",
-        "repr",
-        "round",
-        "str",
-        "sum",
-    }
-)
+_STORE_NOTHING = STORE_NOTHING
 
 #: Builtins that hand on the items of their arguments: a loop over them takes
 #: the items those arguments hold.

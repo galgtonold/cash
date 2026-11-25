@@ -383,6 +383,14 @@ changed. The second list is what cash does not see, and what to do about it.
       `Path.cwd()`, `os.path.abspath(p)`). Also what standard-library helpers
       read for you: `os.path.expandvars("$DATA_DIR/x")`, `expanduser`,
       `Path.home()`, `tempfile.gettempdir()`, `shutil.which` (`PATH`).
+    - What belongs to **the process itself**: `os.getpid()`, `os.getppid()`,
+      `threading.get_ident()`, and Python's hash seed when the code calls
+      `hash()` on something that is not plainly a number. `hash("alice")`
+      differs in every process unless `PYTHONHASHSEED` is fixed, so each
+      process computes its own result; with a fixed seed the result is
+      reused. `hash(42)` and `hash((row, 3))` of number literals are the
+      same everywhere and add nothing to the key, and neither does a
+      class's own `__hash__`.
     - The **command line**, when the function or a helper it calls reads
       it: `sys.argv`, and an `argparse` parser's `parse_args()` called
       without a list of its own. Flags your `main()` parses and passes on

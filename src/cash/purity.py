@@ -6,6 +6,8 @@ import builtins
 from collections.abc import Callable, Mapping
 from typing import Any, TypeVar
 
+from cash.builtin_calls import WITHOUT_OUTPUT
+
 from ._user_attrs import plain_getattr
 
 __all__ = [
@@ -97,62 +99,7 @@ def is_stateful(func: Any) -> bool:
 #: object and per process.
 #: Matched by name, so a caller that can see the user's bindings checks that
 #: the name still means the builtin (`is_known_pure`).
-KNOWN_PURE_BUILTINS: frozenset[str] = frozenset(
-    {
-        # Type constructors / conversions
-        "int",
-        "float",
-        "str",
-        "bool",
-        "bytes",
-        "complex",
-        "list",
-        "tuple",
-        "set",
-        "frozenset",
-        "dict",
-        # Numeric / math
-        "abs",
-        "round",
-        "pow",
-        "divmod",
-        "min",
-        "max",
-        "sum",
-        # Sequence / iteration
-        "len",
-        "sorted",
-        "reversed",
-        "enumerate",
-        "zip",
-        "range",
-        "map",
-        "filter",
-        "all",
-        "any",
-        # Object introspection
-        "type",
-        "isinstance",
-        "issubclass",
-        "id",
-        "hash",
-        "callable",
-        "hasattr",
-        "getattr",
-        "repr",
-        "ascii",
-        "format",
-        "chr",
-        "ord",
-        "hex",
-        "oct",
-        "bin",
-        # Containers
-        "iter",
-        "next",
-        "slice",
-    }
-)
+KNOWN_PURE_BUILTINS: frozenset[str] = WITHOUT_OUTPUT
 
 
 def is_known_pure(name: str, namespace: Mapping[str, Any] | None = None) -> bool:

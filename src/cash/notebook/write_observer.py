@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import contextvars
 import os
+import re
 import stat
 import sys
 import types
@@ -40,6 +41,7 @@ from cash.tracking.read_classification import is_runtime_cache_path, own_lstat, 
 from .._user_attrs import unwrapped
 
 __all__ = [
+    "OBSERVED_EFFECT_REASON",
     "WrittenPaths",
     "child_works",
     "children_left_running",
@@ -48,6 +50,13 @@ __all__ = [
     "observe_writes",
     "process_runs",
 ]
+
+#: Why a statement seen doing `WrittenPaths.effect` is not stored, worded as
+#: the reason for the same call spelled out in its text is.
+OBSERVED_EFFECT_REASON = (
+    "Side effect: {what} as it ran ({label}): a cache hit would skip it, "
+    "so the statement runs every time (# @cash:assume-safe caches it anyway)"
+)
 
 _WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_TRUNC
 
@@ -59,11 +68,14 @@ class WrittenPaths(set):
     thing it did that may write files no event reports (`_UNSEEN_WRITERS`),
     or None. :attr:`children_before` are the process's child processes as
     the block first started one, or None when it started none
-    (`children_left_running`)."""
+    (`children_left_running`). :attr:`effect` is the first thing the
+    user's own code did in it that a hit would not do again and no file
+    shows, as ``(label, what)``, or None (`_note_effect`)."""
 
     def __init__(self) -> None:
         super().__init__()
         self.unseen: str | None = None
+        self.effect: tuple[str, str] | None = None
         self.children_before: frozenset[int] | None = None
         self.appended: set[str] = set()
         self._replaced: set[str] = set()
@@ -279,6 +291,50 @@ def _child_pids() -> frozenset[int]:
         return frozenset()
 
 
+#: The modules a program is started through, and those a request is sent
+#: through, by the code that calls them: the standard library's own, and
+#: the two clients nearly every request in a notebook goes through.
+_PROCESS_APIS = frozenset({"subprocess", "os", "asyncio"})
+_HTTP_APIS = frozenset({"urllib", "http", "urllib3", "requests"})
+
+
+def _called_by_user_code(apis: frozenset[str]) -> bool:
+    """Is the event being audited the doing of the user's own code: a cell,
+    or a function in a file of theirs, that called one of *apis* itself?
+
+    ``run(cmd)`` after ``from subprocess import run``, ``sp.check_output``
+    in a helper, ``session.request("POST", url)``. Not what a library does
+    on its way to an answer: ``platform.processor()`` running ``uname``, a
+    pool starting its workers, a data client refreshing its token with a
+    POST. Those are that library's business, and a statement calling it is
+    judged as before."""
+    try:
+        frame = sys._getframe(2)
+    except ValueError:
+        return False
+    while frame is not None:
+        name = frame.f_globals.get("__name__") or ""
+        if not (name == "cash" or name.startswith("cash.")):
+            if is_user_code_file(frame.f_code.co_filename):
+                return True
+            if name.split(".", 1)[0] not in apis:
+                return False
+        frame = frame.f_back
+    return False
+
+
+def _note_effect(sinks: tuple[WrittenPaths, ...], apis: frozenset[str], label: str, what: str) -> None:
+    """Record on *sinks* that the block did *what* (`WrittenPaths.effect`),
+    when the user's own code did it and did not waive it."""
+    if all(sink.effect is not None for sink in sinks):
+        return
+    if not _called_by_user_code(apis) or _write_waived():
+        return
+    for sink in sinks:
+        if sink.effect is None:
+            sink.effect = (label, what)
+
+
 def _on_unseen_writer(event: str) -> io_watch.Consumer:
     starts = event in _PROCESS_STARTS
 
@@ -286,6 +342,8 @@ def _on_unseen_writer(event: str) -> io_watch.Consumer:
         sinks = _active.get()
         if sinks:
             forget_young_digests()
+            if starts:
+                _note_effect(sinks, _PROCESS_APIS, "system", f"started another program ({event})")
         for sink in sinks:
             if sink.unseen is None:
                 sink.unseen = event
@@ -363,7 +421,35 @@ def process_runs(process: Any) -> bool:
         return False
 
 
+#: The request methods that fetch without changing the server, and the one
+#: that only opens a tunnel through a proxy for the request that follows.
+_QUIET_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "CONNECT"})
+_REQUEST_LINE = re.compile(rb"([A-Z]{3,12}) \S+ HTTP/\d")
+
+
+def _on_http_send(args: tuple) -> None:
+    """``http.client.send``: ``(connection, data)``, raised for the request
+    line and headers and again for each piece of the body. ``requests``,
+    ``urllib3`` and ``urllib.request`` all send through it."""
+    sinks = _active.get()
+    if not sinks:
+        return
+    data = args[1]
+    if not isinstance(data, (bytes, bytearray)):
+        return
+    line = _REQUEST_LINE.match(data)
+    if line is None:
+        return
+    method = line.group(1).decode("ascii")
+    if method in _QUIET_METHODS:
+        return
+    host = attribute_or(args[0], "host", None)
+    where = f" to {host}" if isinstance(host, str) else ""
+    _note_effect(sinks, _HTTP_APIS, "network", f"sent a {method} request{where}")
+
+
 io_watch.subscribe("open", _on_open)
+io_watch.subscribe("http.client.send", _on_http_send)
 for _event in _UNSEEN_WRITERS:
     io_watch.subscribe(_event, _on_unseen_writer(_event))
 io_watch.subscribe("os.rename", _on_move)
