@@ -1,6 +1,7 @@
-"""Adversarial probes: code-review-derived defect hypotheses.
+"""After an edit, a rerun or a restart the notebook holds what a clean
+top-to-bottom run gives.
 
-One probe per static-review lead:
+One test per way the two came apart:
 
  1. test_upstream_reexec_nameerror_swallowed_serves_stale
     checker.py:1354 swallows re-exec errors -> downstream computes on stale x.

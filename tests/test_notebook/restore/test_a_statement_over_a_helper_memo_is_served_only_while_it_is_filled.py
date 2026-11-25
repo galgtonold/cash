@@ -1,8 +1,8 @@
-"""Review repros for claude/served-memo-fill @92407c3b (end to end, cash_magics).
+"""A statement over a helper memo is served only while the memo holds
+the run's answers (end to end, cash_magics).
 
 Each test asserts what plain Python does; a failure is a served entry where
 the memo did not hold the run's answers.
-Place under tests/test_notebook/restore/ and run with pytest.
 """
 
 from __future__ import annotations

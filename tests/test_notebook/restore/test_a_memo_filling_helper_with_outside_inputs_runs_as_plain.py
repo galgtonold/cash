@@ -1,6 +1,7 @@
-"""Review repros for claude/served-memo-fill @ae6a36af (end to end, cash_magics).
+"""A memo-filling helper that reads something outside its arguments (a
+random draw, a rebound global, the environment) gives what plain Python
+gives (end to end, cash_magics).
 
-Place under tests/test_notebook/restore/ and run with pytest -s -n 0.
 Pattern: Run All, restart, Run All; compare with plain Python.
 """
 

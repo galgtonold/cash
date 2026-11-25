@@ -1,6 +1,6 @@
-"""Review repros for claude/served-memo-fill @5817c84e (end to end, cash_magics).
+"""A helper memo whose answers are changed or cleared later is not served
+stale (end to end, cash_magics).
 
-Place under tests/test_notebook/restore/ and run with pytest -s.
 Each wrong-result test asserts what plain Python gives.
 """
 

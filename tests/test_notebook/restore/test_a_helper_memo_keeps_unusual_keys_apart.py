@@ -7,7 +7,7 @@ later is followed."""
 from __future__ import annotations
 
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S as SLEEP
-from tests.test_notebook.restore.test_review_memofill4_e2e import NAMES, _clean, _plain, _restart, _run_all
+from tests.test_notebook.restore.test_a_memo_filling_helper_with_defaults_runs_as_plain import NAMES, _clean, _plain, _restart, _run_all
 
 IMPORTS = "import functools, random, time"
 

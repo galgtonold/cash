@@ -1,4 +1,4 @@
-"""Review repro (5): the call-entry path of claude/served-memo-fill.
+"""A call served from its entry leaves a helper memo unfilled.
 
 A sub-statement call entry (CallUnit) records the memos its callee can
 reach *by name* (`helper_memos.watched_by`: the callee's co_names, nested
