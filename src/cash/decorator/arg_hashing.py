@@ -410,6 +410,7 @@ def frame_signature(obj: Any) -> tuple:
     index += (repr(getattr(obj.index, "freq", None)), attrs)
     if hasattr(obj, "columns"):
         columns = (id(obj.columns), _axis_arrays_signature(obj.columns), tuple(obj.columns.names))
+        columns += (repr(getattr(obj.columns, "freq", None)),)
         return (id(mgr), blocks, *columns, *index)
     return (id(mgr), blocks, *index, obj.name)
 

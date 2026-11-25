@@ -167,10 +167,28 @@ def hash_pandas(value: Any) -> str | None:
         axes = f"{list(index.names)!r}:{index_dtypes!r}:{getattr(index, 'freq', None)!r}:"
         if _is_frame(value):
             dtypes = _pandas_dtype_keys(value.dtypes)
-            schema = f"{list(value.columns)!r}:{list(value.columns.names)!r}:{dtypes!r}:{axes}"
+            # The column axis is an index like the row axis, and is keyed by
+            # the same rule: its names, dtypes (a categorical's categories
+            # and order, each level's of a MultiIndex) and ``freq`` here,
+            # its labels with the values (`_fold_pandas_values`). By the
+            # list of its labels alone, a crosstab over categories S, M, L
+            # and one over L, M, S shared an entry, and
+            # ``sort_index(axis=1)`` of one was served for the other.
+            columns = value.columns
+            column_dtypes = [_pandas_dtype_key(dt) for dt in getattr(columns, "dtypes", [columns.dtype])]
+            labels = (*columns.names, *index.names)
+            schema = (
+                f"{list(columns.names)!r}:{column_dtypes!r}:{getattr(columns, 'freq', None)!r}:{dtypes!r}:{axes}"
+            )
         else:  # Series
+            labels = (value.name, *index.names)
             schema = f"{value.name!r}:{_pandas_dtype_key(value.dtype)!r}:{axes}"
         h = hashlib.sha256(schema.encode("utf-8"))
+        if not _PLAIN_NAMES.issuperset(map(type, labels)):
+            # A name is any hashable object, and two of them may print
+            # alike: keyed as a value is, not by its ``repr``.
+            h.update(b"|names|")
+            h.update(canonical_bytes(labels, BUILTIN_CONTENT))
         if value.attrs:
             h.update(canonical_bytes(value.attrs, BUILTIN_CONTENT))
         _fold_pandas_values(h, value, pd)
@@ -180,6 +198,10 @@ def hash_pandas(value: Any) -> str | None:
     except (ImportError, TypeError, ValueError, AttributeError, NotImplementedError, pickle.PicklingError):
         logger.debug("Failed to hash pandas %s via hash_pandas_object", class_name(type(value)))
         return None
+
+
+#: Axis and series names whose ``repr`` says all of them (`hash_pandas`).
+_PLAIN_NAMES = frozenset((str, int, bool, type(None)))
 
 
 def _fold_pandas_values(h: Any, value: Any, pd: Any) -> None:
@@ -241,13 +263,11 @@ def _fold_pandas_values(h: Any, value: Any, pd: Any) -> None:
         _fold_pandas_array(h, value, pd)
     _fold_pandas_index(h, value.index, pd)
     if _is_frame(value):
-        # The schema keys the column labels by ``repr``, which for an object
-        # of the user's own is its address: fold the objects themselves.
-        columns = value.columns
-        levels = columns.levels if isinstance(columns, pd.MultiIndex) else [columns]
-        if any(level.dtype == object and not immutable_labels(level._values) for level in levels):
-            h.update(b"|columns|")
-            _fold_pandas_array(h, columns, pd)
+        # The column labels, as the row labels: a MultiIndex by its levels
+        # and codes (a filter keeps the levels it no longer uses, and
+        # ``columns.levels`` shows them), a range by its bounds.
+        h.update(b"|columns|")
+        _fold_pandas_index(h, value.columns, pd)
 
 
 def _fold_pandas_index(h: Any, index: Any, pd: Any) -> None:
