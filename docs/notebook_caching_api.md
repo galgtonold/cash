@@ -132,6 +132,7 @@ they talk to the outside world.
 | prints | cached; the output is replayed on a hit |
 | reads a file | cached; runs again when the file's contents change |
 | reads an environment variable (`os.getenv`) | cached; the value is part of the key, so a new value runs it again |
+| reads the process's id (`os.getpid()`) or takes the `hash()` of text, which Python salts per process | cached for this kernel; after a restart it runs again, as the value is another one (`hash()` of text is reused across restarts when `PYTHONHASHSEED` is fixed) |
 
 Only effects written in the statement count, plus file writes and clock or
 UUID reads in your own functions. A function of yours that reads the clock

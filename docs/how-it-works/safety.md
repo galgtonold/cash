@@ -213,9 +213,14 @@ A bare `model.fit(X, y)` is cached like an assignment of the fitted model; see
 
 ### Side effects
 
-<!-- claim: cash/effects.py:METHOD_VERBS @343aee1e, cash/effects.py:is_open_write_mode @fa37e14b, cash/effects.py:MODULE_CALLS @91df07f5 -->
+<!-- claim: cash/effects.py:METHOD_VERBS @343aee1e, cash/effects.py:is_open_write_mode @fa37e14b, cash/effects.py:MODULE_CALLS @635ceceb -->
 cash spots side effects from the statement's source, without running it. So:
 
+- A call counts under whatever name it was imported: `run(cmd)` after
+  `from subprocess import run`, `sp.check_output(cmd)` after `import
+  subprocess as sp`, `post(url)` after `from requests import post`.
+  `urlopen(Request(url, data=..., method="POST"))` is judged by the request
+  written in it.
 - `open(p, "w")` counts, but `open(p, mode)` does not, because the mode is
   only known at run time (a write it makes is seen as it runs, below).
 - Write methods are matched by name on any object: `obj.save(x)` counts even
@@ -257,6 +262,17 @@ cash spots side effects from the statement's source, without running it. So:
   `with cash.assume_safe():` around either, or `@pure` on the function that
   writes. A waiver on another line, or `@pure` on a function that only made
   an argument, does not.
+<!-- claim: cash/notebook/write_observer.py:_note_effect @dd83f9b8, cash/notebook/write_observer.py:_on_http_send @450d3f8f -->
+- A statement seen starting a program, or sending a request that is not a
+  `GET`, `HEAD` or `OPTIONS`, is not stored either, when your own code did
+  it: a cell or a function of yours calling `subprocess`, `os.system`,
+  `requests`, `urllib3` or `urllib`, however the call is reached
+  (`getattr(sp, "run")(cmd)`, `session.request("POST", url)`,
+  `urlopen(req)` with a request built in another cell). A program or a
+  request a library makes for its own use (`platform.processor()` asking
+  `uname`, a client refreshing its token) is not counted, and neither is a
+  client that does not send through Python's `http.client` (`httpx`,
+  `aiohttp`). The same waivers apply as for a write.
 - A statement that starts worker processes or threads, itself or in a
   function of yours it calls (`ProcessPoolExecutor`, `multiprocessing.Pool`,
   `joblib.Parallel`, `ThreadPool`, `threading.Thread`), is not stored either:

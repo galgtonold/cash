@@ -41,6 +41,7 @@ import hashlib
 import os
 import re
 import sys
+import threading
 import types
 from collections.abc import Callable, Iterable, Mapping
 from enum import Enum
@@ -105,7 +106,8 @@ class EffectKind(str, Enum):
     SUBPROCESS = "subprocess"
     #: Reads the clock or makes a fresh id: ``time.time``, ``uuid4``.
     CLOCK = "clock"
-    #: Reads the process environment: ``os.getenv``, ``os.getcwd``.
+    #: Reads the process environment: ``os.getenv``, ``os.getcwd``; or the
+    #: process itself: ``os.getpid``, ``hash()`` of text.
     ENVIRONMENT = "environment"
     #: Writes to the console: ``print``, ``logging.info``, ``sys.stdout.write``.
     CONSOLE = "console"
@@ -288,6 +290,16 @@ MODULE_CALLS: dict[str, EffectKind] = {
     "tempfile.gettempdirb": _EV,
     "shutil.which": _EV,
     "getpass.getuser": _EV,
+    # What differs in every process, and is the same within one: its id, the
+    # caller's thread, and the hash of text, which Python salts per process
+    # (`PYTHONHASHSEED`). Each goes into the key by its value now
+    # (`_PROCESS_READS`), so another process, or another thread, computes
+    # its own. ``hash()`` of a number is the number's own (`_hash_is_unsalted`).
+    "os.getpid": _EV,
+    "os.getppid": _EV,
+    "threading.get_ident": _EV,
+    "threading.get_native_id": _EV,
+    "hash": _EV,
     # -- the console --
     "print": _CO,
     "logging.debug": _CO,
@@ -512,6 +524,20 @@ _HELPER_READS: dict[str, tuple[str, str | None]] = {
     "shutil.which": ("env", "PATH"),
     "getpass.getuser": ("user", ""),
 }
+
+#: Reads of the process itself, and the part of it each one's answer is
+#: (`environment_input`, `_environment_value`).
+_PROCESS_READS: dict[str, str] = {
+    "os.getpid": "pid",
+    "os.getppid": "parent_pid",
+    "threading.get_ident": "thread",
+    "threading.get_native_id": "native_thread",
+    "hash": "hash_seed",
+}
+
+#: A string whose hash stands for the process's hash seed: the same in two
+#: processes exactly when ``hash()`` of text is.
+_HASH_SEED_PROBE = "cash:hash-seed-probe"
 
 # matplotlib.pyplot module aliases. EVERY module-level ``plt.*`` call operates on
 # pyplot's PROCESS-GLOBAL current figure -- making a new current figure or axes
@@ -755,6 +781,9 @@ def environment_input(
         return None
     if effect.name in _CWD_CALLS or effect.name in _CWD_RESOLVERS:
         return ("cwd", "")
+    process = _PROCESS_READS.get(effect.name)
+    if process is not None:
+        return (process, "")
     helper = _HELPER_READS.get(effect.name)
     if helper is not None and helper[1] is not None:
         return helper
@@ -810,6 +839,11 @@ _ENVIRONMENT_LABELS = {
     "user": "the login name",
     "env_global": "the environment variable {name}",
     "argv": "the command line",
+    "pid": "the process id",
+    "parent_pid": "the parent process's id",
+    "thread": "the calling thread",
+    "native_thread": "the calling thread",
+    "hash_seed": "Python's hash seed (PYTHONHASHSEED), which hash() of text depends on",
 }
 
 
@@ -839,6 +873,16 @@ def _environment_value(kind: str, name: str) -> str | None:
         return getpass.getuser()
     if kind == "argv":
         return repr(sys.argv)
+    if kind == "pid":
+        return str(os.getpid())
+    if kind == "parent_pid":
+        return str(os.getppid())
+    if kind == "thread":
+        return str(threading.get_ident())
+    if kind == "native_thread":
+        return str(threading.get_native_id())
+    if kind == "hash_seed":
+        return str(hash(_HASH_SEED_PROBE))
     if kind == "env_global":
         module, _, constant = name.partition(":")
         variable = getattr(sys.modules.get(module), constant, None)
@@ -981,9 +1025,33 @@ def _named_kind(name: str, call: ast.Call) -> EffectKind | None:
         if _literal_arg(call, 1, "data") is not None:
             return _NW
         return _request_object_kind(_literal_arg(call, 0, "url")) or kind
+    if name == "hash" and _hash_is_unsalted(call.args[0] if len(call.args) == 1 else None):
+        return None  # `hash(42)`, `hash((row, col))` of numbers: the same in every process
     if name in _CWD_RESOLVERS and _surely_absolute(_literal_arg(call, 0, "path")):
         return None  # `os.path.abspath(__file__)` reads no working directory
     return kind
+
+
+#: Builtins whose answer is a number.
+_NUMBER_MAKERS = frozenset({"int", "float", "bool", "complex", "len", "abs", "round", "ord", "sum", "divmod"})
+
+
+def _hash_is_unsalted(node: ast.expr | None) -> bool:
+    """Is ``hash(node)`` provably the same in every process: *node* is a
+    number, or a tuple of them, as written? The hash of a number is
+    arithmetic on it; that of text, bytes and dates is salted with the
+    process's seed, and that of a plain object is its address."""
+    if isinstance(node, ast.Constant):
+        return isinstance(node.value, (int, float, complex)) or (node.value is None and sys.version_info >= (3, 12))
+    if isinstance(node, ast.UnaryOp):
+        return _hash_is_unsalted(node.operand)
+    if isinstance(node, ast.BinOp):
+        return _hash_is_unsalted(node.left) and _hash_is_unsalted(node.right)
+    if isinstance(node, ast.Tuple):
+        return all(_hash_is_unsalted(item) for item in node.elts)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        return node.func.id in _NUMBER_MAKERS
+    return False
 
 
 def _request_object_kind(node: ast.expr | None) -> EffectKind | None:
