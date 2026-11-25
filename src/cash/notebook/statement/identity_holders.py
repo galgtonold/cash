@@ -435,11 +435,11 @@ def returned_identity_reason(value: Any, holders: dict[str, Any], seconds: float
     could hold either. The memo of big containers read in a cell
     (`_FLAT_READS`), which keeps the very objects it read until the cell
     ends, is left as it was: outside a notebook no cell ends to clear it."""
-    if _plain_tree_without_ids(value):
-        return None
     kept = {length: list(reads) for length, reads in _FLAT_READS.items()}
     count = _flat_kept[0]
     try:
+        if _plain_tree_without_ids(value):
+            return None
         with walk_budget(seconds):
             return identity_held_reason("the result", value, holders, id_free=False)
     finally:
@@ -610,7 +610,10 @@ def _plain_tree_without_ids(value: Any) -> bool:
                 reader = _Walk({})
                 reader.numbers = set(read[0])
                 reader._read_texts(read[1])
-                return not _candidate_ids(reader.numbers)
+                if not _candidate_ids(reader.numbers):
+                    return True
+                _keep_plain_read(value, reader.numbers)
+                return False
         levels = tree_walk(value)
         if levels is None:
             return False
@@ -625,11 +628,22 @@ def _plain_tree_without_ids(value: Any) -> bool:
                 reader._read_leaves(keys, key_kinds)
             if reader.numbers:
                 if _candidate_ids(reader.numbers):
+                    # A list of leaves alone has this one level.
+                    _keep_plain_read(value, reader.numbers)
                     return False
                 reader.numbers = set()
         return True
     except Exception:  # noqa: BLE001 - not known: the full walk decides
         return False
+
+
+def _keep_plain_read(value: Any, numbers: set[int]) -> None:
+    """Keep what `_plain_tree_without_ids` read in *value* (*numbers*)
+    when it is a long list of texts and numbers alone, which the walk it
+    leaves the answer to would read a second time: that walk finds this
+    read by the very items (`_Walk._read_flat`)."""
+    if type(value) is list and len(value) > _MAX_SCANNED and set(map(type, value)) <= _KEPT_KINDS:
+        _keep_flat_read(value, frozenset(numbers))
 
 
 #: Every digit as ``0``: a run of seven digits is then ``"0000000"``.
@@ -683,8 +697,13 @@ def _spelled_in(text: str) -> set[int]:
         numbers.update(map(int, compress(runs, map(operator.ge, repeat(_LONGEST_NUMBER), lengths))))
         shortest = _SHORTEST_RUN if _EVERY_SPELLING[0] else _ADDRESS_DIGITS
         if max(lengths) > shortest:
-            for run in compress(runs, map(operator.lt, repeat(shortest), lengths)):
-                numbers.update(_windows(run))
+            longer = list(compress(runs, map(operator.lt, repeat(shortest), lengths)))
+            found = _mapped_windows(longer) if len(longer) >= _MANY_RUNS else None
+            if found is None:
+                for run in longer:
+                    numbers.update(_windows(run))
+            else:
+                numbers.update(found)
     if "0x" in text or "0X" in text:
         for digits in _HEX_RUN.findall(text):
             if len(digits) <= _LONGEST_HEX:
@@ -732,6 +751,87 @@ def _windows(run: str) -> list[int]:
         for start in range(max(0, end - _ADDRESS_DIGITS), end - _SHORTEST_RUN + 1):
             if run[start] != "0":
                 found.append(int(run[start:end]))
+    return found
+
+
+#: From how many runs of digits on `_spelled_in` reads their parts by
+#: `_mapped_windows`.
+_MANY_RUNS = 256
+#: The digits `_mapped_windows` searches a run for, at most, and how many
+#: such starts it takes for the addresses of one length.
+_START_DIGITS = 6
+_STARTS = 24
+#: Three digits that end a multiple of `_ALIGNMENT`, as a pattern.
+_ALIGNED_END = (
+    "(?:[02468](?:00|08|16|24|32|40|48|56|64|72|80|88|96)|[13579](?:04|12|20|28|36|44|52|60|68|76|84|92))"
+    if _ALIGNMENT == 8
+    else "[0-9](?:[02468][048]|[13579][26])"
+)
+
+
+def _window_starts(ranges: list[tuple[int, int]]) -> dict[int, list[str]]:
+    """For each count of digits an address inside one of *ranges* can
+    have, the leading digits (all of one length, and before its last
+    three) every such number starts with: as many digits as leave at most
+    `_STARTS` of them, down to the first digit alone."""
+    starts: dict[int, list[str]] = {}
+    for digits in range(_SHORTEST_RUN, _ADDRESS_DIGITS + 1):
+        low, high = 10 ** (digits - 1), 10**digits
+        spans = [(max(start, low), min(end, high) - 1) for start, end in ranges if start < high and end > low]
+        if not spans:
+            continue
+        for lead in range(min(digits - 3, _START_DIGITS), 0, -1):
+            unit = 10 ** (digits - lead)
+            # The spans as leading digits, those that touch joined: a
+            # thousand small mappings next to each other share a few.
+            joined: list[list[int]] = []
+            for first, last in sorted((first // unit, last // unit) for first, last in spans):
+                if joined and first <= joined[-1][1] + 1:
+                    joined[-1][1] = max(joined[-1][1], last)
+                else:
+                    joined.append([first, last])
+            if sum(last - first + 1 for first, last in joined) <= _STARTS:
+                starts[digits] = [str(n) for first, last in joined for n in range(first, last + 1)]
+                break
+    return starts
+
+
+def _window_patterns(starts: dict[int, list[str]]) -> list[tuple[str, Any]]:
+    """`_window_starts` as patterns: for each count of digits and first
+    digit, that digit (which the search jumps to) and a pattern matching
+    it where the rest of an aligned number of that many digits, starting
+    with one of the leads, follows; the rest is its one group. A match
+    takes the first digit only, so a number starting inside another is
+    found as well."""
+    patterns = []
+    for digits, leads in starts.items():
+        for first in sorted({lead[0] for lead in leads}):
+            rests = "|".join(lead[1:] for lead in leads if lead[0] == first)
+            between = digits - 3 - len(leads[0])
+            patterns.append((first, re.compile(f"{first}(?=((?:{rests})[0-9]{{{between}}}{_ALIGNED_END}))")))
+    return patterns
+
+
+def _mapped_windows(runs: list[str]) -> set[int] | None:
+    """What `_windows` finds in each of *runs* that lies inside a mapping
+    of this process (`_read_mappings`, read now), the only ones
+    `_candidate_ids` keeps, and at most a few it drops: found by searching
+    the runs, joined, for the leading digits such an address has, so the
+    numbers that are no address are never made. A list of 300,000 texts of
+    18 digits spelled a million numbers, 6,000 of them inside a mapping,
+    and took 5 s to read where the function took 40 ms. None where the
+    mappings cannot be read: `_windows` reads the runs then."""
+    if not sys.platform.startswith("linux"):
+        return None
+    ranges = _read_mappings()
+    if not ranges:
+        return None
+    starts = _window_starts(ranges)
+    # A line break between the runs: no window reaches over it.
+    text = "\n".join(runs)
+    found: set[int] = set()
+    for first, pattern in _window_patterns(starts):
+        found.update(map(int, map(first.__add__, pattern.findall(text))))
     return found
 
 
