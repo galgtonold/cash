@@ -691,7 +691,7 @@ class HelperIdentity:
         self._mutations = mutations
         # Weakly both ways: the helpers hold the hasher, and a discarded
         # Cash must be collected with both.
-        _HELPERS_BY_HASHER[args] = weakref.ref(self)
+        _HELPERS_BY_HASHER[args] = _weak.ref(self)
         # id(helper) -> (helper, __defaults__, __kwdefaults__, what its read
         # cells held, identity snapshots of the mutable values it keyed,
         # identity, the drift guard's entries, the code's digest, the
