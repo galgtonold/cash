@@ -129,3 +129,93 @@ def test_unstamped_entries_that_are_not_the_current_format_are_still_wiped(tmp_p
     b = FileBackend(str(tmp_path))
     b.get("anything")  # initialises
     assert not _entry_files(str(tmp_path))
+
+
+# -- a cache written by a NEWER cash -----------------------------------------
+
+
+def _fill_as_a_newer_cash(cache_dir, count: int = 5) -> list[str]:
+    """Store *count* entries, then stamp the directory as the next format
+    would: what an environment on a newer cash leaves behind."""
+    writer = FileBackend(str(cache_dir))
+    for i in range(count):
+        writer.set(f"k{i}", {"v": i})
+    writer.shutdown()
+    (cache_dir / VERSION_FILENAME).write_text(str(CACHE_FORMAT_VERSION + 1), encoding="utf-8")
+    files = sorted(_entry_files(str(cache_dir)))
+    assert len(files) == count, "precondition: the entries are on disk"
+    return files
+
+
+def test_a_cache_stamped_by_a_newer_cash_is_left_alone(tmp_path):
+    """Two environments on different cash versions sharing one directory
+    wiped each other's results in turn: every open by the older one deleted
+    all the newer one had stored. The older one now leaves them, and the
+    stamp, as they are."""
+    import warnings
+
+    files = _fill_as_a_newer_cash(tmp_path)
+    before = {f: os.stat(f).st_mtime_ns for f in files}
+
+    older = FileBackend(str(tmp_path))
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        assert older.get("k0") == (None, None), "an entry in a format this build cannot trust was served"
+        older.set("mine", {"v": 99})
+        assert older.get("mine") == (None, None)
+        assert older.list_entries() == []
+        older.clear()
+        older.shutdown()
+
+    assert {f: os.stat(f).st_mtime_ns for f in sorted(_entry_files(str(tmp_path)))} == before
+    assert (tmp_path / VERSION_FILENAME).read_text(encoding="utf-8").strip() == str(CACHE_FORMAT_VERSION + 1)
+    said = [str(w.message) for w in rec if getattr(w.message, "code", "") == "CACHE-FORMAT-NEWER"]
+    assert len(said) == 1, f"expected one notice, got {[str(w.message) for w in rec]}"
+    assert str(tmp_path) in said[0]
+
+
+def test_a_script_on_an_older_cash_runs_uncached_and_says_why(tmp_path):
+    """The whole path, in fresh interpreters: 20 results stored, the stamp
+    raised, a second script over the same directory. It computes, prints the
+    notice on stderr and deletes nothing."""
+    import textwrap
+
+    from tests._scripts import run_python
+
+    cache = tmp_path / ".cash"
+    (tmp_path / "fill.py").write_text(
+        textwrap.dedent(
+            """
+            import cash
+            @cash.cache
+            def slow(x):
+                return x * 2
+            for i in range(20):
+                slow(i)
+            """
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "probe.py").write_text(
+        textwrap.dedent(
+            """
+            import cash
+            @cash.cache
+            def other(x):
+                print("computed", x)
+                return x
+            print("result", other(1))
+            """
+        ),
+        encoding="utf-8",
+    )
+    run_python("fill.py", cwd=tmp_path)
+    before = sorted(_entry_files(str(cache)))
+    assert len(before) == 20
+    (cache / VERSION_FILENAME).write_text(str(CACHE_FORMAT_VERSION + 1), encoding="utf-8")
+
+    done = run_python("probe.py", cwd=tmp_path)
+
+    assert "computed 1" in done.stdout and "result 1" in done.stdout
+    assert sorted(_entry_files(str(cache))) == before, "a newer cash's entries were deleted"
+    assert done.stderr.count("CACHE-FORMAT-NEWER") == 1, done.stderr

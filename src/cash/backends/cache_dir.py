@@ -56,8 +56,12 @@ __all__ = [
     "VERSIONS_INDEX_FILENAME",
     "VERSION_FILENAME",
     "CacheDirStamp",
+    "NewerCacheFormat",
+    "warn_newer_format",
     "create_temp_file",
     "entry_totals",
+    "format_tag",
+    "is_store_entry_name",
     "is_cash_file",
     "owned_temp_prefix",
     "recreate_cache_dir",
@@ -70,8 +74,9 @@ __all__ = [
 #: ``entry_format``, and the digests keys and file records are made of).
 #: Bump it when a change makes entries written by an older build undecodable
 #: by this one, or makes its keys and records unreadable alongside the new
-#: ones: a directory stamped with another version is cleared on open, and
-#: those results are lost. A new entry layout this build still reads
+#: ones: a directory stamped with a lower version is cleared on open, and
+#: those results are lost. One stamped with a higher version belongs to a
+#: newer cash and is left as it is (`NewerCacheFormat`). A new entry layout this build still reads
 #: alongside the old ones (``entry_format.MAGICS``: the split payloads of
 #: ``MAGIC_SPLIT``) needs no bump; an older build reads the unknown magic as
 #: a miss.
@@ -119,6 +124,38 @@ __all__ = [
 #: not read, so a restart's rebuild would leave those settings unmade; they
 #: are cleared.
 CACHE_FORMAT_VERSION = 12
+
+
+
+def format_tag() -> str:
+    """``f<N>``: the format's name inside a shared store's key or object names.
+
+    A Redis server or an S3 prefix is one store for every machine that reaches
+    it, on whatever cash each runs. Entries carry the format in their name, so
+    a build reads and writes only its own format's, and two versions sharing
+    the store neither serve nor delete each other's.
+    """
+    return f"f{CACHE_FORMAT_VERSION}"
+
+
+def is_store_entry_name(rest: str, separator: str, suffixes: tuple[str, ...], *, untagged: bool) -> bool:
+    """Is *rest*, a name in a shared store with the configured prefix taken
+    off, one cash wrote?
+
+    ``f<N><separator><key><suffix>`` for any format N: clearing takes every
+    format's entries. With *untagged*, also ``<key><suffix>`` with no ``/``
+    in it, the name of an entry from before names carried the format. Only
+    for a store with a prefix: without one, that would be any name with the
+    suffix. Anything else is not cash's and is never removed (a prefix such
+    as ``team`` also starts ``team-reports/...``).
+    """
+    if not rest.endswith(suffixes):
+        return False
+    tag, found, key = rest.partition(separator)
+    if found and key and tag[:1] == "f" and tag[1:].isdigit():
+        return True
+    return untagged and "/" not in rest
+
 
 #: The per-directory format stamp. No entry suffix, so entry globs skip it.
 VERSION_FILENAME = "CACHE_VERSION"
@@ -472,6 +509,36 @@ def warn_unusable(path: str, exc: BaseException) -> None:
         logger.warning("Cash disabled its cache at %s: %s", path, exc)
 
 
+class NewerCacheFormat(Exception):
+    """A store is stamped with a higher format than this build writes.
+
+    A newer cash wrote it. Its entries are that build's results, so this one
+    neither reads nor removes them; the tier is off for the run.
+    """
+
+    def __init__(self, stored: int) -> None:
+        super().__init__(f"written in cache format {stored}; this cash reads and writes format {CACHE_FORMAT_VERSION}")
+        self.stored = stored
+
+
+def warn_newer_format(path: str, stored: int) -> None:
+    """Say once that the cache at *path* belongs to a newer cash and is left alone."""
+    try:
+        warn_diagnostic(
+            CashCacheStoreFailedWarning,
+            "CACHE-FORMAT-NEWER",
+            f"the cache at {path} was written by a newer cash (cache format {stored}; "
+            f"this cash reads and writes format {CACHE_FORMAT_VERSION}). It is left as it is: "
+            f"nothing in it is read, changed or removed, and nothing is cached to disk "
+            f"this run, so every call recomputes.",
+            "upgrade cash in this environment to the version that wrote the cache, or give this "
+            "environment a cache of its own -- cash.configure(cache_dir=...), CASH_CACHE_DIR, "
+            "or the cache_dir= argument. To start over with this version instead, delete that cache.",
+        )
+    except Exception:  # noqa: BLE001 - a diagnostic must not become the failure
+        logger.warning("Cash left the newer-format cache at %s alone (format %s)", path, stored)
+
+
 def warn_if_unwritable(cache_dir: str, *, windows: bool = os.name == "nt") -> None:
     """Say at once, naming the path, if *cache_dir* cannot be written.
 
@@ -587,11 +654,15 @@ class CacheDirStamp:
         _write_gitignore(self.cache_dir)
 
     def check(self) -> None:
-        """Clear the entries if the stamp names another format, then stamp.
+        """Clear the entries if the stamp names an older format, then stamp.
 
-        A missing or unreadable stamp counts as a mismatch, unless the entries
-        themselves carry the current format's magic: a directory cleared under
-        a live process and refilled by it looks exactly like that.
+        A missing or unreadable stamp counts as an older format, unless the
+        entries themselves carry the current format's magic: a directory
+        cleared under a live process and refilled by it looks exactly like
+        that. A stamp naming a HIGHER format is a newer cash's cache: two
+        environments on different versions that share the directory must not
+        wipe each other's results in turn, so nothing is touched and
+        `NewerCacheFormat` is raised for the caller to turn the tier off.
         """
         stored: int | None = None
         if os.path.exists(self.path):
@@ -603,6 +674,8 @@ class CacheDirStamp:
 
         if stored == CACHE_FORMAT_VERSION:
             return
+        if stored is not None and stored > CACHE_FORMAT_VERSION:
+            raise NewerCacheFormat(stored)
         entry_files = self.entry_files()
         if stored is None and self._entries_are_current(entry_files):
             entry_files = []

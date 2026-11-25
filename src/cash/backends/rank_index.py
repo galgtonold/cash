@@ -22,6 +22,12 @@ Format, one record per line::
 The clock line records GreedyDual's inflation value L, so a new process
 resumes it instead of restarting at zero (which would rank everything it
 writes below everything already on disk).
+
+The file is append-only between compactions, and every process reads all of
+it once, so it is kept proportional to the number of entries: whoever finds
+it holding many more lines than entries rewrites it as one line per entry
+that still exists (`RankIndex.COMPACT_RATIO`), and a process that appended
+to it leaves it compact when it closes.
 """
 
 from __future__ import annotations
@@ -33,6 +39,7 @@ import threading
 from typing import Any
 
 from .cache_dir import RANK_INDEX_FILENAME
+from .entry_format import ENTRY_SUFFIX
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +49,7 @@ _CLOCK_TAG = "@L"
 
 
 class RankIndex:
-    """Append-only priorities for one cache directory, compacted on demand."""
+    """Append-only priorities for one cache directory, compacted as it grows."""
 
     #: Records buffered before they are written. An append per write was an
     #: open, write and close on every cache write: measured on Windows at
@@ -51,8 +58,27 @@ class RankIndex:
     #: buffered leaves those entries ranked as unknown-cost until read again.
     BATCH = 64
 
+    #: The file is rewritten once it holds more than this many lines per
+    #: entry (plus `COMPACT_SLACK`). Every write and every flushed read
+    #: appends a line, so without it the file grew with the number of runs,
+    #: not the number of entries, and each process parsed all of it. At 2,
+    #: a rewrite of N lines is paid for by N appended ones.
+    COMPACT_RATIO = 2.0
+    #: The ratio a process leaves behind when it closes (`close`): the next
+    #: process then starts from a file of about one line per entry.
+    CLOSE_RATIO = 1.1
+    #: Lines over the ratio that are let be, so a small index is not
+    #: rewritten for a handful of lines.
+    COMPACT_SLACK = 64
+
     def __init__(self, cache_dir: str, untracked: Any) -> None:
+        self.cache_dir = cache_dir
         self.path = os.path.join(cache_dir, RANK_INDEX_FILENAME)
+        #: Lines in the file and distinct entries among them, as of the last
+        #: `load` plus this process's appends since. None until a `load`:
+        #: a process that never ranks never reads the file to count it.
+        self._lines: int | None = None
+        self._stems = 0
         # cash's own I/O must never become a dependency of the user's code:
         # the caller passes the same `untracked()` its directory walk uses.
         self._untracked = untracked
@@ -77,27 +103,53 @@ class RankIndex:
         """Write what is buffered, in one ``write`` so a process's lines stay
         together. Never creates the directory: a directory that is gone was
         cleared, and recreating it here would resurrect a cache without its
-        stamp."""
+        stamp. A file grown past `COMPACT_RATIO` is read again and rewritten."""
+        if self._append_buffered() and self._outgrown(self.COMPACT_RATIO):
+            self.load()
+
+    def close(self) -> None:
+        """`flush`, and leave the file near one line per entry (`CLOSE_RATIO`)
+        if this process is the one that made it longer."""
+        appended = self._append_buffered()
+        if (appended or self._lines is not None) and self._outgrown(self.CLOSE_RATIO):
+            self.load(ratio=self.CLOSE_RATIO)
+
+    def _append_buffered(self) -> bool:
+        """Append the buffer to the file; whether anything was written."""
         with self._lock:
             if not self._buffer:
-                return
-            body, self._buffer = "".join(self._buffer), []
+                return False
+            lines, self._buffer = self._buffer, []
             try:
                 with self._untracked(), open(self.path, "a", encoding="ascii") as fh:
-                    fh.write(body)
+                    fh.write("".join(lines))
             except OSError:
                 logger.debug("Could not append to rank index %s", self.path, exc_info=True)
+                return False
+            if self._lines is not None:
+                self._lines += len(lines)
+            return True
+
+    def _outgrown(self, ratio: float) -> bool:
+        """By this process's count, does the file hold more than *ratio*
+        lines per entry? Unknown before the first `load`."""
+        return self._lines is not None and self._lines > ratio * self._stems + self.COMPACT_SLACK
 
     def discard(self) -> None:
         """Drop buffered records (the cache they describe was cleared)."""
         with self._lock:
             self._buffer = []
 
-    def load(self) -> tuple[dict[str, float], float, int]:
+    def load(self, compact: bool = True, ratio: float | None = None) -> tuple[dict[str, float], float, int]:
         """``(priority by stem, clock, line count)``; empty when unreadable.
         Flushes this process's buffer first, so the file is the whole story.
-        The priorities are in the order they were last recorded, oldest first."""
-        self.flush()
+        The priorities are in the order they were last recorded, oldest first.
+
+        With *compact*, a file holding more than *ratio* (`COMPACT_RATIO`)
+        lines per entry is rewritten as it is read: one line for each entry
+        still in the directory. The count returned is the file's before that.
+        """
+        self._append_buffered()
         ranks: dict[str, float] = {}
         clock = 0.0
         count = 0
@@ -126,7 +178,23 @@ class RankIndex:
             pass
         except OSError:
             logger.debug("Could not read rank index %s", self.path, exc_info=True)
+        with self._lock:
+            self._lines, self._stems = count, len(ranks)
+        if compact and count > (ratio or self.COMPACT_RATIO) * len(ranks) + self.COMPACT_SLACK:
+            self.compact(self._still_stored(ranks), clock)
         return ranks, clock, count
+
+    def _still_stored(self, ranks: dict[str, float]) -> dict[str, float]:
+        """*ranks* without the entries that are gone (evicted, cleared,
+        replaced): their lines would otherwise outlive them for ever. One
+        listing of the directory, names only; all of *ranks* when it cannot
+        be listed."""
+        try:
+            with self._untracked(), os.scandir(self.cache_dir) as found:
+                stored = {e.name[: -len(ENTRY_SUFFIX)] for e in found if e.name.endswith(ENTRY_SUFFIX)}
+        except OSError:
+            return ranks
+        return {stem: priority for stem, priority in ranks.items() if stem in stored}
 
     def compact(self, ranks: dict[str, float], clock: float) -> None:
         """Rewrite the index as exactly *ranks* and *clock*.
@@ -144,6 +212,7 @@ class RankIndex:
                 with open(tmp, "w", encoding="ascii") as fh:
                     fh.write(body)
                 os.replace(tmp, self.path)
+                self._lines, self._stems = len(ranks) + 1, len(ranks)
         except OSError:
             logger.debug("Could not compact rank index %s", self.path, exc_info=True)
             try:
@@ -153,6 +222,9 @@ class RankIndex:
 
     def remove(self) -> None:
         self.discard()
+        with self._lock:
+            if self._lines is not None:
+                self._lines = self._stems = 0
         try:
             with self._lock, self._untracked():
                 os.remove(self.path)

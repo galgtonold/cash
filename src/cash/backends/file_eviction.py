@@ -86,6 +86,13 @@ class FileEvictor:
     #: cap: it sits on the write path, and a network volume answers slowly.
     CAP_REFRESH_INTERVAL = 60.0
 
+    #: Seconds a byte total may stand before an eviction counts the folder
+    #: again. The total follows this process's own writes and removals only,
+    #: so what another process evicts, ``cash clear`` empties or the user
+    #: deletes is not in it; a walk of the folder is, and costs a ``stat``
+    #: per entry on the write worker.
+    SIZE_RESCAN_INTERVAL = 60.0
+
     #: An entry evicted within this many writes of being written is the
     #: signature of a cache too small for its working set.
     EVICT_WARN_RECENT_OPS = 3
@@ -104,8 +111,16 @@ class FileEvictor:
         writes: PendingWrites,
         untracked: Callable[[], Any],
         chunks: ChunkStore | None = None,
+        generation: Callable[[], Any] | None = None,
     ) -> None:
         self.cache_dir = cache_dir
+        #: The folder's generation token (`CacheDirStamp.token`): it moves
+        #: when the folder is cleared, wholly or in part.
+        self._generation = generation or (lambda: None)
+        #: When the byte total was last counted from the folder, and the
+        #: generation it was counted in.
+        self.size_scanned_at = 0.0
+        self.size_scanned_generation: Any = None
         #: The folder's chunk store: an entry's removal may free chunks too.
         self.chunks = chunks
         self.max_size_bytes = max_size_bytes
@@ -202,16 +217,44 @@ class FileEvictor:
         """
         if self.size_scanned:
             return
-        scanned = self.scan_size_bytes()
-        with self._lock:
-            if self.size_scanned:
-                return
-            self.current_bytes = scanned
-            self.size_scanned = True
+        self._count_folder(first=True)
         # The footprint is what the cap was missing; size it now.
         self.refresh_adaptive_cap(force=True)
         # The first write of the process: say how big the cache may grow.
         announce_budget(self.cache_dir, self.budget)
+
+    def _count_folder(self, first: bool = False) -> None:
+        """Replace the byte total with what the folder holds now."""
+        generation = self._generation()
+        scanned = self.scan_size_bytes()
+        with self._lock:
+            if first and self.size_scanned:
+                return
+            self.current_bytes = scanned
+            self.size_scanned = True
+            self.size_scanned_at = time.monotonic()
+            self.size_scanned_generation = generation
+
+    def recount_if_stale(self) -> bool:
+        """Count the folder again before trusting a total that says "over the
+        cap", if the total may have missed removals; whether it counted.
+
+        The total only follows this process. After ``cash clear``, another
+        process's evictions or files deleted by hand it stays where it was,
+        and every later write then evicted this process's own fresh results
+        from a folder far under its cap, without ever reaching the target.
+        A clear moves the folder's generation, which costs one ``stat`` to
+        see; anything else is caught by counting at most once per
+        `SIZE_RESCAN_INTERVAL` here, and in `evict` whenever a pass ranks
+        the folder afresh or finds a ranked entry already gone.
+        """
+        if (
+            self._generation() == self.size_scanned_generation
+            and time.monotonic() - self.size_scanned_at < self.SIZE_RESCAN_INTERVAL
+        ):
+            return False
+        self._count_folder()
+        return True
 
     def budget(self) -> DiskBudget | None:
         """The cap as the user should read it, or None when there is none.
@@ -318,7 +361,8 @@ class FileEvictor:
 
         The ranking is a queue consumed across many passes; entries written
         after it was taken join `fresh`. The index is compacted here once it
-        has grown past twice the directory.
+        has grown past twice the directory (and, between rankings, by
+        whoever appends to it: `RankIndex.flush`).
         """
         ranks: dict[str, tuple[float, int]] = {}
         try:
@@ -336,7 +380,8 @@ class FileEvictor:
         except OSError:
             logger.debug("Could not scan %s to rank evictions", self.cache_dir, exc_info=True)
 
-        indexed, index_clock, index_lines = self.rank_index.load()
+        # Compacted below, to exactly this ranking, rather than by the load.
+        indexed, index_clock, index_lines = self.rank_index.load(compact=False)
 
         prio: dict[str, float] = {}
         recency: dict[str, float] = {}
@@ -487,6 +532,11 @@ class FileEvictor:
         self.refresh_adaptive_cap()
         if self.current_bytes <= self.max_size_bytes:
             return
+        # Over the cap by this process's count: make sure the folder agrees
+        # before anything is removed for it.
+        recounted = self.recount_if_stale()
+        if recounted and self.current_bytes <= self.max_size_bytes:
+            return
 
         if self.chunks is not None and not self.chunks.indexed:
             # Which entries share which chunks, before ranking by bytes held.
@@ -511,6 +561,12 @@ class FileEvictor:
                     break
                 self.rebuild_queue()
                 rebuilt = True
+                if not recounted:
+                    # Ranking has just listed the folder; count it on the
+                    # same occasion, so no pass ranks a folder it then judges
+                    # by an older total.
+                    self._count_folder()
+                    recounted = True
                 if not self.queue and not self.fresh:
                     break
                 continue
@@ -539,6 +595,13 @@ class FileEvictor:
             seconds = float(meta.get("execution_time") or 0.0) if meta is not None else -1.0
             held_value = meta is None or not meta.get("metadata_only")
             freed = self.remove_path(path, key)
+            if not freed and not recounted and not os.path.exists(path):
+                # A ranked entry is gone: someone else is removing entries
+                # (another process's cap, a clear, the user), and this
+                # process's total has not heard of it. Count before the next
+                # victim, or what goes next goes for bytes already freed.
+                self._count_folder()
+                recounted = True
             if freed:
                 n_evicted += 1
                 freed_bytes += freed

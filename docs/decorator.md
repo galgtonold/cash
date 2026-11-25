@@ -147,7 +147,7 @@ first: cheap to recompute, large, and rarely read. To pin the disk cap, set
 `max_cache_size` (or `CASH_MAX_CACHE_SIZE`) to a number of bytes or a size
 such as `"20GB"`.
 
-<!-- claim: cash/backends/file_eviction.py:FileEvictor.ensure_size_scanned @adb3043c, cash/backends/file_eviction.py:FileEvictor.report_eviction @0a7cf82f -->
+<!-- claim: cash/backends/file_eviction.py:FileEvictor.ensure_size_scanned @1b9288c8, cash/backends/file_eviction.py:FileEvictor.report_eviction @0a7cf82f -->
 With `CASH_VERBOSE=1` or `CASH_DEBUG=1` (or an INFO level you set on the `cash`
 logger), the first result a run writes to disk logs the folder and the cap, and
 the first time the cap makes cash remove entries it logs how much it removed:

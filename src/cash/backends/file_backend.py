@@ -31,11 +31,13 @@ from ._base import CacheBackend, MetadataDict, entry_expired
 from ._writes import PendingWrites
 from .cache_dir import (
     CacheDirStamp,
+    NewerCacheFormat,
     create_temp_file,
     is_cash_file,
     owned_temp_prefix,
     remove_orphan_temp_files,
     warn_if_unwritable,
+    warn_newer_format,
     warn_unusable,
     write_all,
 )
@@ -365,6 +367,7 @@ class FileBackend(CacheBackend):
             writes=self._writes,
             untracked=_untracked,
             chunks=self.chunks,
+            generation=self.stamp.token,
         )
 
         # Directory creation, the stamp check and the flusher wait for first use.
@@ -424,7 +427,14 @@ class FileBackend(CacheBackend):
                 # a tiered stack the RAM tier still works.
                 self._disable(exc)
                 return
-            self.stamp.check()
+            try:
+                self.stamp.check()
+            except NewerCacheFormat as newer:
+                # A newer cash's cache: off for this run, and left as it is.
+                self._unusable = True
+                self._initialized = True
+                warn_newer_format(self.cache_dir, newer.stored)
+                return
             warn_if_unwritable(self.cache_dir)
             if self._flush_interval > 0:
                 _FLUSHER.add(self)
@@ -1302,7 +1312,9 @@ class FileBackend(CacheBackend):
             self._flush_lock.release()
         if self._initialized:
             self._flush_metadata()
-            self.evictor.rank_index.flush()
+            # Also leaves the index near one line per entry: a run that only
+            # reads appends a line per entry it read.
+            self.evictor.rank_index.close()
 
     def list_entries(self) -> list[dict[str, Any]]:
         self._ensure_initialized()

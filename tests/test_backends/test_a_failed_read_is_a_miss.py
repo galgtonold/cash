@@ -78,7 +78,7 @@ def test_a_redis_entry_naming_a_missing_class_is_a_miss():
     backend.client = FakeRedisClient()
     backend.set("k", 1, {})
     backend._writes.wait_all()
-    backend.client.set("p:k:data", _pickle_of_a_missing_class())
+    backend.client.set(backend._get_keys("k")[1], _pickle_of_a_missing_class())
 
     assert backend.get("k") == (None, None)
 

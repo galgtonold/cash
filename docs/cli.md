@@ -212,7 +212,7 @@ cash clear --all
 cash clear ./notebooks/analysis.ipynb
 ```
 
-<!-- claim: cash/backends/cache_dir.py:CacheDirStamp.check @7bdce11c, cash/backends/cache_dir.py:CacheDirStamp._entries_are_current @fe3a5c44 -->
+<!-- claim: cash/backends/cache_dir.py:CacheDirStamp.check @5ae84fb2, cash/backends/cache_dir.py:CacheDirStamp._entries_are_current @fe3a5c44 -->
 **Safety rules.**
 
 - cash deletes a directory only if it holds cash's `CACHE_VERSION` stamp,

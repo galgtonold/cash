@@ -90,7 +90,14 @@ def check_choice(name: str, value: Any) -> None:
     # `not (x >= low)` also refuses NaN.
     if not (value >= low) or (high is not None and value > high):
         span = f"between {low} and {high}" if high is not None else f"{low} or more"
-        unset = " (leave it unset for no cap)" if low == 1 else ""
+        # Unset is not "no cap" for a size: cash then sizes the cap itself.
+        unset = ""
+        if low == 1:
+            unset = (
+                " (leave it unset for the automatic cap)"
+                if name in ("max_cache_size", "max_size_bytes")
+                else " (leave it unset for no limit)"
+            )
         raise ValueError(f"{name}={value!r}: must be {span}{unset}")
 
 

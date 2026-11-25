@@ -14,7 +14,8 @@ from dataclasses import fields
 from pathlib import Path
 from typing import Any
 
-from .notices import config_notice, did_you_mean
+from . import env_names
+from .notices import closest, config_notice, did_you_mean
 from .schema import CashConfig, TierConfig, check_choice, coerce, declared_type
 
 __all__ = [
@@ -135,6 +136,35 @@ def _warn_toml_malformed(path: Path, exc: Exception) -> None:
 _TIER_ENV_RE = re.compile(r"^CASH_TIER_(\d+)_(.+)$")
 
 
+def _notice_if_misspelt(env_key: str, field_names: set[str]) -> None:
+    """Say so when *env_key*, which is no setting, is nearly the name of one.
+
+    An unrelated ``CASH_*`` name stays ignored: other tools use the prefix
+    too, and cash has switches of its own that are not settings
+    (`env_names`). But ``CASH_DISABLED=1`` or ``CASH_MAX_CACHE_SZE=1GB`` looks
+    set and does nothing, and those are what a user sets to protect
+    themselves. The nearest name is looked for among the settings and the
+    switches, so a mistyped switch is named too.
+    """
+    if env_names.is_known_switch(env_key):
+        return
+    # Compared without the prefix every name shares, which would make
+    # CASH_HOME look like half of anything.
+    prefix = len("CASH_")
+    known = {name.upper() for name in field_names} | {name[prefix:] for name in env_names.SWITCHES}
+    meant = closest(env_key[prefix:], known)
+    if meant is None:
+        return
+    meant = f"CASH_{meant}"
+    # The name meant goes in the fix: the one-line form of a warning keeps
+    # the first sentence and the whole fix.
+    config_notice(
+        "CONFIG-UNKNOWN-KEY",
+        f"the environment sets {env_key}, which is not a cash setting, so it does nothing.",
+        f"if you meant {meant}, rename it; otherwise unset it. `cash info` shows every setting in effect.",
+    )
+
+
 def load_env_config() -> dict[str, Any]:
     """Read CASH_* env vars into a dict matching CashConfig field names.
 
@@ -190,8 +220,7 @@ def load_env_config() -> dict[str, Any]:
         # Top-level field
         key = env_key[len("CASH_") :].lower()
         if key not in field_names:
-            # Silently ignore unknown CASH_* vars — they may be from
-            # other tools that namespace with CASH_ too.
+            _notice_if_misspelt(env_key, field_names)
             continue
         try:
             value = coerce(declared_type(key), raw, key)

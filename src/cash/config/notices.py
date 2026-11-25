@@ -17,7 +17,7 @@ difflib = LazyModule("difflib")  # imported on first use: only for a mistyped se
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["config_notice", "did_you_mean"]
+__all__ = ["closest", "config_notice", "did_you_mean"]
 
 
 #: ``(code, message)`` pairs already said in this process: the one dedup for
@@ -37,6 +37,12 @@ def config_notice(code: str, what: str, fix: str) -> None:
         logger.debug("Could not emit %s", code, exc_info=True)
 
 
-def did_you_mean(key: str, valid: Any) -> str:
+def closest(key: str, valid: Any) -> str | None:
+    """The name in *valid* that *key* is most likely a misspelling of, if any."""
     match = difflib.get_close_matches(key, sorted(valid), n=1, cutoff=0.6)
-    return f" Did you mean `{match[0]}`?" if match else ""
+    return match[0] if match else None
+
+
+def did_you_mean(key: str, valid: Any) -> str:
+    match = closest(key, valid)
+    return f" Did you mean `{match}`?" if match else ""
