@@ -24,6 +24,11 @@ import pytest
 from cash import value_watch
 from tests._scripts import run_python
 
+cow = pytest.mark.skipif(
+    int(pd.__version__.split(".", 1)[0]) < 3 and pd.options.mode.copy_on_write is not True,
+    reason="a pandas table is proved unchanged only under copy-on-write; on pandas 2 without it a hit copies",
+)
+
 watched = pytest.mark.skipif(
     not value_watch.enabled(),
     reason="an object graph is proved unchanged by the C extension's watchers",
@@ -94,7 +99,7 @@ KINDS = {
     "trie": pytest.param("trie", make_trie, marks=watched, id="plain-object"),
     "dict": pytest.param("dict", make_dict, marks=watched, id="dict"),
     "array": pytest.param("array", make_array, id="numpy"),
-    "frame": pytest.param("frame", make_frame, id="pandas"),
+    "frame": pytest.param("frame", make_frame, marks=cow, id="pandas"),
 }
 
 
@@ -142,10 +147,10 @@ CHANGES = [
     ),
     pytest.param("dict", make_dict, lambda d: d["k1"].append("x"), marks=watched, id="dict-nested-list"),
     pytest.param("array", make_array, lambda a: setattr(a, "shape", (1000, 100)), id="numpy-reshaped-in-place"),
-    pytest.param("frame", make_frame, lambda f: f.loc.__setitem__((0, "a"), -1), id="pandas-cell"),
-    pytest.param("frame", make_frame, lambda f: f.__setitem__("new", 1), id="pandas-new-column"),
-    pytest.param("frame", make_frame, lambda f: setattr(f.index, "name", "x"), id="pandas-index-name"),
-    pytest.param("frame", make_frame, lambda f: f.attrs.__setitem__("k", 1), id="pandas-attrs"),
+    pytest.param("frame", make_frame, lambda f: f.loc.__setitem__((0, "a"), -1), marks=cow, id="pandas-cell"),
+    pytest.param("frame", make_frame, lambda f: f.__setitem__("new", 1), marks=cow, id="pandas-new-column"),
+    pytest.param("frame", make_frame, lambda f: setattr(f.index, "name", "x"), marks=cow, id="pandas-index-name"),
+    pytest.param("frame", make_frame, lambda f: f.attrs.__setitem__("k", 1), marks=cow, id="pandas-attrs"),
 ]
 
 
