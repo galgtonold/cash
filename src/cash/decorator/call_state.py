@@ -279,6 +279,16 @@ CALL_ENTRY: "contextvars.ContextVar[list | None]" = contextvars.ContextVar("_cas
 #: `explain()` records nothing.
 CAPTURE_WATCH: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar("_cash_capture_watch", default=None)
 
+#: ``(kind, id(value)) -> (value, digest)`` for the values hashed during one
+#: key build; None outside one. Set by `KeyBuilder.build` for the length of
+#: the build: nothing runs between two reads of a value there that could
+#: change it, so a module constant every helper of another module reads
+#: (``hm3.C1`` reached through fifty call sites) is hashed once, not once per
+#: call site, on every hit. Dropped when the build ends, so the next build --
+#: and the check after the call -- hashes the value as it is then. The value
+#: is held, so its id is not reused while the entry stands.
+KEY_BUILD_DIGESTS: contextvars.ContextVar[dict | None] = contextvars.ContextVar("_cash_key_build_digests", default=None)
+
 
 #: The effective ttls of the cached functions a key build reached without a
 #: graph edge of its own registry -- passed as an argument, held in a dict, a

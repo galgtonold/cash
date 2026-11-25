@@ -22,16 +22,27 @@ from .._type_memo import class_mro, class_name, class_qualname
 from .._user_attrs import plain_getattr
 from ..analysis.annotations import assume_safe_block_lines
 from ..analysis.bytecode import DEREF_WRITES, argvals, instructions
+from ..analysis.helper_code import is_mock
 from ..analysis.purity_policy import REPORTED_METHODS
 from ..effect_observer import line_waived
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..jit_functions import jit_identity, jit_python_function
 from ..source_reading import getsource, getsourcelines
+from ..tracking.randomness import rng_carrier_kind
 from ..value_types import IMMUTABLE_VALUE_TYPES
 from .arg_hashing import CODE_VALUE_TYPES, is_opaque
-from .call_state import CAPTURE_WATCH, KeyBuildFailed
+from .call_state import CAPTURE_WATCH, KEY_BUILD_DIGESTS, KeyBuildFailed
 from .function_identity import code_fingerprint, hash_callable_source
-from .key_values import SYNC_TYPES, code_ref, is_immutable_capture, plain_data_kind, stabilize_for_global_hash
+from .key_values import (
+    SYNC_TYPES,
+    carried_payload,
+    code_ref,
+    is_immutable_capture,
+    plain_data_kind,
+    reduced_state,
+    rewrite_held_code,
+    stabilize_for_global_hash,
+)
 from .module_identity import module_ref
 from .user_code import is_cash_wrapper, is_user_class, is_user_code_object, own_package
 
@@ -293,29 +304,64 @@ def defaults_of(func: Callable, leave_out: frozenset[str] = frozenset()) -> tupl
     return tuple(pos), kwd
 
 
+#: `ArgHasher` -> the `HelperIdentity` built over it: `capture_digest` is
+#: asked with the hasher alone (the drift guard hashes a capture again after
+#: the body ran) and must answer as the fold did.
+_HELPERS_BY_HASHER: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
+
+
 def capture_digest(args: ArgHasher, value: Any) -> str:
     """The digest a captured data value is keyed by, and checked against
-    after the call. What a dict, list or tuple holds that pickles by name --
-    a class in a registry ``{"d": Double}``, a function -- is keyed by its
-    code, as in a data global (`stabilize_for_global_hash`). Any other object
-    is hashed as it is, by its ``__cash_key__`` or registered hasher if it
-    has one. Raises what hashing raises."""
+    after the call. What it holds that pickles by name -- a class in a
+    registry ``{"d": Double}``, a function in a list of steps -- is keyed by
+    its code and what it was built with (`HelperIdentity.value_digest`). Any
+    other object is hashed as it is, by its ``__cash_key__`` or registered
+    hasher if it has one. Raises what hashing raises."""
+    helpers = _HELPERS_BY_HASHER.get(args)
+    if helpers is not None:
+        return helpers.value_digest(value)
     if type(value) in (dict, list, tuple) and plain_data_kind(value) is None:
         value = stabilize_for_global_hash(value, hash_callable_source)
     return args.hash_payload((value,), {})
 
 
-def fingerprint_default(v: Any) -> Any:
-    """Replace a plain function/method default with a digest of its source.
+def _owner_is_output(method: Any, owner: Any) -> bool:
+    """Is what *owner* holds no input of a call of its bound *method*: a C
+    method that writes to it (``results.append``), a logger's logging
+    method, or a method of a random generator, whose stream the
+    random-number checks own?"""
+    name = plain_getattr(method, "__name__", "")
+    if type(method) is types.MethodType:
+        import logging
 
-    Restricted to functions, methods and builtins: their behaviour IS their
-    code. An arbitrary callable INSTANCE is left alone so it takes the
-    unhashable path rather than being keyed on its class and silently
-    sharing entries across instances with different state.
-    """
-    if inspect.isfunction(v) or inspect.ismethod(v) or inspect.isbuiltin(v):
-        return f"__cash_callable__:{hash_callable_source(v)}"
-    return v
+        if name in _LOG_METHODS and isinstance(owner, (logging.Logger, logging.LoggerAdapter)):
+            return True
+    elif name in REPORTED_METHODS:
+        return True
+    return rng_carrier_kind(owner) is not None
+
+
+_LOG_METHODS = frozenset({"debug", "info", "warning", "warn", "error", "exception", "critical", "log"})
+
+
+def carrier_label(value: Any) -> str:
+    """A name for the callable *value* in a message: its qualified name, or
+    its class's."""
+    name = plain_getattr(value, "__qualname__", None)
+    if isinstance(name, str) and name:
+        return name
+    inner = plain_getattr(value, "func", None)
+    inner_name = plain_getattr(inner, "__qualname__", None)
+    if isinstance(inner_name, str) and inner_name:
+        return f"a {class_qualname(type(value))} of {inner_name}"
+    return f"a {class_qualname(type(value))}"
+
+
+def module_ref_of(owner: Any) -> str:
+    """The name a class or module a method is bound to is keyed by."""
+    if issubclass(type(owner), types.ModuleType):
+        return f"module:{module_ref(owner)}"
+    return code_ref(owner) or class_qualname(owner)
 
 
 def iter_code_scopes(code: types.CodeType) -> Iterator[types.CodeType]:
@@ -357,6 +403,9 @@ def module_capture_identity(module: types.ModuleType, attrs: frozenset[str]) -> 
     return ("module", module_ref(module), tuple(code))
 
 
+_ATTR_WRITES = frozenset({"STORE_ATTR", "DELETE_ATTR"})
+
+
 class CaptureAnalysis:
     """Which of a closure's captured variables the function body may change,
     read from its code and source once per code object (closures from one
@@ -371,6 +420,8 @@ class CaptureAnalysis:
         self._use_cache: LruMemo[Any, tuple[frozenset, frozenset]] = LruMemo(CODE_OBJECTS)
         # code object -> {free var: attributes read from it}; see `attr_reads`.
         self._attr_reads: LruMemo[Any, dict[str, frozenset[str]]] = LruMemo(CODE_OBJECTS)
+        # code object -> the attribute names it assigns; see `assigned_attributes`.
+        self._attr_writes: LruMemo[Any, frozenset[str]] = LruMemo(CODE_OBJECTS)
 
     def written_freevars(self, code: Any) -> frozenset:
         """Free-variable names the function reassigns (``STORE_DEREF`` /
@@ -384,6 +435,20 @@ class CaptureAnalysis:
         written = frozenset(argvals(code, DEREF_WRITES))
         cache[code] = written
         return written
+
+    def assigned_attributes(self, code: Any) -> frozenset[str]:
+        """The attribute names *code*, or code nested in it, assigns or
+        deletes on any object (``wrapper.calls += 1``, ``self.n = 0``).
+        Cached per code object."""
+        cached = self._attr_writes.get(code)
+        if cached is not None:
+            return cached
+        found: set[str] = set()
+        for scope in iter_code_scopes(code):
+            found.update(n for n in argvals(scope, _ATTR_WRITES) if isinstance(n, str))
+        result = frozenset(found)
+        self._attr_writes[code] = result
+        return result
 
     def attr_reads(self, code: Any) -> dict[str, frozenset[str]]:
         """The attributes the function reads from each captured variable.
@@ -503,7 +568,7 @@ _EMPTY_CELL = object()
 _SNAPSHOT_CONTAINERS = 10_000
 
 
-def _snapshot_of(value: Any) -> tuple | None:
+def _snapshot_of(value: Any, functions_held: bool = False) -> tuple | None:
     """What could change in *value* without changing its identity, as object
     identities; None when that cannot be watched this way.
 
@@ -511,7 +576,10 @@ def _snapshot_of(value: Any) -> tuple | None:
     pass of ``is`` at C speed, however long). A dict or a set is watched by
     the identities of its keys and values, and each value that can change
     is watched in turn. Anything else -- an instance, a ``bytearray``, an
-    array -- gives None.
+    array -- gives None, and so does a function that carries state of its
+    own (captured values, attributes, a default that can change), keyed
+    with that state (`HelperIdentity.callable_state`); *functions_held*
+    says the caller checks the functions the dict holds itself.
     """
     budget = [_SNAPSHOT_CONTAINERS]
 
@@ -528,6 +596,10 @@ def _snapshot_of(value: Any) -> tuple | None:
             values = list(v.values())
             inner = []
             for item in values:
+                if type(item) is types.FunctionType:
+                    if functions_held or _stateless_function(item):
+                        continue
+                    return None
                 if _cannot_change(item):
                     continue
                 sub = snap(item)
@@ -538,6 +610,8 @@ def _snapshot_of(value: Any) -> tuple | None:
         if t is set or t is frozenset:
             items = list(v)
             if not all(map(_cannot_change, items)):
+                return None
+            if not all(_stateless_function(item) for item in items if type(item) is types.FunctionType):
                 return None
             return ("set", v, items)
         return None
@@ -552,6 +626,14 @@ def _snapshot_of(value: Any) -> tuple | None:
         if table is not None:
             return ("table", value, table)
     return found
+
+
+def _stateless_function(fn: types.FunctionType) -> bool:
+    """Is the function *fn* its code alone: no captured value, no attribute
+    of its own, no default that can change in place?"""
+    if fn.__closure__ is not None or fn.__dict__:
+        return False
+    return all(is_immutable_capture(d) for d in (*(fn.__defaults__ or ()), *(fn.__kwdefaults__ or {}).values()))
 
 
 def _snapshot_moved(snap: tuple) -> bool:
@@ -585,20 +667,41 @@ def _cannot_change(value: Any) -> bool:
 
 
 class HelperIdentity:
-    """A helper's identity for the key: its code, its parameter defaults and
-    the immutable values its closure captured."""
+    """What a callable is for the key: its code and everything it was built
+    with (`callable_state`), wherever the callable is held.
+
+    One answer for a helper the cached function calls, a function passed as
+    an argument, a callable the cached function or a helper captured, one a
+    data global holds and a parameter default: each of those folds asks
+    here. A function is its code, its parameter defaults, the values its
+    closure captured and the attributes stored on it (`identity`); a bound
+    method adds the instance it is bound to, a ``functools.partial`` what it
+    binds, a wrapper (``functools.wraps``, ``functools.lru_cache``) what it
+    wraps; and every callable met on the way -- captured, bound, held in a
+    captured list or dict, stored as an attribute -- is keyed the same way,
+    however deep, a callable that holds itself ending at ``cycle``. A value
+    that cannot be hashed raises `KeyBuildFailed`, so the call runs uncached
+    with a warning; nothing is left out of the key for it.
+    """
 
     def __init__(self, args: ArgHasher, captures: CaptureAnalysis, mutations: LearnedMutations) -> None:
         self._args = args
         self._captures = captures
         self._mutations = mutations
+        _HELPERS_BY_HASHER[args] = self
         # id(helper) -> (helper, __defaults__, __kwdefaults__, what its read
         # cells held, identity snapshots of the mutable values it keyed,
-        # identity, the drift guard's entries, the code's digest); see `identity`. Holding the
-        # helper keeps its id from being recycled while the entry lives. A
-        # helper that keyed a mutable value no snapshot can watch has no
-        # entry and is hashed per call.
-        self._defaults_memo: LruMemo[int, tuple[Any, Any, Any, tuple, list, str, dict, str]] = LruMemo(CODE_OBJECTS)
+        # identity, the drift guard's entries, the code's digest, the
+        # functions it holds with their own identities); see `identity`.
+        # Holding the helper keeps its id from being recycled while the
+        # entry lives. A helper that keyed a value no snapshot can watch (an
+        # instance, a bound method) has no entry and is hashed per call.
+        self._defaults_memo: LruMemo[int, tuple[Any, Any, Any, tuple, list, str, dict, str, list]] = LruMemo(
+            CODE_OBJECTS
+        )
+        #: Counts every ``cycle`` a walk ended at: a digest built around one
+        #: depends on where the walk started, so it is never remembered.
+        self._cycles = 0
 
     def _read_cells(self, fn: Callable) -> tuple:
         """What each closure cell *fn* reads (not writes) holds now, in order:
@@ -619,18 +722,145 @@ class HelperIdentity:
                 held.append(_EMPTY_CELL)
         return tuple(held)
 
+    # -- any callable ------------------------------------------------------
+
+    def callable_state(self, value: Any, seen: frozenset[int] = frozenset()) -> str:
+        """The key part of the callable *value*: its code and what it was
+        built with (see the class). *seen* holds the callables this walk is
+        inside of.
+
+        * a function: `identity` (code, defaults, captures, attributes);
+        * a bound method: its function, and the instance it is bound to by
+          value (a class or a module by name);
+        * a ``functools.partial``: the function it calls and what it binds;
+        * a callable object of the user's class: its class's code and what
+          the object holds;
+        * a wrapper with ``__wrapped__`` (``functools.lru_cache``): its
+          name and what it wraps, never the results it remembers;
+        * a cached function: its whole state, as a call of it is keyed;
+        * a class: its code, its bases' and its metaclass's;
+        * anything else (a builtin, a library's callable object): its name,
+          and for a C callable built from arguments
+          (``operator.itemgetter("n")``) those arguments.
+
+        A method that writes to its instance by design (``results.append``,
+        ``logger.info``) and a method of a random generator are their name
+        alone: what the instance holds is the call's output, or a stream
+        the random-number checks own.
+
+        Raises `KeyBuildFailed` when a value it must key cannot be hashed.
+        """
+        if id(value) in seen:
+            self._cycles += 1
+            return "cycle"
+        if is_mock(value):
+            return f"mock:{class_qualname(type(value))}"
+        inner = seen | {id(value)}
+        if is_cash_wrapper(value):
+            state = getattr(value, "_cash_state", None)
+            if state is not None:
+                return "cached:" + state()
+            wrapped = plain_getattr(value, "__wrapped__", None)
+            if wrapped is not None and wrapped is not value:
+                return self.callable_state(wrapped, inner)
+            return hash_callable_source(value)
+        if isinstance(value, type):
+            return self.identity(value)
+        compiled = jit_python_function(value)
+        if compiled is not None:
+            return jit_identity(self.callable_state(compiled, inner), value)
+        t = type(value)
+        if t is types.FunctionType:
+            return self._function_state(value, seen)
+        if t is types.MethodType:
+            func_state = self.callable_state(value.__func__, inner)
+            owner = value.__self__
+            if issubclass(type(owner), (type, types.ModuleType)):
+                return f"method:{func_state}:of:{code_ref(owner) or module_ref_of(owner)}"
+            if _owner_is_output(value, owner):
+                return f"method:{func_state}"
+            return f"method:{func_state}:self:{self._bound_digest(value, owner, inner)}"
+        if isinstance(value, functools.partial):
+            func_state = self.callable_state(value.func, inner)
+            bound: Any = (value.args, dict(value.keywords))
+            attrs = plain_getattr(value, "__dict__", None)
+            if attrs:
+                bound = (*bound, dict(attrs))
+            return f"partial:{func_state}:{self._bound_digest(value, bound, inner)}"
+        if t is types.BuiltinFunctionType or t is types.MethodWrapperType:
+            ref = code_ref(value) or hash_callable_source(value)
+            owner = plain_getattr(value, "__self__", None)
+            if owner is None or issubclass(type(owner), (type, types.ModuleType)) or _owner_is_output(value, owner):
+                return ref
+            return f"{ref}:self:{self._bound_digest(value, owner, inner)}"
+        if is_user_callable_instance(value):
+            return f"instance:{hash_callable_source(value)}:{self._bound_digest(value, value, seen)}"
+        ref = code_ref(value) or hash_callable_source(value)
+        wrapped = plain_getattr(value, "__wrapped__", None)
+        if wrapped is not None and callable(wrapped):
+            return f"{ref}:wraps:{self.callable_state(wrapped, inner)}"
+        carried = carried_payload(value)
+        if carried is None and not plain_getattr(value, "__dict__", None):
+            reduced = reduced_state(value)
+            carried = ("reduce", reduced) if reduced is not None else None
+        if carried is None:
+            return ref
+        return f"{ref}:carries:{self._bound_digest(value, carried, inner)}"
+
+    def value_digest(self, value: Any, seen: frozenset[int] = frozenset()) -> str:
+        """The digest of a data value a callable holds -- captured, bound,
+        a default, an attribute: hashed as an argument is, with every
+        callable in it, however deep, by `callable_state`. A value that
+        holds no code is hashed as it is. Raises what hashing raises."""
+        if callable(value) and not isinstance(value, type):
+            return "callable:" + self.callable_state(value, seen)
+        if type(value) in (dict, list, tuple, set, frozenset) and plain_data_kind(value) is not None:
+            return self._args.hash_payload((value,), {})
+        if self._args.keys_by_registration(value):
+            # The user said what identifies it.
+            return self._args.hash_payload((value,), {})
+        rewritten, holds_code = rewrite_held_code(value, lambda held: self._named_state(held, seen), carried=False)
+        return self._args.hash_payload((rewritten if holds_code else value,), {})
+
+    def _named_state(self, value: Any, seen: frozenset[int]) -> str:
+        """A callable inside a held container, by its name and its
+        `callable_state`: a table whose entry is replaced by another
+        function running the same code is another table."""
+        return self.held_callable_part(value, seen) or self.callable_state(value, seen)
+
+    def _bound_digest(self, holder: Any, value: Any, seen: frozenset[int]) -> str:
+        """`value_digest` of what the callable *holder* is bound to or
+        carries; KEY-UNHASHABLE-CAPTURE when it cannot be hashed."""
+        try:
+            if value is holder:
+                # A callable object: what it holds, not itself again.
+                if self._args.keys_by_registration(value):
+                    return self._args.hash_payload((value,), {})
+                state = carried_payload(value)
+                rewritten, holds_code = rewrite_held_code(
+                    state, lambda held: self._named_state(held, seen | {id(value)}), carried=False
+                )
+                return self._args.hash_payload((rewritten,) if holds_code else (value,), {})
+            return self.value_digest(value, seen)
+        except _UNHASHABLE_CAPTURE_ERRORS as e:
+            name = carrier_label(holder)
+            kind = class_qualname(type(value if not isinstance(value, tuple) else holder))
+            raise KeyBuildFailed(
+                "KEY-UNHASHABLE-CAPTURE",
+                f"@cash.cache: the call reaches {name}, which carries a {kind} that could not be "
+                f"hashed ({class_name(type(e))}), so the call ran uncached rather than risk serving "
+                f"a result computed with another one.",
+                f"pass what {name} needs as plain arguments of the cached function, or register a "
+                f"hasher with cash.register_hasher({kind}, ...).",
+            ) from e
+
+    # -- a function --------------------------------------------------------
+
     def _capture_part(self, fn: Callable) -> str:
-        return self._captures_of(fn, {})[0]
+        return self._captures_of(fn, {}, [], frozenset())[0]
 
-    def captures_digest(self, fn: Callable) -> str:
-        """Digest of the values *fn*'s closure captured and only reads
-        (`_captures_of`), or "" when it captured none: what tells two
-        closures one factory made apart. Hashed on every call."""
-        captured, _mutable = self._captures_of(fn, {})
-        return captured
-
-    def _captures_of(self, fn: Callable, watch: dict) -> tuple[str, list]:
-        """Digest of the values a helper's closure captured and only reads, or "".
+    def _captures_of(self, fn: Callable, watch: dict, held: list, seen: frozenset[int]) -> tuple[str, list]:
+        """Digest of the values a function's closure captured and only reads, or "".
 
         A decorator's arguments live there: ``@scale(10)`` builds a wrapper
         whose closure holds ``k=10``, so ``@scale(100)`` -- or ``@scale(K)``
@@ -640,12 +870,19 @@ class HelperIdentity:
         Never a variable the function reassigns (``nonlocal calls; calls +=
         1``), nor a mutable value it may write to: decorators often keep
         caches, counters and registries in their closures, and folding state
-        that drifts on every call would make every call miss. Captured
-        FUNCTIONS are followed as helpers in their own right, not here. A
-        value that cannot be hashed raises KEY-UNHASHABLE-CAPTURE
+        that drifts on every call would make every call miss. A value that
+        cannot be hashed raises KEY-UNHASHABLE-CAPTURE
         (`unhashable_capture`), rather than being left out of the key.
 
-        A value the helper calls a method on or passes to a call
+        A captured callable is keyed by `callable_state`: the function a
+        two-level factory's ``pipeline`` calls by what THAT was built with,
+        a captured ``model.predict`` by the model, a captured partial by
+        what it binds. Its code is the helper walk's to follow as well;
+        what it names is keyed here (``make(np.float32)`` and
+        ``make(np.float64)``, ``make(sum)`` and ``make(max)``). A captured
+        list or dict holding callables keys each of them the same way.
+
+        A value the function calls a method on or passes to a call
         (``weights.sum()``, ``model.predict(x)``, ``np.sum(a)``) is keyed as
         the cached function's own capture is: provisionally, with its digest
         put in *watch* for the drift guard
@@ -653,12 +890,14 @@ class HelperIdentity:
         a call is seen to change it.
 
         Returns the digest and the values it keyed that can change in place
-        (a config dict the helper only reads), which `identity` watches.
+        (a config dict the function only reads), which `identity` watches;
+        the functions among the captures are added to *held*.
         """
         closure = getattr(fn, "__closure__", None)
         code = plain_getattr(fn, "__code__", None)
         if not closure or code is None:
             return "", []
+        inner = seen | {id(fn)}
         mutable: list = []
         written = self._captures.written_freevars(code)
         learned = self._mutations.of(code, "closure")
@@ -671,33 +910,22 @@ class HelperIdentity:
                 value = cell.cell_contents
             except ValueError:
                 continue
-            if callable(value) and is_user_callable_instance(value):
-                # A callable INSTANCE of the user's class -- `make(Scorer(10))`,
-                # `c = Scale(10)` in a decorator -- is a function to the
-                # helper walk and data to nothing: `Scorer(11)` shared the
-                # key of `Scorer(10)`. What it holds is keyed like any
-                # captured object's; its code, like any function's, is not.
-                try:
-                    captures.append((name, self._args.hash_payload((value,), {})))
-                except _UNHASHABLE_CAPTURE_ERRORS as e:
-                    raise unhashable_capture(fn, name, value, e) from e
-                mutable.append(value)
-                continue
             if isinstance(value, SYNC_TYPES):
                 continue
-            if callable(value) or issubclass(type(value), types.ModuleType):
-                # Code: the user's is followed as a helper in its own right.
-                # What it names is keyed here, for the code the helper walk
-                # does not follow: `make(np.float32)` and `make(np.float64)`,
-                # `make(sum)` and `make(max)` shared one key.
-                if issubclass(type(value), types.ModuleType):
-                    # `make(numpy.fft)` and `make(scipy.fft)`: which module.
-                    ref = f"module:{module_ref(value)}"
-                    captures.append((name, ref))
-                    continue
-                ref = None if is_cash_wrapper(value) else code_ref(value)
+            if issubclass(type(value), types.ModuleType):
+                # `make(numpy.fft)` and `make(scipy.fft)`: which module.
+                captures.append((name, f"module:{module_ref(value)}"))
+                continue
+            if isinstance(value, type):
+                # A class: its code is the helper walk's; which class, here.
+                ref = code_ref(value)
                 if ref is not None:
                     captures.append((name, f"ref:{ref}"))
+                continue
+            if callable(value):
+                part = self._held_callable_part(value, inner, held, mutable)
+                if part is not None:
+                    captures.append((name, part))
                 continue
             watched = False
             if not (is_immutable_capture(value) or isinstance(value, IMMUTABLE_VALUE_TYPES)):
@@ -732,8 +960,157 @@ class HelperIdentity:
             return "", mutable
         return hashlib.sha256(repr(captures).encode("utf-8")).hexdigest(), mutable
 
+    def held_callable_part(self, value: Any, seen: frozenset[int]) -> str | None:
+        """The key part of a callable *value* the cached function itself
+        captured (`ClosureFold.fold_closure`), as one a helper captured."""
+        return self._held_callable_part(value, seen, [], [])
+
+    def _held_callable_part(self, value: Any, seen: frozenset[int], held: list, mutable: list) -> str | None:
+        """The key part of a callable *value* a function captured, has as a
+        default or stores as an attribute: its name and its
+        `callable_state`. A function among them joins *held* (`identity`
+        checks its own identity again before serving a remembered one);
+        any other callable that carries state joins *mutable*, which keeps
+        the function's identity from being remembered at all."""
+        if is_mock(value):
+            return None
+        if is_cash_wrapper(value):
+            # What it computes can change with any global it reads.
+            mutable.append(value)
+            return self.callable_state(value, seen)
+        t = type(value)
+        if t is types.FunctionType:
+            ref = code_ref(value)
+            if not is_user_code_object(value):
+                # A library's function: its name; its version is
+                # `library_versions`'.
+                return f"ref:{ref}"
+            held.append(value)
+            return f"ref:{ref}:{code_fingerprint(value.__code__)}:{self.callable_state(value, seen)}"
+        if t is types.BuiltinFunctionType and issubclass(
+            type(plain_getattr(value, "__self__", None)), (type(None), types.ModuleType)
+        ):
+            return f"ref:{code_ref(value)}"  # `sum`, `math.floor`
+        ref = code_ref(value)
+        state = self.callable_state(value, seen)
+        if state != ref:
+            mutable.append(value)
+        return f"ref:{ref}:{state}" if state != ref else f"ref:{ref}"
+
+    def _attribute_part(self, fn: Callable, held: list, mutable: list, seen: frozenset[int]) -> str:
+        """Digest of the attributes stored on the function *fn*, or "".
+
+        ``def scale(x): return x * scale.k`` with ``scale.k = k`` set by the
+        factory reads its factor from its own ``__dict__``: two functions
+        one factory made share their code and differ only there, and
+        ``fn.k = 5`` changes what the next call computes. Every attribute
+        counts but: a dunder (``__wrapped__`` is followed by
+        `callable_state`), a lock, one the function's own code assigns
+        (``wrapper.calls += 1``), and one holding the very object of a
+        captured variable the function changes (``wrapper.cache = cache``):
+        state that drifts with every call, as in `_captures_of`. One that
+        cannot be hashed raises KEY-UNHASHABLE-CAPTURE.
+        """
+        attrs = plain_getattr(fn, "__dict__", None)
+        if not attrs or type(attrs) is not dict:
+            return ""
+        inner = seen | {id(fn)}
+        code = plain_getattr(fn, "__code__", None)
+        assigned = self._captures.assigned_attributes(code) if code is not None else frozenset()
+        changed = self._changed_captures(fn) if code is not None else ()
+        parts = []
+        for name in sorted(attrs, key=str):
+            value = attrs[name]
+            if not isinstance(name, str):
+                continue
+            if name == "__wrapped__":
+                if callable(value) and value is not fn:
+                    part = self._held_callable_part(value, inner, held, mutable)
+                    if part is not None:
+                        parts.append((name, part))
+                continue
+            if name.startswith("__") or name in assigned or isinstance(value, SYNC_TYPES):
+                continue
+            if any(value is drifting for drifting in changed):
+                continue
+            if isinstance(value, type):
+                ref = code_ref(value)
+                if ref is not None:
+                    parts.append((name, f"ref:{ref}"))
+                continue
+            if callable(value):
+                part = self._held_callable_part(value, inner, held, mutable)
+                if part is not None:
+                    parts.append((name, part))
+                continue
+            if type(value) is types.MappingProxyType:
+                value = dict(value)
+            try:
+                digest = self.value_digest(value, inner)
+            except _UNHASHABLE_CAPTURE_ERRORS as e:
+                owner = plain_getattr(fn, "__qualname__", repr(fn))
+                kind = class_qualname(type(value))
+                raise KeyBuildFailed(
+                    "KEY-UNHASHABLE-CAPTURE",
+                    f"@cash.cache: the call reaches {owner}, whose attribute '{name}' holds a {kind} "
+                    f"that could not be hashed ({class_name(type(e))}), so the call ran uncached rather "
+                    f"than risk serving a result computed with another one.",
+                    f"keep '{name}' off the function (a module global, an argument), or register a "
+                    f"hasher with cash.register_hasher({kind}, ...).",
+                ) from e
+            parts.append((name, digest))
+            if not _cannot_change(value):
+                mutable.append(value)
+        if not parts:
+            return ""
+        return hashlib.sha256(repr(parts).encode("utf-8")).hexdigest()
+
+    def _changed_captures(self, fn: Callable) -> list:
+        """The values of the captured variables *fn* may change: the ones
+        `_captures_of` leaves out of the key."""
+        closure = getattr(fn, "__closure__", None)
+        code = fn.__code__
+        if not closure:
+            return []
+        drifting = (
+            self._captures.written_freevars(code) | self._mutations.of(code, "closure") | self._captures.unsafe_uses(fn)
+        )
+        found = []
+        for name, cell in zip(code.co_freevars, closure):
+            if name in drifting:
+                try:
+                    found.append(cell.cell_contents)
+                except ValueError:
+                    continue
+        return found
+
+    def defaults_digest(self, pos: tuple, kwd: dict, seen: frozenset[int] = frozenset()) -> str:
+        """The digest of parameter defaults (`defaults_of`), by value as
+        arguments are, a callable among them -- or inside a list or dict
+        default -- by `callable_state`: ``def run(xs, fn=make(3))`` is told
+        from ``fn=make(1)``, a ``functools.partial`` default by what it
+        binds. Raises what hashing raises."""
+        if not pos and not kwd:
+            return self._args.hash_payload((), {})
+        if all(plain_data_kind(v) is not None for v in (*pos, *kwd.values())):
+            return self._args.hash_payload(pos, kwd)
+
+        def keyed(value: Any) -> Any:
+            if callable(value) and not isinstance(value, type):
+                return f"__cash_callable__:{self.callable_state(value, seen)}"
+            if self._args.keys_by_registration(value):
+                return value
+            rewritten, holds_code = rewrite_held_code(
+                value, lambda held: self.callable_state(held, seen), carried=False
+            )
+            return rewritten if holds_code else value
+
+        return self._args.hash_payload(tuple(keyed(v) for v in pos), {k: keyed(v) for k, v in kwd.items()})
+
     def identity(self, fn: Callable) -> str:
-        """A helper's identity for the key: its code, AND its parameter defaults.
+        """A function's identity for the key: its code, its parameter
+        defaults, the values its closure captured and the attributes stored
+        on it (a class: its code, its bases' and its metaclass's).
 
         A default is evaluated once, at ``def`` time, and lives on the function
         object -- so ``def shrink(v, alpha=ALPHA)`` reads the same after
@@ -751,9 +1128,36 @@ class HelperIdentity:
         function it compiles, defaults and captures included, with its
         compile options.
         """
+        return self._function_state(fn, frozenset())
+
+    def _function_state(self, fn: Callable, seen: frozenset[int]) -> str:
+        """`identity`, inside a walk that is already inside *seen*. Worked
+        out once per key build (`KEY_BUILD_DIGESTS`): a function another
+        one holds is asked about by each holder and once more for itself,
+        and each time hashed what it captured (an array of a million
+        numbers, three times a call). Not one whose walk met a callable
+        that holds itself: what stands for the loop depends on where the
+        walk came from."""
+        build = KEY_BUILD_DIGESTS.get()
+        if build is None:
+            return self._function_state_now(fn, seen)
+        item = ("callable state", id(fn))
+        pending = CAPTURE_WATCH.get()
+        entry = build.get(item)
+        if entry is not None and entry[0] is fn and entry[2] is pending:
+            return entry[1]
+        cycles = self._cycles
+        state = self._function_state_now(fn, seen)
+        if self._cycles == cycles:
+            # *pending* is where the walk left what it watches for drift:
+            # a walk for another call's watch list leaves it there itself.
+            build[item] = (fn, state, pending)
+        return state
+
+    def _function_state_now(self, fn: Callable, seen: frozenset[int]) -> str:
         compiled = jit_python_function(fn)
         if compiled is not None:
-            return jit_identity(self.identity(compiled), fn)
+            return jit_identity(self._function_state(compiled, seen), fn)
         source = hash_callable_source(fn)
         if isinstance(fn, type):
             # A class's own source says nothing about what it inherits, and
@@ -781,6 +1185,10 @@ class HelperIdentity:
         memo_key = id(fn)
         code_source = source
         cells = () if is_class else self._read_cells(fn)
+        # A function's own attributes. An instance's ``__dict__`` is its
+        # state, a value: keyed where the instance is held (a global's
+        # fold, `callable_state`), with what watches it for drift.
+        attrs = plain_getattr(fn, "__dict__", None) if type(fn) is types.FunctionType else None
         cached = self._defaults_memo.get(memo_key)
         if (
             cached is not None
@@ -794,6 +1202,9 @@ class HelperIdentity:
             # ``__code__`` in place, keeping the object, its defaults and its
             # cells, so only the source digest says the helper changed.
             and cached[7] == code_source
+            # The functions it holds -- captured, a default, an attribute --
+            # are part of its identity with all THEY hold: each still its own.
+            and all(self._function_state(held_fn, frozenset()) == was for held_fn, was in cached[8])
         ):
             if cached[6]:
                 pending = CAPTURE_WATCH.get()
@@ -807,63 +1218,78 @@ class HelperIdentity:
         # watched by identity snapshot (`_snapshot_of`); one that cannot be
         # watched leaves no entry, and is hashed on every call, as a data
         # global is.
+        cycles = self._cycles
         watch: dict = {}
-        captured, mutable = ("", []) if is_class else self._captures_of(fn, watch)
+        held: list = []
+        captured, mutable = ("", []) if is_class else self._captures_of(fn, watch, held, seen)
         if captured:
             source = f"{source}:captures:{captured}"
+        stored = "" if is_class or not attrs else self._attribute_part(fn, held, mutable, seen)
+        if stored:
+            source = f"{source}:attributes:{stored}"
         pos, kwd = ((), {}) if is_class else defaults_of(fn)
-        mutable.extend(v for v in (*pos, *kwd.values()) if not _cannot_change(v))
+        for value in (*pos, *kwd.values()):
+            if type(value) is types.FunctionType and not is_cash_wrapper(value):
+                if is_user_code_object(value):
+                    held.append(value)
+            elif not _cannot_change(value):
+                mutable.append(value)
         snapshots: list | None = []
+        if attrs and type(attrs) is dict:
+            # The attributes: which objects, each function among them
+            # checked as one it holds.
+            snap = _snapshot_of(attrs, functions_held=True)
+            if snap is None:
+                snapshots = None
+            else:
+                snapshots.append(snap)
         for value in mutable:
+            if snapshots is None:
+                break
             snap = _snapshot_of(value)
             if snap is None:
                 snapshots = None
                 break
             snapshots.append(snap)
         try:
-            digest = self._args.hash_payload(pos, kwd)
-        except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
-            try:
-                digest = self._args.hash_payload(
-                    tuple(fingerprint_default(v) for v in pos),
-                    {k: fingerprint_default(v) for k, v in kwd.items()},
-                )
-            except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
-                bad_type = self._args.first_unhashable_arg_type(pos, kwd)
-                name = plain_getattr(fn, "__qualname__", repr(fn))
-                raise KeyBuildFailed(
-                    "KEY-UNHASHABLE-DEFAULT",
-                    f"@cash.cache: a parameter default of type {bad_type} on the helper "
-                    f"{name} could not be hashed ({class_name(type(e))}), so the call ran "
-                    f"uncached rather than risk serving a result computed under a "
-                    f"default that changed.",
-                    f"get the value out of {name}'s signature -- build it in the body or "
-                    f"pass it at the call site -- or register a hasher with "
-                    f"cash.register_hasher({bad_type}, ...).",
-                ) from e
+            digest = self.defaults_digest(pos, kwd, seen | {id(fn)})
+        except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
+            bad_type = self._args.first_unhashable_arg_type(pos, kwd)
+            name = plain_getattr(fn, "__qualname__", repr(fn))
+            raise KeyBuildFailed(
+                "KEY-UNHASHABLE-DEFAULT",
+                f"@cash.cache: a parameter default of type {bad_type} on the helper "
+                f"{name} could not be hashed ({class_name(type(e))}), so the call ran "
+                f"uncached rather than risk serving a result computed under a "
+                f"default that changed.",
+                f"get the value out of {name}'s signature -- build it in the body or "
+                f"pass it at the call site -- or register a hasher with "
+                f"cash.register_hasher({bad_type}, ...).",
+            ) from e
         identity = f"{source}:defaults:{digest}"
         if watch:
             pending = CAPTURE_WATCH.get()
             if pending is not None:
                 pending.update(watch)
-        if snapshots is not None:
-            self._defaults_memo[memo_key] = (fn, defaults, kwdefaults, cells, snapshots, identity, watch, code_source)
-        else:
-            self._defaults_memo.pop(memo_key, None)
+        if snapshots is not None and self._cycles == cycles:
+            # Each held function by its identity from a walk of its own,
+            # which is what a later check compares with.
+            own = [(held_fn, self._function_state(held_fn, frozenset())) for held_fn in held]
+            if self._cycles == cycles:
+                self._defaults_memo[memo_key] = (
+                    fn,
+                    defaults,
+                    kwdefaults,
+                    cells,
+                    snapshots,
+                    identity,
+                    watch,
+                    code_source,
+                    own,
+                )
+                return identity
+        self._defaults_memo.pop(memo_key, None)
         return identity
-
-    def fingerprint_default(self, v: Any) -> Any:
-        """`HelperIdentity.fingerprint_default`, plus what a FUNCTION default carries.
-
-        A factory-built callable as a default (`def run(xs, fn=make(3))`)
-        shares its source with every other one the factory makes; the value it
-        was built with lives in its closure (`make(3)` against `make(1)`).
-        `HelperIdentity.identity` adds its immutable captures and its own
-        defaults.
-        """
-        if inspect.isfunction(v) or jit_python_function(v) is not None:
-            return f"__cash_callable__:{self.identity(v)}"
-        return fingerprint_default(v)
 
 
 class ClosureFold:
@@ -962,11 +1388,12 @@ class ClosureFold:
                 # thread while a key is built.
                 captures.append((name, self._values.data_callable_identity(v)))
                 continue
-            # A captured FUNCTION is its code, so fold its source. Reaching
-            # this before the `unsafe` check is the point: a capture the body
-            # PASSES TO A CALL is marked unsafe and skipped (watch it, don't
-            # fold it blind), and calling is exactly what you do
-            # with a captured function. So the strategy-factory shape
+            # A captured CALLABLE is its code and what it was built with
+            # (`HelperIdentity.callable_state`). Reaching this before the
+            # `unsafe` check is the point: a capture the body PASSES TO A
+            # CALL is marked unsafe and skipped (watch it, don't fold it
+            # blind), and calling is exactly what you do with a captured
+            # function. So the strategy-factory shape
             #
             #     def make(weight_fn):
             #         @cash.cache
@@ -975,17 +1402,24 @@ class ClosureFold:
             #
             # needs its captured function keyed: two scorers built with
             # different weightings share a source and a qualname
-            # (`make.<locals>.score`), and only `weight_fn` tells them apart.
+            # (`make.<locals>.score`), and only `weight_fn` tells them apart
+            # -- by its code, by the model a captured `model.predict` is
+            # bound to, by what a captured `functools.partial` binds, by
+            # what the function a captured closure calls was built with.
             #
             # A call cannot mutate a function, so the reason `unsafe` exists
-            # does not apply. Same predicate as `HelperIdentity.fingerprint_default`, and the
-            # same deliberate limit: functions, methods and builtins only. An
-            # arbitrary callable INSTANCE takes the paths below rather than being
-            # keyed on its class and silently sharing entries across instances
-            # holding different state.
-            fingerprint = fingerprint_default(v)
-            if fingerprint is not v:
-                captures.append((name, self._captured_function_part(func, func_name, name, v, fingerprint, _walked)))
+            # does not apply. A class and a callable INSTANCE of the user's
+            # take the paths below: a class is keyed with its data, an
+            # instance is hashed and watched like any captured object.
+            if (
+                callable(v)
+                and not isinstance(v, type)
+                and not isinstance(v, SYNC_TYPES)
+                and not is_user_callable_instance(v)
+            ):
+                part = self._helpers.held_callable_part(v, _walked | {id(func)})
+                if part is not None:
+                    captures.append((name, part))
                 continue
             part = self._captured_value_part(func, func_name, name, v, name not in unsafe, provisional)
             if part is not None:
@@ -996,37 +1430,6 @@ class ClosureFold:
         if not clo:
             return state_hash
         return hashlib.sha256(f"{state_hash}:closure:{clo}".encode()).hexdigest()
-
-    def _captured_function_part(
-        self, func: Callable, func_name: str, name: str, v: Any, fingerprint: Any, _walked: frozenset[int]
-    ) -> str:
-        """The key part of a function *v* that *func* captures as *name*,
-        from its source *fingerprint*, its code, and its own captures."""
-        # Source text alone collides for two lambdas sharing a line
-        # (`a(lambda: "AAA"), a(lambda: "BBB")` is ONE line, so
-        # `inspect.getsource` returns the same string for both).
-        # Their code objects differ.
-        inner_code = plain_getattr(v, "__code__", None)
-        if inner_code is not None:
-            fingerprint = f"{fingerprint}:{code_fingerprint(inner_code)}"
-        # Source alone is not enough: a factory-built helper has the
-        # SAME source for every parameter it was built with, so
-        # `outer(2)` and `outer(3)` fingerprint identically one level
-        # down. Recurse so the captured function's own captures fold
-        # under the same rules, however deep the factories nest.
-        # *_walked*, the closures on this path, ends a cycle: a
-        # recursive local function captures itself.
-        walked = _walked | {id(func)}
-        if id(v) in walked:
-            fingerprint = f"{fingerprint}:cycle"
-        else:
-            fingerprint = self.fold_closure(
-                v,
-                f"{func_name}.{name}",
-                str(fingerprint),
-                walked,
-            )
-        return fingerprint
 
     def _captured_value_part(
         self, func: Callable, func_name: str, name: str, v: Any, read_only: bool, provisional: Any
@@ -1040,10 +1443,10 @@ class ClosureFold:
             # A lock holds no data.
             return None
         if callable(v) and not is_user_callable_instance(v):
-            # A class, an ``lru_cache`` wrapper or another callable is code,
-            # the user's followed by the helper walk; keyed here by what it
-            # names, for the code that walk does not follow
-            # (`make(np.float32)`, `make(np.add)`).
+            # A class is code, the user's followed by the helper walk; keyed
+            # here by what it names, for the code that walk does not follow
+            # (`make(np.float32)`). Any other callable was keyed by
+            # `HelperIdentity.callable_state` before this is reached.
             ref = code_ref(v)
             if ref is None:
                 return None
@@ -1134,21 +1537,13 @@ class ClosureFold:
                 return hashlib.sha256(f"{state_hash}:defaults:{digest}".encode("utf-8")).hexdigest()
         pos, kwd = defaults_of(func, leave_out)
         try:
-            digest = self._args.hash_payload(pos, kwd)
-        except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
-            # A callback default (`def f(x, key=lambda v: v)`) is unpicklable but
-            # is not opaque: its SOURCE defines it, which is the same fingerprint
-            # register_hasher embeds for a hasher. Retry with function-valued
-            # defaults replaced by that -- strictly better than dropping them (an
-            # edited lambda now invalidates) and it keeps such functions
-            # cacheable, which a bare refuse-to-cache would not.
-            try:
-                digest = self._args.hash_payload(
-                    tuple(self._helpers.fingerprint_default(v) for v in pos),
-                    {k: self._helpers.fingerprint_default(v) for k, v in kwd.items()},
-                )
-            except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
-                return self._defaults_unhashable(func_name, pos, kwd, e)
+            # A callback default (`def f(x, key=lambda v: v)`) is not what
+            # pickle would write of it (a name, or nothing): it is its code
+            # and what it was built with, as wherever else a callable is
+            # held (`HelperIdentity.defaults_digest`).
+            digest = self._helpers.defaults_digest(pos, kwd, frozenset({id(func)}))
+        except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
+            return self._defaults_unhashable(func_name, pos, kwd, e)
         return self._finish_defaults_fold(func, state_hash, digest, pos, kwd, pinnable, leave_out)
 
     def _defaults_unhashable(

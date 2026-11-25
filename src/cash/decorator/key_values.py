@@ -225,6 +225,12 @@ def stabilize_for_global_hash(
     return _stabilized(v, hash_callable, _path, carried)[0]
 
 
+def rewrite_held_code(v: Any, hash_callable, *, carried: bool = True) -> tuple[Any, bool]:
+    """`stabilize_for_global_hash` of *v*, and whether it holds any code: when
+    it holds none, *v* itself is what a key hashes, as it always was."""
+    return _stabilized(v, hash_callable, frozenset(), carried)
+
+
 #: `_state_is_its_dict` per class: asked of every object a global holds.
 _STATE_IS_DICT: TypeMemo[bool] = TypeMemo()
 

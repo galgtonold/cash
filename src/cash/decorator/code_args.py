@@ -4,6 +4,7 @@ is part of the key, not their pickled bytes."""
 from __future__ import annotations
 
 import ast
+import contextvars
 import functools
 import hashlib
 import inspect
@@ -34,11 +35,12 @@ from ..loaded_code import class_functions
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, is_runtime_machinery
 from . import class_memo, code_trace, walk_scope
 from .arg_hashing import is_opaque, is_plain_data
-from .call_state import CARRIER_LOOKUPS, held_by_name
+from .call_state import CARRIER_LOOKUPS, KeyBuildFailed, held_by_name
 from .class_data import class_surface_functions, implicit_access_functions
 from .closure_fold import CLASS_BODY_CELLS
+from .library_versions import held_library_versions
 from .module_identity import namespace_module
-from .user_code import cached_function_in, is_user_code_object
+from .user_code import cached_function_in, is_user_code_object, own_package
 
 if TYPE_CHECKING:
     from .arg_hashing import ArgHasher
@@ -55,6 +57,15 @@ logger = logging.getLogger(__name__)
 #: searched from there once the stretch is done (`CodeArgs.iter_code_carriers`),
 #: so the search reaches everything, however deep, without running out of stack.
 CODE_SEARCH_DEPTH = 100
+
+
+#: While a call's arguments are folded (`CodeArgs.fold_code_args`): the
+#: classes and functions the carrier walk met that are not the user's code,
+#: by ``id``. Their libraries' installed versions go into the key
+#: (`held_library_versions`).
+_LIBRARY_CODE_MET: contextvars.ContextVar[dict[int, Any] | None] = contextvars.ContextVar(
+    "cash_library_code_met", default=None
+)
 
 
 class _Deeper:
@@ -437,6 +448,9 @@ class CodeArgs:
         if isinstance(value, type):
             if id(value) not in _seen:
                 _seen.add(id(value))
+                met = _LIBRARY_CODE_MET.get()
+                if met is not None:
+                    met[id(value)] = value
                 yield value
             return
         if callable(value):
@@ -467,6 +481,12 @@ class CodeArgs:
                 return
             if id(value) not in _seen:
                 _seen.add(id(value))
+                met = _LIBRARY_CODE_MET.get()
+                if met is not None:
+                    # ``np.mean`` handed over, or ``frame.describe``: the
+                    # library whose code it runs.
+                    code = unwrap_partials(value)
+                    met[id(code)] = plain_getattr(code, "__func__", code)
                 yield value
             return
         # The primitive test is repeated INLINE in each loop below rather than
@@ -661,6 +681,7 @@ class CodeArgs:
         if _depth > CODE_SEARCH_DEPTH:
             yield _Deeper(list(values), True)
             return
+        met = _LIBRARY_CODE_MET.get()
         for v in values:
             if type(v) in CODELESS_PRIMS or id(v) in _seen or issubclass(type(v), types.ModuleType):
                 continue
@@ -674,6 +695,8 @@ class CodeArgs:
             elif issubclass(type(v), (types.FunctionType, type)):
                 if defined_in_user_code(v):
                     yield from self._walk_carriers(v, _depth, _seen)
+                elif met is not None:
+                    met[id(v)] = v
             elif jit_python_function(v) is not None:
                 if defined_in_user_code(jit_python_function(v)):
                     yield from self._walk_carriers(v, _depth, _seen)
@@ -688,6 +711,10 @@ class CodeArgs:
             elif self._keyed_by_registration(v):
                 continue
             else:
+                if met is not None:
+                    # What a library's object holds of another library's
+                    # (a scikit-learn pipeline's xgboost step).
+                    met[id(type(v))] = type(v)
                 attrs = plain_getattr(v, "__dict__", None)
                 if isinstance(attrs, dict) and attrs:
                     _seen.add(id(v))
@@ -720,7 +747,12 @@ class CodeArgs:
         if id(cls) in _seen:
             return None
         _seen.add(id(cls))
-        return cls if is_user_code_object(cls) else None
+        if is_user_code_object(cls):
+            return cls
+        met = _LIBRARY_CODE_MET.get()
+        if met is not None:
+            met[id(cls)] = cls
+        return None
 
     def fold_code_args(
         self,
@@ -743,6 +775,27 @@ class CodeArgs:
         code, and ``state_hash`` is already where code lives: function source,
         ``depends_on``, transitive helpers, module globals read.
         """
+        met: dict[int, Any] = {}
+        met_token = _LIBRARY_CODE_MET.set(met)
+        try:
+            parts = self._code_arg_parts(args, kwargs, func_name, owner_code, func, report)
+        finally:
+            _LIBRARY_CODE_MET.reset(met_token)
+        if met:
+            # The arguments' own libraries: ``def summarise(df): return
+            # df.describe()`` names none, and runs pandas' code.
+            for dist, version in held_library_versions(met.values(), own_package(func) if func is not None else None):
+                ledger_note(("installed library", dist), version)
+                parts.append(f"library:{dist}=={version}")
+        if not parts:
+            return state_hash
+        payload = ":".join(sorted(set(parts)))
+        return hashlib.sha256(f"{state_hash}:codeargs:{payload}".encode("utf-8")).hexdigest()
+
+    def _code_arg_parts(
+        self, args: tuple, kwargs: dict, func_name: str, owner_code: Any, func: Any, report: Any
+    ) -> list[str]:
+        """`fold_code_args`'s parts for the user code the arguments carry."""
         parts: list[str] = []
         seen_carriers: set[int] = set()
         names: frozenset[str] | None = None
@@ -771,10 +824,7 @@ class CodeArgs:
                     for name, carrier in self._family_installed_code(family, names):
                         for part in self.carrier_parts(carrier, func_name, None, seen_carriers, owner_code):
                             parts.append(f"installed:{name}:{part}")
-        if not parts:
-            return state_hash
-        payload = ":".join(sorted(set(parts)))
-        return hashlib.sha256(f"{state_hash}:codeargs:{payload}".encode("utf-8")).hexdigest()
+        return parts
 
     def _attribute_names(self, func: Any, report: Any) -> frozenset[str]:
         """The attribute names *func* and the helpers its purity *report*
@@ -1170,15 +1220,37 @@ class CodeArgs:
         ]
 
     def _function_capture_parts(self, carrier: Any) -> list[str]:
-        """Key parts for what a function *carrier*'s closure captured:
-        ``make(3)`` and ``make(4)`` return one code reading ``k`` from a
-        cell, and key apart by it, as a helper's captures do
-        (`HelperIdentity.captures_digest`). Its defaults are keyed with its
-        code (`CodeSurface.code_surface_hash`)."""
-        if type(carrier) is not types.FunctionType or not carrier.__closure__:
+        """Key parts for what a callable *carrier* was built with besides
+        what the value channel hashes: ``make(3)`` and ``make(4)`` return
+        one code reading ``k`` from a cell, and key apart by it; so do two
+        pipelines whose inner function was built with another value, a
+        function with another attribute stored on it (``fn.k``), and two
+        ``lru_cache`` wrappers over such functions
+        (`HelperIdentity.callable_state`, one answer wherever a callable is
+        held). The instance a bound method is bound to and what a partial
+        binds are the value channel's (`ArgHasher`), so the function under
+        them is what is asked about here."""
+        if isinstance(carrier, type):
             return []
-        captured = self._values.captures_digest(carrier)
-        return [f"captures:{carrier.__qualname__}:{captured}"] if captured else []
+        target = unwrap_partials(carrier)
+        target = plain_getattr(target, "__func__", target)
+        only_defaults = False
+        if type(target) is types.FunctionType:
+            only_defaults = not target.__closure__ and not target.__dict__
+            if only_defaults and not _callable_defaults(target):
+                return []
+        elif plain_getattr(target, "__wrapped__", None) is None:
+            return []
+        try:
+            return [f"captures:{carrier_name(carrier)}:{self._values.callable_state(target)}"]
+        except KeyBuildFailed as e:
+            if only_defaults and e.code == "KEY-UNHASHABLE-DEFAULT":
+                # Asked only for what a default was built with, and a
+                # default has no hash: the code surface keys it by its
+                # value-based repr, or refuses the key itself
+                # (`CodeSurface._unpicklable_identity`).
+                return []
+            raise
 
     def _capturing_functions(self, cls: type) -> tuple:
         """The functions of *cls* (`class_surface_functions`) with a closure
@@ -1356,6 +1428,17 @@ def installed_user_code(attr: Any) -> list[Any]:
         held = plain_getattr(attr, "__dict__", None)
         candidates = list(held.values()) if isinstance(held, dict) else []
     return [c for c in candidates if issubclass(type(c), (types.FunctionType, type)) and defined_in_user_code(c)]
+
+
+def _callable_defaults(fn: types.FunctionType) -> bool:
+    """Does *fn* have a parameter default that is a callable or may hold
+    one (anything but a number, a string and the like)? Its code is keyed
+    with its name; what such a default was built with is not."""
+    defaults = fn.__defaults__
+    if defaults and any(type(d) not in CODELESS_PRIMS for d in defaults):
+        return True
+    kwdefaults = fn.__kwdefaults__
+    return bool(kwdefaults) and any(type(d) not in CODELESS_PRIMS for d in kwdefaults.values())
 
 
 def _carrier_functions(carrier: Any, of_class: Any) -> list[types.FunctionType]:

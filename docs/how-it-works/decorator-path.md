@@ -37,7 +37,7 @@ A key has four parts, joined by colons: `function:state:dynamic:args`.
 
 ## What goes into the state
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @89847a2a, cash/dependency_state.py:DependencyStateHasher.compute @1738c84b, cash/decorator/closure_fold.py:HelperIdentity._captures_of @ba436489, cash/decorator/global_values.py:GlobalValues.code_ref_part @b57d3588, cash/decorator/code_args.py:CodeArgs._installed_code @22036f9e, cash/jit_functions.py:jit_options @0603176f -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @89847a2a, cash/dependency_state.py:DependencyStateHasher.compute @1738c84b, cash/decorator/closure_fold.py:HelperIdentity._captures_of @0036405f, cash/decorator/global_values.py:GlobalValues.code_ref_part @b57d3588, cash/decorator/code_args.py:CodeArgs._installed_code @22036f9e, cash/jit_functions.py:jit_options @0603176f -->
 The state starts from source code and then folds in, on every call, each input
 that can change the result without changing an argument:
 
@@ -48,7 +48,7 @@ that can change the result without changing an argument:
 | Classes its code reaches | Classes it constructs, names or annotates, transitively. For a cached method: the class-level code and constants it reaches. For every class of yours it reaches (also as `module.Class`, or through an instance): its class attributes, re-read on every call (an Enum's member values, a namedtuple's fields and defaults), and the module globals its functions read, inherited methods, properties and `__init__` included. A class attribute the class's own code writes (a counter, a registry) is state, not an input, and is left out. |
 | Module globals it reads | Data globals read by the function or a helper: a threshold, a config dict, and an attribute read through a module however it is spelled (`conf.RATE`, `pkg.conf.RATE`, `m = pkg.conf; m.RATE`). Modules, functions and classes are tracked as code instead. A name bound to a module (`FFTLIB = numpy.fft`), read directly, through a helper that returns it, as `settings.BACKEND`, from a closure, a function attribute or a table, is keyed by the module's import name (plus its file for a module not importable by that name), so switching it to `scipy.fft` recomputes; a lazily loaded module keys the same before and after it loads. A name bound to a class or to a library or builtin function (`DTYPE = np.float32`, `AGG = sum`, `E = ValueError`), read directly, as `settings.AGG` or from a closure, is also keyed by what it names, so changing it to `np.float64` or `max`, in the file or while the program runs, recomputes. So is a function or a class of yours held inside a data global, a class attribute, a closure or a `functools.partial`, in a dict, a list or an object's attribute (`CFG = {"b": Box(lambda x: x + 1)}`, `REG = {"double": Double}`): editing it recomputes. |
 | Closures, defaults, a bound method's instance | The values a closure captured, the cached function's own and those of a helper a factory made (`score = make_scorer(weights)` over an array, a data frame or a model it calls methods on); a captured module: its name and the code of the functions and classes read from it. Parameter defaults by value (a function default also by the globals it reads: `fn=lambda v: v + K`), data stored on a function (`scale.k`), and the `self` of `cash.cache(obj.method)`. |
-| What a callable was built with | The arguments of a `functools.partial`, a factory closure's values, an `operator.itemgetter` key, the attributes of your class's callable instance and a bound method's instance, also when the callable sits in a dict or list global, is captured by a closure or decorator, or is itself passed to `cash.cache`. |
+| What a callable was built with | The arguments of a `functools.partial`, a factory closure's values, an `operator.itemgetter` key, the attributes of your class's callable instance, a bound method's instance, a function's defaults and the data stored on it (`scale.k`), and what a `functools.wraps` or `functools.lru_cache` wrapper wraps. One rule reads all of it, to any depth (a closure over a closure, a partial of a bound method, a list of them), wherever the callable is held: passed as an argument, alone or inside a list, dict or object; captured by the cached function, by a helper or by a decorator; a module global or an entry of a table; a parameter default; or itself passed to `cash.cache`. State the callable changes itself is left out, so that it does not move the key on every call: an attribute its own code assigns (`wrapper.calls += 1`), a captured dict it fills, and the instance behind a method that only collects output (`results.append`, `log.info`). A value among these that cannot be hashed makes the call run uncached with [KEY-UNHASHABLE-CAPTURE](../warnings.md#key-unhashable-capture). |
 | Code passed as an argument | A class or function passed in is keyed by its code, not its name, so editing a schema class you pass recomputes. A decorated function is keyed by the function and every layer its decorators wrap, and a class or function by the code of the classes and functions its code names, transitively. So is one held in an argument or a data global, however deep: an instance's attribute, a list of steps, a transformer inside a library pipeline (a library object is only searched for your code; its own state is not keyed this way, and loggers, streams, threads and locks are not searched). So is code your project installs on a library class and the function reaches by name: a pandas accessor (`register_dataframe_accessor`, `register_series_accessor`), a polars namespace, a function patched onto the class (`pd.DataFrame.report = report`), and the globals that code reads. On pandas' and polars' frame, series, index and expression classes it is keyed wherever the frame comes from (an argument, a list or object holding one, a subclass, a frame read in the body); on another library's class, when an argument is of that class. A value a [registered hasher](../tutorials/feature-guides/custom-hashers.md) keys is not searched. What that code reads is keyed as the function's own reads are: the globals it and its helpers read, and what the callables it calls were built with. |
 | The `key=` function | Its code, the code it calls and the globals that code reads, as for code passed as an argument ([below](#when-you-choose-the-arguments)). |
 | Files named in `file_depends_on=` | The names only; their content is checked on lookup ([Files](#files)). |
@@ -112,7 +112,7 @@ warning; `allow_random=True` accepts that on purpose.
 
 ## How arguments are hashed
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @95df02aa, cash/decorator/arg_hashing.py:ArgHasher._nested_hasher @1b6f7959 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @95df02aa, cash/decorator/arg_hashing.py:ArgHasher._nested_hasher @d8a24e36 -->
 Each argument is fingerprinted by the first rule that applies:
 
 1. A hasher you registered with `cash.register_hasher(T, fn, override=True)`.
@@ -131,7 +131,17 @@ Each argument is fingerprinted by the first rule that applies:
 6. For a lambda or a closure of yours, which pickle cannot write, its name;
    its code, the globals that code reads and the values its closure captured
    are keyed with the state, as code passed as an argument.
-7. The pickled value, in one canonical form: sets in sorted order, every
+7. For an `object()` or an instance of an empty marker class (a flag value
+   such as `MISSING = object()`), the name of the module global or class
+   attribute that holds it. Such a value holds nothing to read, and code
+   tells two of them apart with `is`, so pickled they would key alike. One
+   that no name holds, passed as an argument, makes the call run uncached
+   with [KEY-UNHASHABLE-ARG](../warnings.md#key-unhashable-arg); deeper, in
+   a list or in the state of another object (a private `self._token =
+   object()`), it is pickled as before, alike with any other. A class with
+   methods of its own is not a marker: its instances key by their class and
+   state.
+8. The pickled value, in one canonical form: sets in sorted order, every
    container tagged with its type. The numbers in a set (and tuples of
    them) also key by the order they iterate in, where that is not their
    sorted order, since `list(s)` and `s.pop()` read it; strings key alike in

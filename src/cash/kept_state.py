@@ -43,6 +43,7 @@ from . import _native, _weak
 from ._own_work import own_work
 from ._type_memo import class_dict, class_dictoffset, class_flags, class_mro, class_name, class_qualname, mro_of
 from ._user_attrs import attribute_or, class_attr, from_family, instance_of, named_attr, own_lookup, plain_getattr
+from .bare_instances import is_bare, may_be_bare, name_of, named_instance
 from .live_state import is_live_stream, live_reduce
 from .unnamed_code import library_code_override, refused_unnamed
 from .value_types import WEAK_PROXY_TYPES, class_module, is_dead_proxy
@@ -1667,6 +1668,8 @@ class _KeepDict(dict):
             # A logger reduces to ``getLogger(name)``: the key would hold
             # its name and none of its level (`_reduce_by_reference_for_key`).
             reducer = functools.partial(_reduce_by_reference_for_key, reducer=reducer)
+        if self._keyed and may_be_bare(t):
+            reducer = functools.partial(_reduce_bare_for_key, reducer=reducer)
         if self._keyed and class_name(t) in _GLOBAL_RNG_TYPE_NAMES:
             # One instance of the class may be a module's global RNG.
             reducer = functools.partial(_reduce_rng_for_key, reducer=reducer)
@@ -3215,6 +3218,22 @@ def stands_by_reference(reduced: Any) -> bool:
         and rebuild is not newobj_ex
         and rebuild is not reconstructor
     )
+
+
+def _reduce_bare_for_key(obj: Any, reducer: Any) -> Any:
+    """*reducer*'s reduce of *obj*; for an instance that holds nothing
+    (`bare_instances`) inside the arguments of a cached call
+    (`folding_by_reference`), the name that finds it.
+
+    ``Options(fill=DROP)`` and ``Options(fill=KEEP)`` pickle to the same
+    bytes when both flags are ``object()``. One no name finds is pickled
+    as before: an object may keep a private ``object()`` of its own, which
+    tells nothing apart for the caller."""
+    if _FOLDING.get() and is_bare(obj):
+        name = name_of(obj, patient=False)
+        if name is not None:
+            return named_instance, (name,)
+    return reducer(obj)
 
 
 def _reduce_by_reference_for_key(obj: Any, reducer: Any) -> Any:

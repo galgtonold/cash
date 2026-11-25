@@ -95,7 +95,8 @@ def test_a_second_process_gets_the_current_id_not_the_stored_one(tmp_path):
 
 
 class _Thing:
-    pass
+    def __init__(self):
+        self.name = "thing"  # some state: an object holding nothing is keyed by the name that holds it
 
 
 def _codes(caught):
