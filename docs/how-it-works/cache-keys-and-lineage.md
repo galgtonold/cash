@@ -208,7 +208,7 @@ the chain. You declare no dependencies.
 Files, called functions, local modules, callee globals and the value are left
 out when there are none.
 
-<!-- claim: cash/notebook/lineage_formula.py:def_time_names @e1b4dbfd, cash/notebook/statement/processor.py:StatementProcessor._decide_cacheability @729ea48d -->
+<!-- claim: cash/notebook/lineage_formula.py:def_time_names @e1b4dbfd, cash/notebook/statement/processor.py:StatementProcessor._decide_cacheability @f5ef231b -->
 A function whose body calls a helper defined in a cell below keeps one
 lineage, whether the helper was there when the `def` ran (the next Run All
 of the same kernel) or not (a first Run All, or after a restart): its

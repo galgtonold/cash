@@ -2203,7 +2203,7 @@ cell, that cell is never cached.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_callable_unread @647d181d, cash/analysis/mutation_effects.py:statement_effects @c7ee3388 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_callable_unread @647d181d, cash/analysis/mutation_effects.py:statement_effects @6f205115 -->
 **What happened.** The statement calls or hands over a function whose
 source cash cannot read (one made by `exec`, or a lambda from a library),
 or one it can tell only by running code: what a call of yours returns
