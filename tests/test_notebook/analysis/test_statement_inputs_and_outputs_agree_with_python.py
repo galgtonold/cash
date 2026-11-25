@@ -12,6 +12,7 @@ loads from the module's namespace; over the corpus of `tests/_scope_oracle.py`
 from __future__ import annotations
 
 import ast
+import sys
 
 import pytest
 
@@ -53,9 +54,11 @@ def test_inputs_are_what_the_compiled_statement_loads_and_does_not_bind_first(so
 
     # Never a name the statement does not load (a `match` capture, a
     # comprehension variable, a parameter, a local of a function).
+    # (An annotation Python keeps as text or never evaluates loads nothing;
+    # the names in it are inputs all the same.)
     assert inputs <= loaded | annotated
     # Every name it loads and never stores is an input.
-    assert loaded - compiled.stores - compiled.stores_later - annotated <= inputs
+    assert loaded - compiled.stores - compiled.stores_later <= inputs
 
 
 MATCH_SHAPES = {
@@ -159,3 +162,48 @@ def test_a_function_storing_through_global_writes_when_called_not_when_defined()
 def test_a_reassigned_name_leaves_out_what_is_only_changed_in_place():
     assert CodeAnalyzer.reassigned_names("df = load()\nstats['n'] = len(df)") == {"df"}
     assert CodeAnalyzer.reassigned_names("match data:\n    case [head, *_]:\n        pass") == {"head"}
+
+
+def test_a_class_named_in_a_hint_is_an_input_of_the_def():
+    inputs, outputs = CodeAnalyzer.analyze_code_block(
+        "def h(a: Pos, b=defb, *args: Var, c: Kw = defc, **kw: Kws) -> Ret:\n    pass"
+    )
+    assert inputs == {"Pos", "Var", "Kw", "Kws", "Ret", "defb", "defc"}
+    assert outputs == {"h"}
+
+
+def test_a_parameter_named_in_a_hint_of_an_inner_function_is_not_an_input():
+    inputs, _outputs = CodeAnalyzer.analyze_code_block(
+        "def outer(kind):\n    def inner(x: kind) -> kind:\n        return x\n    return inner"
+    )
+    assert inputs == set()
+
+
+def test_the_names_in_a_quoted_hint_are_inputs():
+    inputs, _outputs = CodeAnalyzer.analyze_code_block(
+        "def f(x: 'Kind', y: Optional['Other'] = None) -> 'list[Kind]':\n    return x"
+    )
+    assert {"Kind", "Other", "Optional", "list"} <= inputs
+
+
+def test_a_hint_that_is_not_python_is_no_input():
+    inputs, _outputs = CodeAnalyzer.analyze_code_block("def f(x: 'not a name') -> 'a b':\n    return x")
+    assert inputs == set()
+
+
+def test_hints_are_inputs_under_the_future_import_too():
+    inputs, _outputs = CodeAnalyzer.analyze_code_block(
+        "from __future__ import annotations\ndef f(x: Kind) -> Kind:\n    return x"
+    )
+    assert "Kind" in inputs
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="type parameters are Python 3.12 syntax")
+def test_the_bound_of_a_type_parameter_is_an_input_and_the_parameter_is_not():
+    inputs, outputs = CodeAnalyzer.analyze_code_block("def ident[T: Kind](x: T) -> T:\n    return x")
+    assert inputs == {"Kind"}
+    assert outputs == {"ident"}
+    inputs, outputs = CodeAnalyzer.analyze_code_block("class Box[T: Kind](Base):\n    item: T")
+    assert inputs == {"Kind", "Base"}
+    inputs, outputs = CodeAnalyzer.analyze_code_block("type Pair[T] = tuple[T, Other]")
+    assert inputs == {"tuple", "Other"} and outputs == {"Pair"}

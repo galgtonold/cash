@@ -39,7 +39,6 @@ from .helper_code import is_user_code
 from .mutations import is_vars_of, namespace_item, writer_aliases, written_argument
 from .namespace_effects import capturable_globals, notebook_global_rebinds
 from .scope_model import (
-    ANNOTATION,
     BIND,
     CLASS,
     DECLARED,
@@ -173,6 +172,14 @@ class _FlowReplay:
     * a module-level name read before the block binds it is an input; one a
       function body reads is an input too (the function reads it when
       called), unless the function stored it first through ``global``;
+    * a name an annotation reads is an input like any other: a parameter's
+      or the return hint, a type parameter's bound, and the names in a
+      quoted hint. Python evaluates them when the ``def`` runs (up to
+      3.13), or the first time something asks for the hints (3.14, a
+      quoted hint, ``from __future__ import annotations``) and then keeps
+      the answer on the function: either way the function goes on naming
+      the class from when the ``def`` last ran, so a ``def`` runs again
+      when a class its hints name changes, as on a run from the top;
     * a module-level name the block binds when it runs is an output; what a
       function binds through ``global`` is not (it happens when called);
     * ``x[k] = v``, ``x.attr = v``, ``x.method(inplace=True)`` and a writer
@@ -235,8 +242,6 @@ class _FlowReplay:
         for event in model.events:
             kind, scope = event.kind, event.scope
             if kind == READ:
-                if scope.kind == ANNOTATION and not isinstance(scope.node, ast.AnnAssign):
-                    continue  # only the annotation of a variable is read
                 if not self.is_defined(event.name, scope):
                     self.real_inputs.add(event.name)
             elif kind == BIND:
