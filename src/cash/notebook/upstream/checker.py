@@ -1248,6 +1248,11 @@ class UpstreamChecker:
             # Put the random streams the cell draws from where a run from the
             # top has them before it. After the re-runs above, so it is the
             # last thing to touch them before the cell.
+            # A stream it names holds that lineage from the cell that leaves
+            # it there on: no snapshot above takes it (read before the
+            # restore, which ends the plan).
+            for var, cell in self.rng.named_from().items():
+                written_in[var] = max(written_in.get(var, cell), cell)
             self.rng.restore_position_rng_state(cell_code, notebook_cells, current_cell_idx)
 
             self.simulator.resync_after_replay(records_before, written_in)

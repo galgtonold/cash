@@ -201,6 +201,9 @@ class RngRewind:
         self._cell_settled: set[str] = set()
         #: Whether :meth:`with_rng_chain` planned the streams of this check.
         self._planned = False
+        #: RNG variable -> the cell of the statement that leaves the stream
+        #: at the lineage this check gave it (:meth:`named_from`).
+        self._named_from: dict[str, int] = {}
 
     # ------------------------------------------------------------------
     # The plan
@@ -280,10 +283,13 @@ class RngRewind:
         # position that statement left with other inputs on an earlier run.
         named: dict[tuple, dict[str, str]] = {}
 
-        def put_back(key: tuple, module: str, state: dict, lineage: str | None) -> None:
+        def put_back(key: tuple, module: str, state: dict, lineage: str | None, left_by: int) -> None:
             restores.setdefault(key, {}).update(state)
             if lineage:
-                named.setdefault(key, {})[rng_virtual_var(module)] = lineage
+                var = rng_virtual_var(module)
+                named.setdefault(key, {})[var] = lineage
+                cell = stmts[left_by].cell
+                self._named_from[var] = max(self._named_from.get(var, cell), cell)
             self.tracking_state.rng_unplaced.discard(module)
 
         def lineage_read(pos: int, module: str) -> tuple[bool, str | None]:
@@ -346,14 +352,14 @@ class RngRewind:
                     # left the stream (a memo filled then, a seed in a call
                     # skipped now), and a draw keyed on it is served that
                     # run's value.
-                    put_back(key, module, recorded, self.tracking_state.rng_position_names.get(after))
+                    put_back(key, module, recorded, self.tracking_state.rng_position_names.get(after), above)
                     return True
             if target_lineage is not None:
                 # A recorded state is the stream itself; the live lineage is
                 # only a name for it and can match while the stream does not.
                 recorded = self.tracking_state.rng_states_by_lineage.get((var, target_lineage))
                 if recorded is not None:
-                    put_back(key, module, recorded, target_lineage)
+                    put_back(key, module, recorded, target_lineage, above)
                     return True
                 if (
                     not moved_by_plan
@@ -365,11 +371,11 @@ class RngRewind:
                 own = self.tracking_state.rng_pre_states.get(exact_source_digest(cell_code))
                 if own is not None and dict(own[1]).get(module) == target_lineage:
                     # Where this cell started last time, under the same lineage.
-                    put_back(key, module, _with_companions(own[0], {module}), target_lineage)
+                    put_back(key, module, _with_companions(own[0], {module}), target_lineage, above)
                     return True
             entry = restored_states.get(source.code)
             if entry is not None and module in entry and codes_seen.get(source.code) == 1:
-                put_back(key, module, _with_companions(entry, {module}), target_lineage)
+                put_back(key, module, _with_companions(entry, {module}), target_lineage, above)
                 return True
             if module in source.bare_seed and self._inputs_ready(
                 above, stmts, in_plan, inserts, target_pos, inputs_at(above)
@@ -584,6 +590,16 @@ class RngRewind:
         if state:
             restore_rng_state(state, self.tracking_state.rng_live_states)
             self._name_positions(self._before_lineages.get(index, {}))
+
+    def named_from(self) -> dict[str, int]:
+        """``{RNG variable: cell}`` for each stream this check put back and
+        named: the cell of the statement that leaves it at that lineage in
+        a run. The stream holds another lineage above that cell, so no
+        snapshot of the simulation above it takes the name: given to the
+        snapshot of the seed's cell, the lineage after the first draw read
+        as the one before it, and that draw, run again, started from where
+        the second one starts."""
+        return dict(self._named_from)
 
     def _name_positions(self, lineages: dict[str, str]) -> None:
         """Give each stream just put back the lineage it has there in a run."""
