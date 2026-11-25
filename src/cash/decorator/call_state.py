@@ -224,6 +224,7 @@ class BodyRun:
         "first_call",
         "rng_new",
         "rng_drew",
+        "rng_unsure",
         "env_reads",
         "lib_reads",
         "warned",

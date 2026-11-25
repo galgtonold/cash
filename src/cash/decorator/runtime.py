@@ -1267,6 +1267,9 @@ class CallRunner:
         #: ``function name -> the registries`` a call of it changed
         #: (`_refuse_registries`).
         self._registry_writers: dict[str, str] = {}
+        #: ``function name -> the registries`` its last computed call found
+        #: changed without telling whether it or another thread did.
+        self._registry_unsure: dict[str, frozenset[str]] = {}
         #: func_name -> how many calls in a row ran code other than their
         #: key folded (`_code_swapped`).
         self._code_swaps: dict[str, int] = {}
@@ -2524,7 +2527,9 @@ class CallRunner:
             _record_held(run.args_before, (*args, *kwargs.values(), *(value for _, value in bound_values(func))))
         # And the registries the process keeps outside any variable: a hit
         # would not set ``np.seterr`` or a logger's level again.
-        run.registries = process_registries.snapshot()
+        # Read with the threads running beside this one: what one of them
+        # sets meanwhile is not the call's (`_refuse_registries`).
+        run.registries = process_registries.snapshot(threads=True)
         run.observer.registries = run.registries
         # And what the user's classes it can reach bind: a hit would not
         # bind ``Cfg.items`` again (`class_writes`).
@@ -2604,6 +2609,10 @@ class CallRunner:
             run.saves_seconds = run.body_seconds / max(threads_at_start, THREADS_IN_CALLS[0], 1)
             run.first_call = self._calls.credit.body_ran(func_name, run.saves_seconds)
             run.rng_drew = self._rng.drawn_streams(run.rng_pre)
+            # A stream every thread draws from: one that moved beside other
+            # threads is not yet taken as the call's own draw.
+            run.rng_unsure = self._rng.maybe_another_threads(func_name, run.rng_drew, run.registries)
+            run.rng_drew -= run.rng_unsure
             run.rng_new = self._rng.note_draw(func_name, run.rng_drew)
             run.carriers_moved = moved_carriers(run.carriers_pre)
             run.arg_carriers_moved = moved_carriers(run.arg_carriers_pre)
@@ -2744,6 +2753,13 @@ class CallRunner:
             file_deps=auto_file_deps,
             call_args=(args, kwargs),
         )
+        if refusal is None and run.rng_unsure:
+            # Stored, it would stand for every later call under a key no
+            # seed is part of, should the draw have been the call's.
+            refusal = (
+                "a global random stream moved while it ran beside other threads, so it cannot be told "
+                "whether the call drew from it"
+            )
         if refusal is None:
             refusal = swapped
         if refusal is None:
@@ -3064,17 +3080,44 @@ class CallRunner:
         ``atexit.register(f)`` (`process_registries`). A hit would not set
         it again, and a new process would find it unset. Every later call
         of the function too, also one that finds it set already: it still
-        sets it. ``assume_safe=True`` waives it, and so does a waiver where
-        the change is made: ``# @cash:assume-safe`` on its line or on the
-        ``def`` line of a function on the way, or a ``with
-        cash.assume_safe():`` block around it (`EffectObserver.open_waiver`)."""
+        sets it. A change that may be another thread's
+        (`process_registries.changed_by`) leaves this one call unstored and
+        the function as it was; made again on the next call that runs the
+        body, it is the function's. ``assume_safe=True`` waives it, and so
+        does a waiver where the change is made: ``# @cash:assume-safe`` on
+        its line or on the ``def`` line of a function on the way, or a
+        ``with cash.assume_safe():`` block around it
+        (`EffectObserver.open_waiver`)."""
         func_name = spec.name
         if self._registry.purity_mode(func_name) == "silent":
             return None
-        found = process_registries.changed(run.registries)
+        found, unsure = process_registries.changed_by(run.registries)
+        # Twice running, on computed calls one after the other: the call's.
+        if unsure or func_name in self._registry_unsure:
+            again = [name for name in unsure if name in self._registry_unsure.pop(func_name, ())]
+            if again:
+                found = [*found, *again]
+            elif unsure:
+                self._registry_unsure[func_name] = frozenset(unsure)
         if found:
             self._registry_writers[func_name] = "; ".join(found)
         what = self._registry_writers.get(func_name)
+        if what is None and unsure:
+            changed = "; ".join(unsure)
+            self._notices.warn_once(
+                CashCacheStoreFailedWarning,
+                func_name,
+                "registry_unsure",
+                f"@cash.cache on {func_name}: {changed} changed while the call was running, and other threads "
+                "were running too, so it cannot be told whether the call or one of them made the change. The "
+                "result was returned but not cached. If it changes again during the next call that runs the "
+                "function, the change is taken as the function's and its calls run uncached.",
+                code="STORE-STATE-CHANGED",
+                fix="nothing, if another thread made the change: later calls are cached. If the function "
+                "makes it, make it outside the cached function, or waive it with `# @cash:assume-safe` on "
+                "its line.",
+            )
+            return f"{changed} changed while it ran beside other threads: by the call or by one of them"
         if what is None:
             return None
         self._notices.warn_once(

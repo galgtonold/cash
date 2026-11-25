@@ -1038,7 +1038,7 @@ mutation, return a modified copy instead. If the effect is incidental (a log
 file, a temp file), put `# @cash:assume-safe` on the line the message names, or
 run the code in `with cash.assume_safe():`.
 
-<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @1938b99d -->
+<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @631605a3 -->
 A call that changes a process setting (`np.seterr`, a logger's level,
 `atexit.register`, `os.environ`) is not stored, and runs every time. Make
 the setting outside the cached function if you can. If a hit may skip it,
@@ -1047,7 +1047,9 @@ line or on the `def` line, or `with cash.assume_safe():` around it. A
 waiver around the call of the cached function does not reach into it
 ([details](how-it-works/decorator-path.md#side-effects)). In a notebook,
 `# @cash:assume-safe` on the statement that changes a process setting
-caches it.
+caches it. While other threads are running, a setting another thread
+changed is not blamed on the function
+([Threads and processes](tutorials/feature-guides/thread-safety.md#what-threads-share-and-what-each-call-keeps)).
 
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @987ecb33 -->
 **When it is safe to ignore.** When everything listed is bookkeeping nobody
@@ -2986,7 +2988,7 @@ functools.partial(setattr, points[7])` made in a cell above. Cash cannot
 tell which variable changes before the statement runs, so it takes every
 variable as changed: what reads any of them after it runs again.
 
-<!-- claim: cash/tracking/process_registries.py:snapshot @bdd98c66, cash/notebook/statement/processor.py:StatementProcessor._refuse_process_registries @69800c34, cash/tracking/process_registries.py:registering_imports @f4d937d7, cash/decorator/runtime.py:CallRunner._refuse_registries @1938b99d -->
+<!-- claim: cash/tracking/process_registries.py:snapshot @4475426d, cash/notebook/statement/processor.py:StatementProcessor._refuse_process_registries @69800c34, cash/tracking/process_registries.py:registering_imports @f4d937d7, cash/decorator/runtime.py:CallRunner._refuse_registries @631605a3 -->
 It names, too, a statement that registers something with the process, in
 its own text or in a function or library it calls: `atexit.register(flush)`,
 `signal.signal(...)`, `sys.excepthook = hook`, `sys.setprofile(...)`,
@@ -3157,7 +3159,7 @@ random source.
 first result is returned from then on, and clearing the cache or running on
 another machine gives a different frozen value.
 
-<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @6e1e1f8a, cash/tracking/randomness/detect.py:RandomnessDetector.analyze_code @4890c3ec -->
+<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @cdfa39c0, cash/tracking/randomness/detect.py:RandomnessDetector.analyze_code @4890c3ec -->
 In a notebook, a draw too cheap to cache is frozen too when it comes from the
 `random`, `numpy.random` or `torch` stream, because cash rewinds those streams
 before a re-run. A cheap draw from a generator held in a variable
@@ -3332,7 +3334,7 @@ The call succeeded, but its result was not written. Every code here starts `STOR
 | [STORE-PARTS-UNCHECKED](#store-parts-unchecked) | both | the result was too big to look through in time for a function sharing a part of it; not stored |
 | [STORE-REF-UNSUPPORTED](#store-ref-unsupported) | notebook | the value holds a variable's object in a form cash cannot keep as a reference (a bound method); not stored |
 | [STORE-RESULT-WRITTEN](#store-result-written) | both | a table kept uncopied was written past pandas after its store; entry dropped |
-| [STORE-STATE-CHANGED](#store-state-changed) | decorator | a global the key read changed during the call; not stored |
+| [STORE-STATE-CHANGED](#store-state-changed) | decorator | a global the key read, or a process setting, changed during the call beside other threads; not stored |
 | [STORE-WORK-RUNNING](#store-work-running) | both | work it handed to a thread or thread pool still ran when it returned; not stored |
 | [STORE-UNTRACKED-SOURCE](#store-untracked-source) | decorator | a cached function it calls has a dynamic source that cannot be pickled; kept in RAM only |
 
@@ -3577,7 +3579,7 @@ interrupted write.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/result_parts.py:split_by_a_hit @0ed503f3, cash/closure_sharing.py:closures_sharing @dd301eb1 -->
+<!-- claim: cash/decorator/result_parts.py:split_by_a_hit @9b1fd97b, cash/closure_sharing.py:closures_sharing @dd301eb1 -->
 **What happened.** The result holds two parts over the same memory: two
 numpy arrays whose data overlap, such as `return a, a[2:5]`, a numpy
 array and a polars or pandas frame made over it, such as
@@ -3686,15 +3688,27 @@ reloaded a config, say. The result was returned but not stored. The check
 runs only while other threads are running, not counting cash's own (or for
 a coroutine function).
 
+<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @631605a3, cash/tracking/process_registries.py:changed_by @cee9eb08 -->
+The same code is used when a setting the process keeps (a logger's level, a
+warnings filter, `sys.path`, the working directory, an interpreter hook)
+changed while the call was running and other threads were running too: cash
+cannot tell whether the function or one of those threads changed it. That
+call is not stored. If the setting changes again during the next call that
+runs the function, cash takes the change as the function's own and reports
+[IMPURE-OBSERVED-EFFECTS](#impure-observed-effects).
+
 **Why it matters.** The key was built from the old value and the body may have
 used the new one, so storing it could serve the wrong result to every later
-call with the old value.
+call with the old value. A setting the function itself makes would be skipped
+by a hit.
 
 **What to do.** Nothing, if the state was changed on purpose: the next call
 keys on the new value and caches normally. If calls overlap a writer all the
-time, pass the value in as an argument.
+time, pass the value in as an argument. If the function makes the setting
+itself, make it outside the cached function.
 
-**When it is safe to ignore.** Once, after a reload.
+**When it is safe to ignore.** Once, after a reload, or when another thread
+made the setting.
 
 ### STORE-WORK-RUNNING {#store-work-running}
 

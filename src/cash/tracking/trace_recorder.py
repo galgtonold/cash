@@ -466,15 +466,17 @@ HOST_THREADS: weakref.WeakSet[threading.Thread] = _weak.WeakSet()
 HOST_PACKAGES: set[str] = set()
 
 
-def _unlisted_python_thread(listed: set[int | None]) -> bool:
+def _unlisted_python_thread(listed: set[int | None], working: bool = False) -> bool:
     """Is a thread running Python that `threading` does not list, other
-    than cash's own and the host's (`_hosts_unlisted`)? No frame is held
+    than cash's own and the host's (`_hosts_unlisted`), and with *working*
+    a host's message channel (`works_for_no_call`)? No frame is held
     past the look: this thread's own, kept in a local, is a cycle that keeps
     every caller's locals alive until a collection, and the checks that
     count a value's holders would count them."""
     frames = sys._current_frames()
     try:
-        return any(ident not in listed and not _hosts_unlisted(frame) for ident, frame in frames.items())
+        hosts = works_for_no_call if working else _hosts_unlisted
+        return any(ident not in listed and not hosts(frame) for ident, frame in frames.items())
     finally:
         frames.clear()
 
@@ -561,7 +563,7 @@ def _kernel_code(t: threading.Thread) -> bool:
     return _named(plain_getattr(target, "__func__", target)) in _KERNEL_THREADS
 
 
-def other_thread_alive(notebook_ns: Any) -> bool:
+def other_thread_alive(notebook_ns: Any, working: bool = False) -> bool:
     """Might another thread change a value between two checks that read it,
     so that a digest one took cannot stand for the other: any live thread
     but this one, cash's own (by the code it runs; a Timer by its function)
@@ -570,11 +572,16 @@ def other_thread_alive(notebook_ns: Any) -> bool:
     which `runs_user_code` cannot see, and a wrong yes only costs a read
     again. A thread a C library started (an audio or device callback) runs
     Python unlisted by `threading`: any thread running Python that it does
-    not list counts too."""
+    not list counts too.
+
+    *working*: might another thread do some of the program's work, so that
+    a change to what the process keeps (a setting, a random stream) can be
+    its doing? The same, less a host's message channel
+    (`works_for_no_call`), which runs its protocol alone."""
     me = threading.current_thread()
     threads = threading.enumerate()
     listed = {t.ident for t in threads}
-    if _unlisted_python_thread(listed):
+    if _unlisted_python_thread(listed, working):
         return True
     for t in threads:
         if t is me or t in HOST_THREADS or not t.is_alive():
