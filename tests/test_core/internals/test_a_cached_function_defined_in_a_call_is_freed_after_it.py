@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import gc
 import types
+import weakref
 
 import pytest
 
@@ -22,7 +23,9 @@ ROUNDS = 60
 
 def _alive(code_name: str) -> int:
     gc.collect()
-    return sum(1 for o in gc.get_objects() if isinstance(o, types.FunctionType) and o.__code__.co_name == code_name)
+    # By exact type: ``isinstance`` asks an object for its class, and a
+    # ``weakref.proxy`` another test left behind, its object gone, raises.
+    return sum(1 for o in gc.get_objects() if type(o) is types.FunctionType and o.__code__.co_name == code_name)
 
 
 def _grows(code_name: str, once) -> int:
@@ -124,7 +127,7 @@ def test_the_same_functions_decorated_again_and_again(cash):
     assert _grows("made_inner", process) == 0
     gc.collect()
     wrappers = [
-        o for o in gc.get_objects() if isinstance(o, types.FunctionType) and getattr(o, "__wrapped__", None) in plain
+        o for o in gc.get_objects() if type(o) is types.FunctionType and getattr(o, "__wrapped__", None) in plain
     ]
     assert len(wrappers) <= 3 * len(plain), f"{len(wrappers)} wrappers of 4 functions are alive"
 
@@ -153,3 +156,14 @@ def test_a_caller_still_finds_a_live_callees_remembered_hits(cash):
     assert calls.count(("outer", 1)) == 1
     inner.cache_clear()
     assert outer(1) == 4
+
+
+def test_the_count_passes_over_a_dead_proxy_another_test_left():
+    class Gone:
+        pass
+
+    gone = Gone()
+    left = [weakref.proxy(gone)]  # in a list the collector lists
+    del gone
+    assert _alive("no_function_has_this_name") == 0
+    assert left
