@@ -9,7 +9,9 @@ runs :class:`RunInstead`'s source instead of the cell.
 
 from __future__ import annotations
 
+import ast
 import logging
+import os
 import sys
 from collections.abc import Callable
 from typing import TYPE_CHECKING
@@ -331,7 +333,8 @@ class UpstreamResolution:
                 pass
             self._badges.close(badge_display_id, status="BYPASSED")
             return RunInstead(raw_cell, caught)
-        if isinstance(caught, (RuntimeError, AmbiguousCellError, UpstreamStateError)):
+        too_deep = _analysis_ran_out_of_stack(caught)
+        if isinstance(caught, (RuntimeError, AmbiguousCellError, UpstreamStateError)) and not too_deep:
             # Re-raise inside the user's cell so IPython renders the traceback
             # as if the cell itself raised.  Import the exception class
             # explicitly because the user's namespace may not have it.  The
@@ -362,6 +365,29 @@ class UpstreamResolution:
         # With the traceback: this message asks the user to report the failure,
         # and "ModuleNotFoundError: No module named 'openpyxl'" on its own says
         # nothing about where in cash it came from.
+        if too_deep:
+            # Not the cell's error and not a fault to report: Python runs an
+            # expression nested this deep, and cash's walk of it does not.
+            # The cell runs as written, uncached, and says why.
+            logger.debug("analysis ran out of stack", exc_info=caught)
+            try:
+                warn_diagnostic(
+                    CashCacheIneffectiveWarning,
+                    "NOTEBOOK-BAILOUT",
+                    what=(
+                        "this cell ran normally but was NOT cached, and neither were its results: a "
+                        "statement of the notebook is nested too deep for cash to analyse (a very long "
+                        "chain of operators, calls or elif branches)."
+                    ),
+                    fix=(
+                        "Nothing is wrong with the result. To have the cell cached, write the long "
+                        "expression in parts (a sum over a list, a loop, a lookup in a dict)."
+                    ),
+                )
+            except Exception:  # noqa: BLE001 - a diagnostic must never break a cell
+                pass
+            self._badges.close(badge_display_id, status="BYPASSED")
+            return RunInstead(raw_cell, caught)
         logger.error("Cash auto-caching failed: %s. Falling back to normal execution.", caught, exc_info=caught)
         try:
             warn_diagnostic(
@@ -382,3 +408,21 @@ class UpstreamResolution:
             pass
         self._badges.close(badge_display_id, status="BYPASSED")
         return RunInstead(raw_cell, caught)
+
+
+#: Where a walk of a syntax tree runs: cash's own code and Python's ``ast``.
+_ANALYSIS_CODE = (os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) + os.sep, ast.__file__)
+
+
+def _analysis_ran_out_of_stack(caught: BaseException) -> bool:
+    """Is *caught* a RecursionError raised while cash walked a statement's
+    syntax tree (in cash's code or in ``ast.unparse``), not one the user's
+    code raised when a statement above was run again?"""
+    if not isinstance(caught, RecursionError):
+        return False
+    tb = caught.__traceback__
+    if tb is None:
+        return False
+    while tb.tb_next is not None:
+        tb = tb.tb_next
+    return tb.tb_frame.f_code.co_filename.startswith(_ANALYSIS_CODE)
