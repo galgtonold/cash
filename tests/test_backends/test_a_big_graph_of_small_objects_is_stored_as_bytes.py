@@ -172,38 +172,54 @@ def test_a_miss_pickles_it_once_and_neither_walks_nor_copies_it(tmp_path, trie_m
 
 @pytest.mark.timeout(600)
 def test_a_miss_stores_it_in_a_few_times_its_pickle(tmp_path, trie_module):
+    """What a miss adds to its body, against a pickle of what it returned.
+
+    Both are this thread's CPU time (`time.thread_time`): a runner busy with
+    other processes stretches the wall clock of one more than the other
+    (the ratio went from 2.4 to 1.1 and 6 between misses, with six busy
+    processes on four cores), not the CPU time either takes. The body is
+    timed inside the call that stores it, not as a second build: building
+    the trie is mostly garbage collection, which took 0.2 s one time and
+    0.7 s the next. The pickle is of the very value stored, right after."""
     cash = Cash(cache_dir=str(tmp_path / "cache"), register_magic=False)
     words = trie_module.words(72_000)
+    body = []
 
     @cash.cache(assume_safe=True)
     def build(n):
-        return trie_module.Trie(words[:n])
+        started = time.thread_time()
+        out = trie_module.Trie(words[:n])
+        body.append(time.thread_time() - started)
+        return out
 
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        build(10)  # the function's first call, keyed and stored while small
     # It was over 10 (4.7 s for a 0.45 s pickle). With the C extension
-    # 2.3; without it the renaming of attribute names is a Python call per
-    # node, 3.4 to 4 (on Python 3.10, whose pickle is slower, 2 to 2.7).
+    # about 2.5: the store's own pickle (1.3, through `kept_state`'s
+    # reducers) and the looks through the value for an id() or a closure
+    # it holds (about 1 together). Without the extension the renaming of
+    # attribute names is a Python call per node.
     bound = 3.0 if getattr(_native.kernels, "reduce_apart", None) is not None else 5.0
-    # The best of a few misses: a loaded runner (5.2 once on Windows 3.10)
-    # slows one, not all; a store that does more work is slower in every
-    # one. The work itself is counted above.
-    ratios = []
+    stores, pickles = [], []
     for n in range(len(words), len(words) - 6, -1):
-        started = time.perf_counter()
-        plain = trie_module.Trie(words[:n])
-        built = time.perf_counter() - started
-        started = time.perf_counter()
-        pickle.dumps(plain, protocol=5)
-        pickled = time.perf_counter() - started
-        del plain
+        body.clear()
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            started = time.perf_counter()
-            build(n)
-            missed = time.perf_counter() - started
-        ratios.append((missed - built) / pickled)
-        if len(ratios) >= 3 and min(ratios) < bound:
+            started = time.thread_time()
+            trie = build(n)
+            missed = time.thread_time() - started
+        assert len(body) == 1, "a miss runs the body once"
+        stores.append(missed - body[0])
+        started = time.thread_time()
+        pickle.dumps(trie, protocol=5)
+        pickles.append(time.thread_time() - started)
+        del trie
+        # The best of each: what stretches one sample (a page fault, a
+        # cache another core emptied) adds to it, and never takes away.
+        if len(stores) >= 3 and min(stores) < bound * min(pickles):
             break
-    assert min(ratios) < bound, ratios
+    assert min(stores) < bound * min(pickles), (stores, pickles)
 
 
 def test_its_size_is_the_bytes_kept_and_a_hit_is_its_own(trie_module):
