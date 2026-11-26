@@ -461,8 +461,15 @@ class StoredKeyRecord:
 
     def _remember(self, path: str, st: os.stat_result, data: Any) -> Doc:
         doc = _as_doc(data)
+        stamp = _stamp(st)
         with self._lock:
-            self._memo[path] = (_stamp(st), doc)
+            memo = self._memo.get(path)
+            if memo is not None and memo[0] == stamp:
+                # The same file, kept meanwhile (this process's write that
+                # just landed): its record stays the one a view is built on.
+                doc = memo[1]
+            else:
+                self._memo[path] = (stamp, doc)
             self._checked[path] = time.monotonic()
         return doc
 
@@ -715,11 +722,18 @@ class StoredKeyRecord:
                     replace_with_retry(tmp, path)
                     st = os.stat(path)
                 written = _as_doc(doc)
+                stamp = _stamp(st)
                 with self._lock:
+                    # A miss that read the file between the rename and this
+                    # step kept it already: the same record, and a view built
+                    # on it holds this write's changes as one built on *base*.
+                    read = self._memo.get(path)
+                    if read is not None and read[0] == stamp:
+                        written = read[1]
                     # What this process just wrote is what its next miss
                     # reads, and the view moves onto it in the same step: a
                     # miss never finds the one without the other.
-                    self._memo[path] = (_stamp(st), written)
+                    self._memo[path] = (stamp, written)
                     self._checked[path] = time.monotonic()
                     self._published[path] = self._published.get(path, 0) + 1
                     # Written: no longer to lay over the record.
@@ -730,7 +744,7 @@ class StoredKeyRecord:
                     # after it build the view again.
                     view = self._views.get(path)
                     if view is not None:
-                        if view.disk is base:
+                        if view.disk is base or view.disk is written:
                             view.rebase(written, self._pending.get(path))
                         else:
                             del self._views[path]

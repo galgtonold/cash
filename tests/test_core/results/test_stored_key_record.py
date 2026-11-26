@@ -277,3 +277,35 @@ def test_a_write_landing_while_a_miss_reads_the_record_is_in_its_answer(tmp_path
     record.miss_facts("mod.f", "mod.f:s:d:a2")
     assert len(built) <= 1, f"the view was built {len(built)} times"
     record.close()
+
+
+def test_a_miss_reading_the_file_a_write_just_renamed_keeps_its_view(tmp_path, monkeypatch):
+    """A miss reads the record after a write renamed its file into place but
+    before the write took it as the record: the miss builds the view on that
+    file once, and the write moves this view onto what it wrote instead of
+    dropping it for the next miss to build again."""
+    from cash.decorator.stored_keys import facts_from_doc
+
+    monkeypatch.setattr(StoredKeyRecord, "WRITE_INTERVAL", 3600.0)  # written only when the test says
+    record = StoredKeyRecord(lambda: str(tmp_path))
+    record.miss_facts("mod.f", "mod.f:s:d:a0")  # the view, on no file yet
+    record.note_ram_only("mod.f", "mod.f:s:d:a0", "under the floor", _no_ledger)  # noted, written by `flush`
+    built = []
+    real_view = stored_keys._View.__init__
+    monkeypatch.setattr(stored_keys._View, "__init__", lambda self, *a: (built.append(1), real_view(self, *a))[1])
+    real_replace = stored_keys.replace_with_retry
+    answers = []
+
+    def replace_then_miss(tmp, path):
+        real_replace(tmp, path)
+        answers.append(record.miss_facts("mod.f", "mod.f:s:d:a1"))  # the file renamed, the write not taken yet
+
+    monkeypatch.setattr(stored_keys, "replace_with_retry", replace_then_miss)
+    record.flush()
+    monkeypatch.setattr(stored_keys, "replace_with_retry", real_replace)
+    assert answers == [facts_from_doc(record.read("mod.f"), "mod.f:s:d:a1")]
+    for i in range(2, 6):
+        key = f"mod.f:s:d:a{i}"
+        assert record.miss_facts("mod.f", key) == facts_from_doc(record.read("mod.f"), key)
+    assert len(built) <= 1, f"the view was built {len(built)} times"
+    record.close()
