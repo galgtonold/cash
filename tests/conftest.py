@@ -972,6 +972,27 @@ def pytest_runtest_logstart(nodeid, location):
     _STALL_WATCHDOG.poke(f"started {nodeid}")
 
 
+@pytest.hookimpl(hookwrapper=True, optionalhook=True)
+def pytest_timeout_set_timer(item, settings):
+    """pytest-timeout's timer, where it times a test by a thread (its only
+    way on Windows, which has no SIGALRM), is the test run's own: it
+    changes no value of the test's (`trace_recorder.HOST_THREADS`).
+
+    Counted, it was a thread that may do the program's work, alive through
+    every test, and cash cannot read off Linux that it sat idle: on
+    Windows every change a cached call made to a process setting or a
+    random stream was left undecided (STORE-STATE-CHANGED) instead of
+    blamed on the call, and the waiver, unseeded draw and seed purity
+    tests failed in every run there.
+    """
+    yield
+    from cash.tracking import trace_recorder
+
+    for thread in threading.enumerate():
+        if isinstance(thread, threading.Timer) and getattr(thread.function, "__module__", None) == "pytest_timeout":
+            trace_recorder.HOST_THREADS.add(thread)
+
+
 def pytest_runtest_setup(item):
     """Give a test that declares a long ``timeout`` mark that much silence.
 
