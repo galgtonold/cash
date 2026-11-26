@@ -14,7 +14,13 @@ from tests._cell_driver import run_cash_cell
 
 CODE = "NOTEBOOK-THREAD-ALIVE"
 
-SETUP = "import threading, concurrent.futures\nstop = threading.Event()\ndef work():\n    stop.wait(10)"
+# The thread waits for `_stop`, which every test calls, not for a time of its
+# own: it must still run when its cell ends, however long cash's checks after
+# the cell's statements take. 10 s ran out on a macOS worker whose heap had
+# grown over thousands of tests, where a statement's holder search took 30 s;
+# the thread had ended, rightly unnamed. The bound only keeps the thread, not
+# a daemon, from holding the process open should a test end without `_stop`.
+SETUP = "import threading, concurrent.futures\nstop = threading.Event()\ndef work():\n    stop.wait(600)"
 LEFT_RUNNING = "t = threading.Thread(target=work, name='filler')\nt.start()"
 JOINED = "stop.set()\nt2 = threading.Thread(target=work, name='joined')\nt2.start()\nt2.join()"
 NO_THREAD = "x = 1 + 1"
