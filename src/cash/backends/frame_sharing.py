@@ -2150,22 +2150,35 @@ def _unaccounted(blocks: list[Any], root_ref: Any) -> bool:
     return False
 
 
+#: Before Python 3.13 (PEP 667) reading a function frame's ``f_locals``
+#: fills a dict the frame keeps until it returns: each local then has a
+#: second reference, the dict's, besides its slot's (a cell variable's slot
+#: holds the cell, so its value has the dict's alone).
+_LOCALS_COPIED = sys.version_info < (3, 13)
+_CO_OPTIMIZED = 0x1  # inspect.CO_OPTIMIZED: a function frame, its locals in slots
+
+
 def _credit_locals(
     frame: Any, objects: dict[int, Any], counted: dict[int, int], views: dict[int, list[Any]] | None
 ) -> None:
     """Credit the references *frame*'s locals hold to *objects*: one per
-    slot holding one of them. With *views*, also note each slot holding a
-    numpy view of one of them (`_credit_views`)."""
+    slot holding one of them, and one more for the copy of the locals an
+    older Python keeps once they are read (`_LOCALS_COPIED`). With *views*,
+    also note those holding a numpy view of one of them (`_credit_views`)."""
     import numpy as np
 
-    for value in list(frame.f_locals.values()):
+    code = frame.f_code
+    copied = _LOCALS_COPIED and bool(code.co_flags & _CO_OPTIMIZED)
+    cells = frozenset(code.co_cellvars + code.co_freevars) if copied else frozenset()
+    for name, value in list(frame.f_locals.items()):
+        refs = 2 if copied and name not in cells else 1
         if objects.get(id(value)) is value:
-            counted[id(value)] = counted.get(id(value), 0) + 1
+            counted[id(value)] = counted.get(id(value), 0) + refs
         elif (
             views is not None and isinstance(value, np.ndarray) and value.base is not None and id(value.base) in objects
         ):
             noted = views.setdefault(id(value), [value, 0])
-            noted[1] += 1
+            noted[1] += refs
 
 
 #: Python 3.14 can hand a local to a call without a reference of its own

@@ -35,6 +35,7 @@ import weakref
 from typing import Any
 
 from .. import _weak
+from .._frame_locals import frame_local
 from .._gc_context import collecting
 from .._type_memo import class_name
 from .._user_attrs import plain_getattr
@@ -359,7 +360,7 @@ class Recorder:
             unit.notes.add("other_thread")
         if code.co_argcount and code.co_varnames[0] in ("self", "cls"):
             try:
-                recv = frame.f_locals.get(code.co_varnames[0])
+                recv = frame_local(frame, code.co_varnames[0])
             except Exception:  # noqa: BLE001 - a frame whose locals cannot be read has no receiver
                 recv = None
             if recv is not None:
@@ -407,7 +408,7 @@ def note_finalizer(units: Any, frame: Any) -> None:
     (a module's function: ``os.close``, a temporary folder's cleanup) are
     not the user's."""
     try:
-        info = weakref.finalize._registry.get(frame.f_locals.get("self"))  # type: ignore[attr-defined]
+        info = weakref.finalize._registry.get(frame_local(frame, "self"))  # type: ignore[attr-defined]
     except Exception:  # noqa: BLE001 - a frame whose locals cannot be read: nothing known to note
         return
     func = getattr(info, "func", None) if info is not None else None

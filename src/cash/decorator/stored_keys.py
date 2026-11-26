@@ -289,6 +289,17 @@ if hasattr(os, "register_at_fork"):  # not on Windows, which cannot fork
     os.register_at_fork(after_in_child=_reset_after_fork_in_child)
 
 
+def _as_doc(data: Any) -> Doc:
+    """The record kinds of *data*, a record as JSON reads it."""
+    doc = _empty()
+    if isinstance(data, dict):
+        for kind in _KINDS:
+            value = data.get(kind)
+            if isinstance(value, dict):
+                doc[kind] = value
+    return doc
+
+
 def _stamp(st: os.stat_result) -> tuple[int, int, int, int]:
     """What moves when another process rewrites a record: it writes by
     rename, so the inode does even inside one mtime tick."""
@@ -325,6 +336,10 @@ class StoredKeyRecord:
         self._checked: dict[str, float] = {}
         # path -> its `_View`, kept while it is in use (`miss_facts`).
         self._views: dict[str, _View] = {}
+        # path -> how many writes of this process have replaced the memo
+        # and rebased the view (`_write_now`): a miss that read the record
+        # across one reads it again (`miss_facts`).
+        self._published: dict[str, int] = {}
         self._pending: dict[str, _Changes] = {}
         # Taken by a write in progress; still part of what `read` answers.
         self._writing: dict[str, _Changes] = {}
@@ -392,13 +407,22 @@ class StoredKeyRecord:
         path = self.path(func_name)
         if path is None:
             return facts_from_doc(_empty(), cache_key)
-        disk_doc = self._disk_doc(path, self.WRITE_INTERVAL)  # the file, as `read` sees it
-        with self._lock:
-            view = self._views.get(path)
-            if view is None or view.disk is not disk_doc:
-                overlays = [c for c in (self._writing.get(path), self._pending.get(path)) if c is not None]
-                view = self._views[path] = _View(disk_doc, overlays)
-            return view.facts(cache_key)
+        while True:
+            with self._lock:
+                published = self._published.get(path, 0)
+            disk_doc = self._disk_doc(path, self.WRITE_INTERVAL)  # the file, as `read` sees it
+            with self._lock:
+                if self._published.get(path, 0) != published:
+                    # A write of this process landed meanwhile: *disk_doc*
+                    # may be the file before it, and the changes it wrote
+                    # are in no overlay any more. Built on them, the view
+                    # would answer without them, and be built again.
+                    continue
+                view = self._views.get(path)
+                if view is None or view.disk is not disk_doc:
+                    overlays = [c for c in (self._writing.get(path), self._pending.get(path)) if c is not None]
+                    view = self._views[path] = _View(disk_doc, overlays)
+                return view.facts(cache_key)
 
     def _read_disk(self, path: str, *, recheck_after: float = 0.0) -> Doc:
         """The record on disk, through a memo on its (mtime, size) (a copy).
@@ -436,12 +460,7 @@ class StoredKeyRecord:
         return self._remember(path, st, data)
 
     def _remember(self, path: str, st: os.stat_result, data: Any) -> Doc:
-        doc = _empty()
-        if isinstance(data, dict):
-            for kind in _KINDS:
-                value = data.get(kind)
-                if isinstance(value, dict):
-                    doc[kind] = value
+        doc = _as_doc(data)
         with self._lock:
             self._memo[path] = (_stamp(st), doc)
             self._checked[path] = time.monotonic()
@@ -694,9 +713,17 @@ class StoredKeyRecord:
                     with open(tmp, "w", encoding="utf-8") as fh:
                         json.dump({"func": changes.func, **doc}, fh)
                     replace_with_retry(tmp, path)
-                    # What this process just wrote is what its next miss reads.
-                    written = self._remember(path, os.stat(path), doc)
+                    st = os.stat(path)
+                written = _as_doc(doc)
                 with self._lock:
+                    # What this process just wrote is what its next miss
+                    # reads, and the view moves onto it in the same step: a
+                    # miss never finds the one without the other.
+                    self._memo[path] = (_stamp(st), written)
+                    self._checked[path] = time.monotonic()
+                    self._published[path] = self._published.get(path, 0) + 1
+                    # Written: no longer to lay over the record.
+                    self._writing.pop(path, None)
                     # The view of the file as it was, with these changes,
                     # is the view of the file as it is, but for the keys
                     # the write let go: a write a second made every miss

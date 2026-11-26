@@ -12,6 +12,7 @@ import re
 import shutil
 import sys
 import tempfile
+import threading
 import time
 import types
 from pathlib import Path
@@ -283,6 +284,7 @@ from cash import Cash
 from cash.backends import FileBackend, InMemoryBackend
 from cash.notebook.ipython.magics import CashMagics
 from tests import _between_tests
+from tests._moto import stop_fsspec_io_thread
 
 _between_tests.track_cash_exit_work()
 
@@ -544,6 +546,51 @@ def _io_watch_held_no_longer_than_the_test():
     yield
     for left in releasers() - before:
         left()
+
+
+@pytest.fixture(autouse=True)
+def _no_library_thread_kept_after_the_test():
+    """Stop the threads a library keeps for the process once a test
+    started them: tqdm's monitor (``TMonitor``), started with the first
+    progress bar, joblib's reusable loky executor (its manager and queue
+    feeder threads), started by the first ``Parallel(n_jobs=...)``, and
+    fsspec's IO loop, started by the first s3fs call (cash's own, asking a
+    remote object's token before a read, among them).
+
+    cash counts such a thread as one that may do the program's work, and
+    only on Linux can it read that it sat idle, so on Windows and macOS
+    every later test of the worker had a change to a process setting or a
+    random stream left undecided (STORE-STATE-CHANGED) instead of blamed
+    on the call. The next bar, ``Parallel`` or s3fs call starts them again.
+    A loop a module's fixture started before the test is left to it.
+    """
+    asyn = sys.modules.get("fsspec.asyn")
+    fsspec_loop = asyn.loop[0] if asyn is not None else None
+    yield
+    asyn = sys.modules.get("fsspec.asyn")
+    if asyn is not None and fsspec_loop is None and asyn.loop[0] is not None:
+        stop_fsspec_io_thread()
+    if "tqdm" in sys.modules:
+        for thread in threading.enumerate():
+            if type(thread).__module__ == "tqdm._monitor" and type(thread).__name__ == "TMonitor":
+                thread.exit()
+                owner = getattr(thread, "tqdm_cls", None)
+                if owner is not None and getattr(owner, "monitor", None) is thread:
+                    owner.monitor = None
+    loky = sys.modules.get("joblib.externals.loky.reusable_executor")
+    if loky is not None and getattr(loky, "_executor", None) is not None:
+        # Its queues' feeder threads end after the shutdown returns.
+        feeders = [t for t in threading.enumerate() if _runs_loky_code(t)]
+        with loky._executor_lock:
+            executor, loky._executor = loky._executor, None
+        executor.shutdown(wait=True, kill_workers=True)
+        for thread in feeders:
+            thread.join(timeout=10)
+
+
+def _runs_loky_code(thread: threading.Thread) -> bool:
+    target = getattr(thread, "_target", None)
+    return str(getattr(target, "__module__", "")).startswith("joblib.externals.loky.")
 
 
 #: The process's own ``__main__``, as pytest started it.
@@ -923,6 +970,27 @@ def pytest_collection_finish(session):
 
 def pytest_runtest_logstart(nodeid, location):
     _STALL_WATCHDOG.poke(f"started {nodeid}")
+
+
+@pytest.hookimpl(hookwrapper=True, optionalhook=True)
+def pytest_timeout_set_timer(item, settings):
+    """pytest-timeout's timer, where it times a test by a thread (its only
+    way on Windows, which has no SIGALRM), is the test run's own: it
+    changes no value of the test's (`trace_recorder.HOST_THREADS`).
+
+    Counted, it was a thread that may do the program's work, alive through
+    every test, and cash cannot read off Linux that it sat idle: on
+    Windows every change a cached call made to a process setting or a
+    random stream was left undecided (STORE-STATE-CHANGED) instead of
+    blamed on the call, and the waiver, unseeded draw and seed purity
+    tests failed in every run there.
+    """
+    yield
+    from cash.tracking import trace_recorder
+
+    for thread in threading.enumerate():
+        if isinstance(thread, threading.Timer) and getattr(thread.function, "__module__", None) == "pytest_timeout":
+            trace_recorder.HOST_THREADS.add(thread)
 
 
 def pytest_runtest_setup(item):

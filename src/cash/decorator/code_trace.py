@@ -82,6 +82,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Any
 
 from .. import _weak
+from .._frame_locals import frame_local
 from .._gc_context import collecting
 from .._memo import CODE_OBJECTS, LruMemo
 from .._own_work import inside as own_work_inside
@@ -703,7 +704,7 @@ def _recorder_class() -> type:
 
         def _note_key_now(self, code: types.CodeType, frame: Any, units: list[Any]) -> None:
             try:
-                key = frame.f_locals.get(self.keyed_codes[code])
+                key = frame_local(frame, self.keyed_codes[code])
             except Exception:  # noqa: BLE001 - fails closed: unreadable: the whole dict is checked
                 key = None
             if not isinstance(key, str):
@@ -1020,7 +1021,6 @@ def _recorder_class() -> type:
             in `site_codes`, which notes its sites itself), where it was
             called from, which tells whether its instance is new
             (`out_arguments.site_constructs`)."""
-            f_locals = frame.f_locals
             init = code.co_name == "__init__" and not is_site
             site = None
             if init:
@@ -1036,7 +1036,7 @@ def _recorder_class() -> type:
                 if targets is None:
                     targets = unit.attr_targets[code] = {}
                 for name in params:
-                    obj = f_locals.get(name)
+                    obj = frame_local(frame, name)
                     refs = targets.get(name)
                     if refs is not None:
                         ref = refs.get(id(obj))
@@ -1090,7 +1090,7 @@ def _recorder_class() -> type:
             recv = None
             if code.co_argcount and code.co_varnames[0] in ("self", "cls"):
                 try:
-                    recv = frame.f_locals.get(code.co_varnames[0])
+                    recv = frame_local(frame, code.co_varnames[0])
                 except Exception:  # noqa: BLE001 - fails closed: a frame whose locals cannot be read has no receiver
                     recv = None
             cells = surface_cells = None
@@ -1163,8 +1163,7 @@ def _recorder_class() -> type:
             if not roots:
                 return
             try:
-                f_locals = frame.f_locals
-                held = {name: f_locals.get(name) for name in roots}
+                held = {name: frame_local(frame, name) for name in roots}
             except Exception:  # noqa: BLE001 - fails open: unreadable locals: the modules a closure reaches are not followed
                 return
             # Not a class: ``isinstance`` would ask it for its ``__class__``,
@@ -1502,7 +1501,7 @@ def _last_argument(code: types.CodeType, offset: int, frame: Any) -> str | None:
     if how == "const":
         value = what
     elif how == "local":
-        value = frame.f_locals.get(what)
+        value = frame_local(frame, what)
     else:
         value = frame.f_globals.get(what, builtins.__dict__.get(what))
     return value if isinstance(value, str) else None
