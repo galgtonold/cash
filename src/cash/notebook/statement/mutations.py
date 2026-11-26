@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from cash.analysis.ast_util import walk_tree
 from cash.analysis.cacheability_decision import receiver_is_identity_coupled
+from cash.analysis.callee_effects import iterated_sources
 from cash.analysis.mutation_effects import (
     classify_receivers,
     comprehension_watch_candidates,
@@ -398,8 +399,10 @@ class MutationClassifier:
         names = set(call_arguments(tree, user_ns) | watched | handed) - outputs
         # A name a statement that keeps nothing hands on in any form (in a
         # list, to a lambda given to ``map``) is not kept-only: that
-        # statement is there for what it does.
-        return names, names - bare_call_arguments(tree, user_ns) - watched - _named_where_nothing_is_kept(tree)
+        # statement is there for what it does. Nor is one whose items a
+        # lambda or comprehension of the statement calls a method on.
+        acted_on = _named_where_nothing_is_kept(tree) | _items_a_method_is_called_on(tree)
+        return names, names - bare_call_arguments(tree, user_ns) - watched - acted_on
 
     def magic_snapshots(self, node: ast.stmt, code: str) -> dict[str, str | None] | None:
         """Before the magic statement *node* (*code*) runs: the fingerprint
@@ -623,3 +626,93 @@ def _named_where_nothing_is_kept(tree: ast.Module | None) -> set[str]:
         for node in ast.walk(stmt)
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
     }
+
+
+_COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+
+
+def _method_roots(parts: list[ast.expr]) -> set[str]:
+    """The names *parts* call a method on, reached through attributes,
+    subscripts and calls: ``c`` in ``c.fetch()``, ``s`` in
+    ``s["tracker"].inc()`` and in ``s.cursor().execute(q)``."""
+    roots: set[str] = set()
+    for part in parts:
+        for node in walk_tree(part):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            root: ast.AST = node.func.value
+            while isinstance(root, (ast.Attribute, ast.Subscript, ast.Call)):
+                root = root.func if isinstance(root, ast.Call) else root.value
+            if isinstance(root, ast.Name):
+                roots.add(root.id)
+    return roots
+
+
+def _loaded_names(nodes: list[Any]) -> set[str]:
+    return {
+        sub.id
+        for node in nodes
+        for sub in walk_tree(node)
+        if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load)
+    }
+
+
+def _handed_to_lambda(function: ast.Lambda, parents: dict[ast.AST, ast.AST], tree: ast.Module) -> set[str]:
+    """The names whose values, or items of them, *function* is called on as
+    far as the statement's text says: the other arguments of the call it is
+    handed to (``map(lambda c: c.read(), handles)``, ``sorted(conns,
+    key=lambda c: c.touch())``), or the arguments it is called with on the
+    spot. Handed on any other way (inside a dict, bound to a name first),
+    every name the statement reads."""
+    parent = parents.get(function)
+    if isinstance(parent, ast.keyword):
+        parent = parents.get(parent)
+    if isinstance(parent, ast.Call):
+        arguments = [*parent.args, *(kw.value for kw in parent.keywords)]
+        return _loaded_names([arg for arg in arguments if arg is not function])
+    return _loaded_names(list(tree.body))
+
+
+def _items_a_method_is_called_on(tree: ast.Module | None) -> set[str]:
+    """The names a lambda or comprehension of *tree* calls a method on,
+    itself or item by item: ``conns`` in ``rows = [c.fetch() for c in
+    conns]``, ``handles`` in ``r = list(map(lambda c: c.read(), handles))``,
+    ``state`` in ``list(map(lambda s: s["tracker"].inc(), [state]))``.
+
+    Such a statement works on each item where a plain call
+    (``rows = fetch(conn)``, ``r = f([conn])``) hands its argument to code
+    that returns an answer. An item cash cannot fingerprint is then taken
+    as changed, as it is when the statement keeps nothing
+    (`_named_where_nothing_is_kept`), not as only read."""
+    if tree is None:
+        return set()
+    found: set[str] = set()
+    iterated: dict[str, frozenset[str]] | None = None
+    parents: dict[ast.AST, ast.AST] | None = None
+    for node in walk_tree(tree):
+        if isinstance(node, ast.Lambda):
+            parts = [node.body]
+        elif isinstance(node, _COMPREHENSIONS):
+            parts = [node.key, node.value] if isinstance(node, ast.DictComp) else [node.elt]
+            for generator in node.generators:
+                parts.extend(generator.ifs)
+        else:
+            continue
+        roots = _method_roots(parts)
+        if not roots:
+            continue
+        if iterated is None:
+            iterated = iterated_sources(tree)
+        # A comprehension's target stands for what it iterates.
+        acted_on: set[str] = set()
+        for root in roots:
+            acted_on |= iterated.get(root, frozenset({root}))
+        found |= acted_on
+        if isinstance(node, ast.Lambda):
+            args = node.args
+            every = (*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg)
+            if acted_on & {arg.arg for arg in every if arg is not None}:
+                if parents is None:
+                    parents = {child: parent for parent in walk_tree(tree) for child in ast.iter_child_nodes(parent)}
+                found |= _handed_to_lambda(node, parents, tree)
+    return found

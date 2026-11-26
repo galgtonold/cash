@@ -148,7 +148,16 @@ A method call has no assignment target, so cash classifies its object:
   a comprehension or a lambda hands to a library function
   (`[heapq.heappush(h, x) for x in xs]`: `h`), and a global that a function of
   your own, or a method of one of your classes, hands to one (`def push(x):
-  heapq.heappush(H, x)`: `H`). A
+  heapq.heappush(H, x)`: `H`). An object that
+  cannot be fingerprinted, such as a database connection or one holding a
+  lock, is taken as only read by a call whose result is kept (`rows =
+  fetch(conn)`, `r = f([conn])`), or every statement over a connection would
+  run every time. It counts as changed when the statement keeps nothing
+  (`bump(state)`, `list(map(lambda s: s.inc(), [state]))`), and when a lambda
+  or a comprehension in the statement calls a method on it or on its items,
+  whether or not the result is kept (`rows = [c.fetch() for c in conns]`,
+  `r = list(map(lambda c: c.read(), handles))`): such a statement runs every
+  time. A
   statement whose record says it changed nothing is fingerprinted again when it
   runs on inputs not seen before in the session. There one that cannot be
   fingerprinted, such as a database connection, does not count as changed. A
