@@ -109,6 +109,7 @@ from contextvars import ContextVar
 from typing import Any
 
 from .. import _weak
+from .._frame_locals import frame_local
 from .._type_memo import class_dict, class_module, class_mro, class_name, class_qualname
 from .._user_attrs import attribute_or, named_attr, plain_getattr, static_attr
 from ..loaded_modules import loaded_module
@@ -749,7 +750,7 @@ def receiver_class(code: types.CodeType, frame: Any) -> type | None:
     if not self_names(code):
         return None
     try:
-        recv = frame.f_locals.get(code.co_varnames[0])
+        recv = frame_local(frame, code.co_varnames[0])
     except Exception:  # noqa: BLE001 - unreadable locals: no receiver
         return None
     if recv is None:

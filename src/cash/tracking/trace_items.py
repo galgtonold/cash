@@ -54,6 +54,7 @@ import typing
 from collections.abc import Iterable, Iterator, Mapping
 from typing import Any
 
+from .._frame_locals import frame_local
 from .._type_memo import class_dict, class_module, class_mro, class_name, class_qualname, module_of_class
 from .._user_attrs import class_attr, own_lookup, plain_getattr
 from ..kept_state import global_rng_stand_in
@@ -673,8 +674,7 @@ def start_cells(frame: Any, code: types.CodeType) -> tuple[str | None, ...] | No
     that writes to them (a counter, a log list) is then checked by what it
     was called with, the way its key was built, not by what it left."""
     try:
-        local = frame.f_locals
-        values = [local.get(name, _EMPTY) for name in code.co_freevars]
+        values = [frame_local(frame, name, _EMPTY) for name in code.co_freevars]
     except Exception:  # noqa: BLE001 - cells that cannot be read are digested afterwards
         return None
     # The function that started, when a cell holds it (it calls itself):
