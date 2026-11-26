@@ -2300,11 +2300,11 @@ every time.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/analysis/cacheability_decision.py:analysis_failed @8d0bd6a1 -->
+<!-- claim: cash/analysis/cacheability_decision.py:analysis_failed @8d0bd6a1, cash/analysis/cacheability_decision.py:_unanalysed_callee_reason @1577827c -->
 **What happened.** A check that decides whether a statement may be cached
 raised an error: the scan for calls it must not cache, or the analysis of the
-functions it calls and what they write. The message names the check and the
-exception.
+functions it calls, of what they write and of what they read from the
+environment or the clock. The message names the check and the exception.
 
 **Why it matters.** cash cannot tell whether a cache hit would be safe, so the
 statement runs every time and is not stored. The result is correct.
@@ -3614,9 +3614,9 @@ multiple of 8 inside the memory the process uses.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.inputs_moved_during_call @7d2264c0, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @56f98d79 -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.inputs_moved_during_call @7d2264c0, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @e2677c93 -->
 <!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @4364ed7d, cash/tracking/file_dep_snapshot.py:snapshot_file_deps @c3b72772 -->
-<!-- claim: cash/notebook/statement/store.py:StatementStore.inputs_moved @e60eaaeb, cash/notebook/statement/processor.py:StatementProcessor._post_execute @a8c3dc59 -->
+<!-- claim: cash/notebook/statement/store.py:StatementStore.inputs_moved @87cc6dbf, cash/notebook/statement/processor.py:StatementProcessor._post_execute @a8c3dc59 -->
 === "Decorator"
 
     **What happened.** A file the function read changed before it returned.

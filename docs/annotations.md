@@ -88,7 +88,7 @@ Results that took longer than 0.1 s are usually on disk already.
 
 ### `# @cash:no-cache`
 
-<!-- claim: cash/analysis/cacheability_decision.py:cacheability_verdict @19feb564, cash/notebook/statement/processor.py:NO_CACHE_REASON @68873902 -->
+<!-- claim: cash/analysis/cacheability_decision.py:cacheability_verdict @79feac0a, cash/notebook/statement/processor.py:NO_CACHE_REASON @68873902 -->
 The statement runs every time and nothing is stored, including the calls inside
 it. The badge shows an `EXECUTED` row; run again, its reason reads `marked
 # @cash:no-cache, so it runs every time`. A statement below that reads its
@@ -130,7 +130,7 @@ The value is still cached and replayed. To get a new draw every run, use
 
 ### `# @cash:assume-safe`
 
-<!-- claim: cash/analysis/cacheability_decision.py:cacheability_verdict @19feb564, cash/analysis/annotations.py:leading_cell_annotation @0d279828 -->
+<!-- claim: cash/analysis/cacheability_decision.py:cacheability_verdict @79feac0a, cash/analysis/annotations.py:leading_cell_annotation @0d279828 -->
 cash runs a statement with a side effect every time, and it judges effects by
 name: it cannot tell a POST that creates an order from a POST that runs a search.
 `assume-safe` tells it the effect is harmless to skip, so the statement is cached

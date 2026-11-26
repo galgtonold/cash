@@ -767,7 +767,7 @@ Python 3.12 or newer for those.
 
 ### A library setting before Python 3.12
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_settings_unseen @140d15ce -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_settings_unseen @111f626a -->
 A library setting changed in a cell (`sklearn.set_config(...)`,
 `pd.set_option(...)`, `np.seterr(...)`) moves no lineage of a name a statement
 reads when the statement reaches the library through a name it imported or a
@@ -1078,7 +1078,7 @@ pass. **Fix** when that is slow: bind it first (`rows = make_rows()`, then
 `for x in rows:`). An array built from a list (`enumerate(np.array(lines))`)
 counts as long as the list.
 
-<!-- claim: cash/notebook/control_structures/single_unit_policy.py:header_may_be_left_to_the_unit @7aa22163, cash/notebook/control_structures/processor.py:ControlStructureProcessor.execute_as_single_unit @f379c535 -->
+<!-- claim: cash/notebook/control_structures/single_unit_policy.py:header_may_be_left_to_the_unit @7aa22163, cash/notebook/control_structures/processor.py:ControlStructureProcessor.execute_as_single_unit @fbded043 -->
 A loop's header is evaluated once, as plain Python evaluates it, so the loop
 gets the same items as without cash: one random draw
 (`np.random.permutation(n)`, `df.sample(n=300).index`), a queue drained once,
