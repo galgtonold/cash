@@ -449,12 +449,16 @@ the same watchers show nothing it reads moved and cash's own state it reads
 (registrations, pins, learned mutations, settings) is unchanged. A segment
 that read the random seed state or an environment variable is not
 remembered.
-<!-- claim: cash/decorator/key_values.py:left_out_whole @78b8afc2, cash/decorator/hit_memo.py:_Scan.global_value @640020ff -->
+<!-- claim: cash/decorator/key_values.py:left_out_whole @78b8afc2, cash/decorator/hit_memo.py:_Scan.global_value @db3de99d -->
 A global the key leaves out because its object holds a lock among its
 attributes ([above](#what-goes-into-the-state)) is watched only for what
 keeps it out: which object the name holds, its class and its attributes.
-What those attributes hold is not looked into, as the key reads none of it,
-and the [`KEY-UNHASHABLE-GLOBAL`](../warnings.md#key-unhashable-global)
+Of what those attributes hold, only the code the key's own walk finds in
+the object (a function kept in a list or a `threading.local`) is followed:
+the walk runs again before every reuse, and a segment whose found code
+changed, or whose code or the globals it reads moved, is folded again.
+Data the object holds is not looked into, as the key reads none of it, and
+the [`KEY-UNHASHABLE-GLOBAL`](../warnings.md#key-unhashable-global)
 warning stands for a reused segment as for a fresh one. Not while a hasher
 is registered, which may read what the object holds. `CASH_STATE_MEMO=0` turns this off; `CASH_STATE_MEMO_VERIFY=1`
 (or `CASH_HITPATH_VERIFY=1`) folds the segment again behind every reuse and
