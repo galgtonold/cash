@@ -917,6 +917,10 @@ def callee_environment_reads(
     given as *reach*) and read by the decorator's own analysis
     (`PurityReport.environment_reads`), which follows the helpers they call,
     in their module and in others of the user's.
+
+    A function that analysis cannot read adds none here, and its statement
+    is not cached: the cacheability check asks `unanalysed_callee` of the
+    same functions and refuses the statement, or the call, it names one for.
     """
     if not user_ns:
         return set()
@@ -929,12 +933,42 @@ def callee_environment_reads(
             continue  # its reads are in a caller's report already
         try:
             report = get_analyzer().analyze(fn)
-        except Exception:  # fails open: a callee that cannot be analysed adds no reads to the key
+        except Exception:  # fails closed: the statement calling it runs uncached (`unanalysed_callee`)
             logger.debug("Could not analyse %r for the environment it reads", fn, exc_info=True)
             continue
         found |= report.environment_reads
         covered |= report.covered_ids()
     return found
+
+
+def unanalysed_callee(
+    code: str, user_ns: Mapping[str, Any] | None, reach: Reach | None = None
+) -> tuple[Any, Exception] | None:
+    """The first of the user's functions *code* calls that the decorator's
+    analysis cannot read, with the error it raised; None when it reads
+    them all.
+
+    What such a function reads from the environment, the clock or a fresh
+    UUID is not known, so neither `callee_environment_reads` nor
+    `helper_ambient_reads` can speak for it: "could not tell" is not "reads
+    nothing", and the statement calling it runs uncached
+    (`cacheability_verdict`). The same functions, in the same order, as
+    those two walk.
+    """
+    if not user_ns:
+        return None
+    if reach is None:
+        reach = reached_user_code(code, user_ns)
+    covered: set[int] = set()
+    for fn in reach.functions:
+        if id(fn) in covered:
+            continue
+        try:
+            report = get_analyzer().analyze(fn)
+        except Exception as exc:  # noqa: BLE001 - fails closed: named to the caller, which refuses the statement
+            return fn, exc
+        covered |= report.covered_ids()
+    return None
 
 
 #: Clocks that only measure time passing: a busy-wait, a timeout loop or a
@@ -995,7 +1029,7 @@ def helper_ambient_reads(
             continue
         try:
             report = get_analyzer().analyze(fn)
-        except Exception:  # fails open: a callee that cannot be analysed adds no reads to the key
+        except Exception:  # fails closed: the statement calling it runs uncached (`unanalysed_callee`)
             logger.debug("Could not analyse %r for the ambient state it reads", fn, exc_info=True)
             continue
         issues = report.issues
