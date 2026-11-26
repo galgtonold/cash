@@ -761,16 +761,25 @@ class KeyBuilder:
             inspect.iscoroutinefunction(func) or inspect.isgeneratorfunction(func) or inspect.isasyncgenfunction(func)
         )
 
-    def carried_helpers_digest(self, spec: CachedFunction, args: tuple, kwargs: dict) -> str:
+    def carried_helpers_digest(self, spec: CachedFunction, args: tuple, kwargs: dict, call: Call | None = None) -> str:
         """One digest of the helpers that code the arguments carry reaches
         (`CodeArgs._carrier_helper_parts`), "" when there are none. The key
         of a recorded call leaves those to its trace; an entry stored
         without one holds this digest instead, and a lookup builds it again
         from its own arguments (`CallRunner.entry_verdict`). Built as for an
         unrecorded call (`HELD_BY_NAME` off), which keys them. Raises what
-        the fold raises."""
+        the fold raises.
+
+        With *call*, the call whose key was just built, what that build
+        hashed is taken from it (`BuiltKey.digests`): a helper's captured
+        array is in the key already, and was hashed a second time here on
+        every hit."""
         func = spec.func
         token = HELD_BY_NAME.set(False)
+        reuse = call is not None and call.key_digests is not None
+        if reuse:
+            digests_token = KEY_BUILD_DIGESTS.set(call.key_digests)
+            watch_token = CAPTURE_WATCH.set(call.capture_watch)
         try:
             parts = self._code_args._code_arg_parts(
                 args,
@@ -781,6 +790,9 @@ class KeyBuilder:
                 self._registry.report_for(func, spec.name),
             )
         finally:
+            if reuse:
+                CAPTURE_WATCH.reset(watch_token)
+                KEY_BUILD_DIGESTS.reset(digests_token)
             HELD_BY_NAME.reset(token)
         helpers = sorted({part for part in parts if "helpers:" in part})
         if not helpers:
@@ -969,7 +981,8 @@ class KeyBuilder:
         reached_ttls: list = []
         ttls_token = REACHED_TTLS.set(reached_ttls)
         # Each value module data holds is hashed once per key (`KEY_BUILD_DIGESTS`).
-        digests_token = KEY_BUILD_DIGESTS.set({})
+        digests: dict = {}
+        digests_token = KEY_BUILD_DIGESTS.set(digests)
         pint_token = PINT_DIGESTS.set({})
         try:
             # The state after each fold, in `_STATE_STAGES` order: when no
@@ -1082,7 +1095,15 @@ class KeyBuilder:
         # (`PurityChecks.checked_arguments_hash`).
         call_args_hash = args_hash if spec.arg_key is None or spec.arg_key.key_fn is None else None
         ttls = [t for t in reached_ttls if t is not None]
-        return BuiltKey(cache_key, state_hash, args_hash, normalized_args, call_args_hash, min(ttls) if ttls else None)
+        return BuiltKey(
+            cache_key,
+            state_hash,
+            args_hash,
+            normalized_args,
+            call_args_hash,
+            min(ttls) if ttls else None,
+            digests=digests,
+        )
 
     def ledger_now(self, spec: CachedFunction, args: tuple) -> dict | None:
         """The `STATE_LEDGER` of the key's state segment built again now,
@@ -1738,6 +1759,7 @@ class CallRunner:
         call.traced, call.needs_trace = built.traced, built.needs_trace
         call.narrowed = built.narrowed
         call.folded_code = built.folded_code
+        call.key_digests = built.digests
         call.unread = built.unread
         call.trace_for_unread = built.trace_for_unread
         if built.reached_ttl is not None:
@@ -1764,7 +1786,7 @@ class CallRunner:
             call.needs_trace and not call.trace_for_unread,
             (args, kwargs),
             call.content_keyed,
-            lambda: self._keys.carried_helpers_digest(spec, args, kwargs),
+            lambda: self._keys.carried_helpers_digest(spec, args, kwargs, call),
         )
         call.cash_overhead = _perf_counter() - overhead_t0
         if pt is not None:
@@ -2010,7 +2032,7 @@ class CallRunner:
             call.needs_trace and not call.trace_for_unread,
             (call.args, call.kwargs),
             call.content_keyed,
-            lambda: self._keys.carried_helpers_digest(spec, call.args, call.kwargs),
+            lambda: self._keys.carried_helpers_digest(spec, call.args, call.kwargs, call),
         )
         if hit is CACHE_MISS:
             return CACHE_MISS
@@ -2737,7 +2759,7 @@ class CallRunner:
             # builds again from its own arguments.
             if not untraced:
                 try:
-                    carried = self._keys.carried_helpers_digest(spec, args, kwargs)
+                    carried = self._keys.carried_helpers_digest(spec, args, kwargs, call)
                 except Exception:  # noqa: BLE001 - fails closed: helpers that cannot be read are not stored on
                     left = self._refuse_unrecorded(spec, unrecorded or "nothing recorded what it ran")
                     if is_one_shot_iterator(res):

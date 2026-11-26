@@ -19,7 +19,7 @@ first try.
 
 === "Decorator"
 
-    <!-- claim: cash/decorator/explain.py:describe_state_change @58a52664, cash/decorator/explain.py:Explainer.explain @e18309b7 -->
+    <!-- claim: cash/decorator/explain.py:describe_state_change @58a52664, cash/decorator/explain.py:Explainer.explain @832d249b -->
     Run the program with `CASH_VERBOSE=1`. cash prints one line per call,
     and a miss says what changed. For a single call,
     `print(f.explain(*args))` says whether it would hit, and why, without

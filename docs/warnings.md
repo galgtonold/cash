@@ -2152,7 +2152,7 @@ side effects or reads the clock, changed a global that code reads in place
 (`heapq.heappush(HEAP, x)`: a hit would not change it again), a function no
 name finds, a value too big to digest, or it left a thread running.
 
-<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_unrecorded @71216f5f, cash/decorator/runtime.py:KeyBuilder.carried_helpers_digest @f9ac8f75 -->
+<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_unrecorded @71216f5f, cash/decorator/runtime.py:KeyBuilder.carried_helpers_digest @644fc4f2 -->
 The same warning comes for a call that was handed code (an object whose
 methods it calls, a function passed in) that calls helpers of yours, when
 nothing recorded what the call ran (it returns an iterator, whose code runs
