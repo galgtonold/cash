@@ -10,11 +10,14 @@ the waiver imported under another name.
 from __future__ import annotations
 
 import json
+import os
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
 
+from cash import source_reading
 from tests._scripts import run_python
 
 _RUNNER = textwrap.dedent(
@@ -60,7 +63,21 @@ def code_dir(tmp_path):
     return code
 
 
+def _settle(path: Path) -> None:
+    """Wait until *path* has settled (`source_reading.stat_has_settled`).
+
+    A helper's block is cut from its file through the store only once the
+    file has settled (`source_reading._kept_block`); before that it is read
+    every time and nothing is stored. A file written just now settles while
+    the processes run, after the first and before the second on a slow
+    runner, and the second then worked out the blocks the first never
+    reached. Settled first, every process reads it the same way."""
+    while not source_reading.stat_has_settled(os.stat(path)):
+        time.sleep(0.1)
+
+
 def test_a_second_process_works_out_no_text_answer_again(code_dir):
+    _settle(code_dir / "mod.py")
     first = _run(code_dir)
     assert first["stats"]["computed"] > 0
     second = _run(code_dir, verify=True)
