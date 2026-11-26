@@ -85,6 +85,10 @@ class BuiltKey(NamedTuple):
     #: (`HELD_BY_NAME`): stored only with a trace of what ran, or else with
     #: a check of their code in full (`CallRunner.finish_miss`).
     narrowed: bool = False
+    #: What the build hashed once (`KEY_BUILD_DIGESTS`), for a check made
+    #: later in the same call to take from instead of hashing it again
+    #: (`KeyBuilder.carried_helpers_digest`).
+    digests: Any = None
 
 
 class Call:
@@ -98,6 +102,7 @@ class Call:
         "ttl",
         "recompute",
         "capture_watch",
+        "key_digests",
         "watch_identities",
         "cache_key",
         "state_hash",
@@ -177,6 +182,8 @@ class Call:
         self.ran_unit: Any = None
         #: The key's `BuiltKey.folded_code`.
         self.folded_code: Any = None
+        #: The key's `BuiltKey.digests`.
+        self.key_digests: Any = None
         #: For a call that needs its trace and whose key was narrowed: the
         #: code its key would fold unnarrowed (`KeyBuilder.full_key_folded`),
         #: which its strict trace accepts.

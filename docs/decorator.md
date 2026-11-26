@@ -905,7 +905,7 @@ entry. That holds whenever the seed was set: before the function was
 decorated, or before `import cash` in the same script. A function
 whose own body seeds the stream is not keyed by where the caller left it.
 
-<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @15ae711f -->
+<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @d9e2957e -->
 The same holds for a generator in a module global that the body draws from
 (`rng = np.random.default_rng(42)` at module level, `rng.normal()` inside): the
 key includes where `rng` stands, and a hit moves `rng` on to where the computed
@@ -1254,7 +1254,7 @@ that caches through a factory does (`cash.cache(func)(*args)` on every
 call), returns the wrapper made the first time, with its counters. Other
 parameters, or a function whose code changed, get a new wrapper.
 
-<!-- claim: cash/decorator/explain.py:Explainer.explain @e18309b7, cash/decorator/explain.py:Explainer._absent_entry @28c80c9d, cash/decorator/explain.py:callee_to_pass_in @eadc3715 -->
+<!-- claim: cash/decorator/explain.py:Explainer.explain @832d249b, cash/decorator/explain.py:Explainer._absent_entry @28c80c9d, cash/decorator/explain.py:callee_to_pass_in @eadc3715 -->
 **`f.explain(*args, **kwargs)`** says whether that call would hit, and why. It
 does not run the function, change the counters or write anything:
 
