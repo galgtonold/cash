@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import json
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
 
+from cash import source_reading
 from tests._scripts import run_python
 
 _MAIN = textwrap.dedent(
@@ -105,6 +107,12 @@ def _run(project, verify: bool = False) -> dict:
 
 
 def test_a_second_process_reads_the_analysis_back_and_hits(project):
+    # Where a function's lines lie in its file is kept on disk only once
+    # the file has settled (the racy-git rule, `stat_has_settled`), so the
+    # first run after the project's files settle works them out, whatever
+    # the runs before it did. They settle first, as in a project not being
+    # edited.
+    time.sleep(source_reading.SETTLED_SECONDS + 0.2)
     first = _run(project)
     assert first["hits"] == 0 and first["text"]["computed"] > 0
     second = _run(project)
