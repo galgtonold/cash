@@ -1668,21 +1668,13 @@ class PurityChecks:
         An int, a str, a tuple of them: rebinding one inside the body (``n -=
         1``) is invisible to the caller, so they are left out, and most calls
         snapshot nothing. What remains lets `PurityChecks.check_argument_mutation` name the
-        argument that moved. None when naming has been retired as too costly
-        for this function (the check itself still runs), or nothing could be
-        hashed.
+        argument that moved. The only one that can change is named by
+        elimination, at no cost. None when naming more than one has been
+        retired as too costly for this function (the check itself still
+        runs), or nothing could be hashed.
         """
         cf = self._registry.cached.get(func_name)
-        if cf is None or cf.argument_naming_retired:
-            return None
-        # The key was hashed a moment ago, on this thread: if that already cost
-        # more than naming may, naming is retired before it pays -- a miss on
-        # two million rows hashed them three times, once for the key, once
-        # here and once after the body. Read from what
-        # `ArgHasher.note_arg_cost` kept: it has already taken `ARG_COST.last`.
-        cost = cf.arg_cost
-        if cost is not None and cost[2] > MUTATION_CHECK_BUDGET_S:
-            cf.argument_naming_retired = True
+        if cf is None:
             return None
         started = _perf_counter()
         try:
@@ -1699,8 +1691,24 @@ class PurityChecks:
         ]
         if len(candidates) == 1:
             # The only argument that can change is the one that did: named by
-            # elimination, with no hash of its own.
+            # elimination, with no hash of its own, so no budget retires it.
+            # Retired by a slow key, it was "an argument", and a call that
+            # changes its one argument was never stored with the state it
+            # left it in: one key build of a small frame past the budget (a
+            # collection of a big heap, a loaded machine) decided that for
+            # every later call of the function.
             return {candidates[0][0]: ""}
+        if cf.argument_naming_retired:
+            return None
+        # The key was hashed a moment ago, on this thread: if that already cost
+        # more than naming may, naming is retired before it pays -- a miss on
+        # two million rows hashed them three times, once for the key, once
+        # here and once after the body. Read from what
+        # `ArgHasher.note_arg_cost` kept: it has already taken `ARG_COST.last`.
+        cost = cf.arg_cost
+        if cost is not None and cost[2] > MUTATION_CHECK_BUDGET_S:
+            cf.argument_naming_retired = True
+            return None
         for name, value in candidates:
             try:
                 # Before the body, *content* holds what the key just read.
