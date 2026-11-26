@@ -80,9 +80,13 @@ def test_a_library_object_a_variable_also_holds_is_named(heap_reads, module):
     assert len(heap_reads) >= 2
 
 
-def test_counts_are_none_when_anything_else_holds_one():
-    namespaces = [vars(module) for module in list(sys.modules.values()) if module is not None]
-    held = [re._cache]
-    assert shared_objects._module_references([re._cache], namespaces) is None
+def test_counts_are_none_when_anything_else_holds_one(module):
+    # An object of the test's own, not one of ``re``'s caches: any thread
+    # compiling a pattern meanwhile holds those for a moment, and the answer
+    # is then rightly None.
+    module.registry = {}
+    namespaces = [vars(module)]
+    held = [module.registry]
+    assert shared_objects._module_references([module.registry], namespaces) is None
     del held
-    assert shared_objects._module_references([re._cache], namespaces) == [1]
+    assert shared_objects._module_references([module.registry], namespaces) == [1]
