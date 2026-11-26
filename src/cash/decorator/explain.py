@@ -932,7 +932,13 @@ class Explainer:
             raw_metadata = None  # nothing to restore: a real call misses
         if raw_metadata is None:
             return self._absent_entry(cf, cache_key, args, kwargs, frozen_args)
-        answer = self._stored_entry(cf, cache_key, CacheMetadata.from_dict(raw_metadata), frozen_args)
+        answer = self._stored_entry(
+            cf,
+            cache_key,
+            CacheMetadata.from_dict(raw_metadata),
+            frozen_args,
+            lambda: self._keys.carried_helpers_digest(cf, args, kwargs),
+        )
         if answer.would_hit and cf.arg_key is not None:
             self._note_matched_by(cf, args, kwargs, built, raw_metadata, answer.details)
         return answer
@@ -1124,14 +1130,19 @@ class Explainer:
         )
 
     def _stored_entry(
-        self, cf: CachedFunction, cache_key: str, metadata: CacheMetadata, frozen_args: Any
+        self,
+        cf: CachedFunction,
+        cache_key: str,
+        metadata: CacheMetadata,
+        frozen_args: Any,
+        carried: Callable[[], str] | None = None,
     ) -> CacheExplanation:
         """The answer for the entry stored under *cache_key*: a hit, or why a
         real lookup would not serve it."""
         func_name, ttl = cf.name, cf.ttl
         # Whether the entry is served: the judgement a real lookup makes.
         try:
-            verdict = self._runner.entry_verdict(cache_key, metadata, ttl, quiet=True)
+            verdict = self._runner.entry_verdict(cache_key, metadata, ttl, quiet=True, carried=carried)
         except (TypeError, KeyError):
             verdict = MissReason(MissKind.INCOMPLETE, "the stored entry's metadata did not validate")
         if verdict is not None and verdict.kind is MissKind.TTL:

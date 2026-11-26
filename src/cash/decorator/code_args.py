@@ -1181,8 +1181,10 @@ class CodeArgs:
 
     def _carrier_helper_parts(self, carrier: Any, owner_code: Any) -> list[str]:
         """Key parts for the helpers the code *carrier* runs reaches, when
-        no trace of the call will check them: with ``CASH_TRACE=0``, or for
-        a coroutine (`code_trace.on`).
+        no trace of the call will check them: with ``CASH_TRACE=0``, for a
+        coroutine, and for a generator, whose body runs after the call
+        (`HELD_BY_NAME`, off for those and for the check an entry stored
+        without a trace carries).
 
         Its code is keyed by what it loads by name
         (`CodeSurface.code_surface_hash`), which misses a helper reached
@@ -1193,7 +1195,7 @@ class CodeArgs:
         function's own helpers. With a trace this is left out: the trace
         names every function the call ran and checks its code on a lookup.
         """
-        if code_trace.on() and not (
+        if held_by_name() and not (
             isinstance(owner_code, types.CodeType) and owner_code.co_flags & inspect.CO_COROUTINE
         ):
             return []

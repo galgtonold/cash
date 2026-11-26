@@ -133,7 +133,7 @@ that called it is not stored either: nothing recorded what it depends on. A raw
 value is never folded in as if there were no dependency. Wrap the value in a
 `DataSource`, as above.
 
-<!-- claim: cash/decorator/explain.py:Explainer.explain @e18309b7 -->
+<!-- claim: cash/decorator/explain.py:Explainer.explain @832d249b -->
 `f.explain(...)` reports such a call as `key_uncomputable`, with the reason.
 
 ## Combining with other options

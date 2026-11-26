@@ -2152,6 +2152,15 @@ side effects or reads the clock, changed a global that code reads in place
 (`heapq.heappush(HEAP, x)`: a hit would not change it again), a function no
 name finds, a value too big to digest, or it left a thread running.
 
+<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_unrecorded @71216f5f, cash/decorator/runtime.py:KeyBuilder.carried_helpers_digest @f9ac8f75 -->
+The same warning comes for a call that was handed code (an object whose
+methods it calls, a function passed in) that calls helpers of yours, when
+nothing recorded what the call ran (it returns an iterator, whose code runs
+after the call, or another tool holds the monitoring ids) and cash could not
+read those helpers either. Normally such an entry is stored with a digest of
+them, which every lookup builds again; only when that fails does the call run
+uncached.
+
 <!-- claim: cash/analysis/helper_walk.py:HelperWalk._note_decided_at_run_time @33512d71 -->
 With `CASH_TRACE=0` the same warning names an
 `isinstance(x, Kind)` or `issubclass(c, Kind)` that Kind's own metaclass

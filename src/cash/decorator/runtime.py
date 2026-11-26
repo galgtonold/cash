@@ -164,6 +164,9 @@ class Unkeyable(NamedTuple):
 
 _UNHASHABLE = MissReason(MissKind.UNHASHABLE, "an argument could not be hashed, so there is no key to look up")
 _KEY_FAILED = MissReason(MissKind.KEY_FAILED, "building the key raised")
+#: The item an entry stored without a trace holds for the helpers of code
+#: the call's arguments carried (`KeyBuilder.carried_helpers_digest`).
+CARRIED_HELPERS = "carried_helpers"
 _HANDED = MissReason(
     MissKind.HANDED,
     "an argument is a function of yours, or holds one, that changes state when called, so the call ran uncached",
@@ -758,6 +761,32 @@ class KeyBuilder:
             inspect.iscoroutinefunction(func) or inspect.isgeneratorfunction(func) or inspect.isasyncgenfunction(func)
         )
 
+    def carried_helpers_digest(self, spec: CachedFunction, args: tuple, kwargs: dict) -> str:
+        """One digest of the helpers that code the arguments carry reaches
+        (`CodeArgs._carrier_helper_parts`), "" when there are none. The key
+        of a recorded call leaves those to its trace; an entry stored
+        without one holds this digest instead, and a lookup builds it again
+        from its own arguments (`CallRunner.entry_verdict`). Built as for an
+        unrecorded call (`HELD_BY_NAME` off), which keys them. Raises what
+        the fold raises."""
+        func = spec.func
+        token = HELD_BY_NAME.set(False)
+        try:
+            parts = self._code_args._code_arg_parts(
+                args,
+                kwargs,
+                spec.name,
+                plain_getattr(func, "__code__", None),
+                func,
+                self._registry.report_for(func, spec.name),
+            )
+        finally:
+            HELD_BY_NAME.reset(token)
+        helpers = sorted({part for part in parts if "helpers:" in part})
+        if not helpers:
+            return ""
+        return hashlib.sha256(":".join(helpers).encode("utf-8")).hexdigest()
+
     def full_closure_state(self, spec: CachedFunction) -> str:
         """`callee_state` with every class of module data keyed by all its
         code, as for an untraced call (`HELD_BY_NAME` off): the check an
@@ -1317,6 +1346,7 @@ class CallRunner:
         needs_trace: bool = False,
         arguments: tuple[tuple, dict] | None = None,
         content_keyed: ContentKeyed | None = None,
+        carried: Callable[[], str] | None = None,
     ) -> Any:
         """Return cached_data if valid, else CACHE_MISS sentinel.
 
@@ -1335,7 +1365,7 @@ class CallRunner:
             self._misses.note_miss(func_name, cache_key, self._misses.absent_entry_reason(func_name, cache_key))
             return CACHE_MISS
         try:
-            verdict = self.entry_verdict(cache_key, metadata, ttl, needs_trace=needs_trace)
+            verdict = self.entry_verdict(cache_key, metadata, ttl, needs_trace=needs_trace, carried=carried)
             writes: list[tuple[Any, Any]] = []
             if verdict is None and isinstance(cached_data, rewrite_in_place.ArgumentsLeft):
                 left, why = self._opened(func_name, cached_data, arguments)
@@ -1420,6 +1450,7 @@ class CallRunner:
         *,
         quiet: bool = False,
         needs_trace: bool = False,
+        carried: Callable[[], str] | None = None,
     ) -> MissReason | None:
         """Why the entry found under *cache_key* is not served, or None to
         serve it: its age against the ttl, its recorded files, its chunks.
@@ -1428,7 +1459,10 @@ class CallRunner:
         ``explain()`` both apply, so a check added here holds for both.
         *quiet* leaves out the warnings the file check gives, for
         ``explain()``. *needs_trace*: the call picks code by a run-time name, so
-        an entry without a trace of what it ran is not served. Raises
+        an entry without a trace of what it ran is not served. *carried*
+        builds the digest of the helpers that code the call's arguments
+        carry reaches (`KeyBuilder.carried_helpers_digest`), for an entry
+        stored with one; without it such an entry is not served. Raises
         ``TypeError``/``KeyError`` on metadata that does not validate.
         """
         ttl = self._backend_slot.entry_ttl(ttl, metadata)
@@ -1458,8 +1492,22 @@ class CallRunner:
         if not self._chunks_are_intact(cache_key, metadata):
             return MissReason(MissKind.INCOMPLETE, "a chunk of the stored result is missing")
         if metadata.code_trace is not None:
+            items = [item for item in metadata.code_trace if item[0] != CARRIED_HELPERS]
+            for item in metadata.code_trace:
+                if item[0] != CARRIED_HELPERS:
+                    continue
+                try:
+                    now = carried() if carried is not None else None
+                except Exception:  # noqa: BLE001 - fails closed: helpers that cannot be read again are not served on
+                    now = None
+                if now != item[-1]:
+                    return MissReason(
+                        MissKind.RAN,
+                        "a helper of code its arguments carry changed, or could not be read, "
+                        "since the entry was stored",
+                    )
             with hit_memo.probe_round():
-                changed = code_trace.verify(metadata.code_trace, self._cached_state, self._full_closure_state)
+                changed = code_trace.verify(items, self._cached_state, self._full_closure_state)
             if changed is not None:
                 # Kept for a call that needs none too, as a check beside the
                 # key: then nothing was picked by name.
@@ -1716,6 +1764,7 @@ class CallRunner:
             call.needs_trace and not call.trace_for_unread,
             (args, kwargs),
             call.content_keyed,
+            lambda: self._keys.carried_helpers_digest(spec, args, kwargs),
         )
         call.cash_overhead = _perf_counter() - overhead_t0
         if pt is not None:
@@ -1961,6 +2010,7 @@ class CallRunner:
             call.needs_trace and not call.trace_for_unread,
             (call.args, call.kwargs),
             call.content_keyed,
+            lambda: self._keys.carried_helpers_digest(spec, call.args, call.kwargs),
         )
         if hit is CACHE_MISS:
             return CACHE_MISS
@@ -2653,6 +2703,7 @@ class CallRunner:
         func, func_name, args, kwargs = spec.func, spec.name, call.args, call.kwargs
         note_getter_fills(call.fill_mark)
         res = run.res
+        unrecorded = left = ""
         if call.traced and is_one_shot_iterator(res):
             # Its body runs as the caller iterates, after the trace ended:
             # stored by its key alone, unless it needs a trace.
@@ -2660,7 +2711,10 @@ class CallRunner:
             call.traced = False
             if call.needs_trace:
                 return self._untraced(spec, call, "returns an iterator, whose code runs after the call", res)
+            unrecorded = "it returns an iterator, whose code runs after the call"
         trace, untraced = self._trace_of(spec, call, run)
+        if untraced and not unrecorded:
+            unrecorded = untraced
         if untraced and call.trace_for_unread and not any(name in sys.modules for name in call.unread):
             # Traced only for a lazy import the call did not run: none of
             # that module's code ran, so the key holds all the call ran.
@@ -2678,6 +2732,20 @@ class CallRunner:
             call.closure_check = trace
             if untraced and is_one_shot_iterator(res):
                 return self._untraced(spec, call, untraced, res)
+            # And the helpers of code its arguments carry, which no state
+            # segment holds: the entry keeps their digest, which a lookup
+            # builds again from its own arguments.
+            if not untraced:
+                try:
+                    carried = self._keys.carried_helpers_digest(spec, args, kwargs)
+                except Exception:  # noqa: BLE001 - fails closed: helpers that cannot be read are not stored on
+                    left = self._refuse_unrecorded(spec, unrecorded or "nothing recorded what it ran")
+                    if is_one_shot_iterator(res):
+                        return self._unstored(spec, call, left, res)
+                else:
+                    if carried:
+                        trace = [*trace, (CARRIED_HELPERS, spec.name, carried)]
+                        call.closure_check = trace
         # A generator is handed straight back, wrapped, and cached only once
         # the caller has drained it. Draining it here instead meant a streamed
         # response arrived in one lump after the full latency, so
@@ -2789,6 +2857,8 @@ class CallRunner:
             refusal = self._refuse_library_reads(spec, run)
         if refusal is None and untraced:
             refusal = self._refuse_untraced(spec, untraced)
+        if refusal is None and left:
+            refusal = left
         if refusal is None and not replayable(run.carriers_moved + run.arg_carriers_moved):
             # A hit must leave the generator where the body did, or the
             # caller's next draw repeats what this call drew. One only a
@@ -3246,9 +3316,31 @@ class CallRunner:
         )
         return f"it picks code by a run-time name and {why}"
 
+    def _refuse_unrecorded(self, spec: CachedFunction, why: str) -> str:
+        """Say once why a call handed code that reaches helpers is not
+        stored when nothing recorded what it ran and the digest an
+        unrecorded entry holds of them instead could not be built
+        (`KeyBuilder.carried_helpers_digest`)."""
+        self._notices.warn_once(
+            CashCacheIneffectiveWarning,
+            spec.name,
+            "unrecorded_helpers:" + why,
+            f"{spec.name} was handed code (a method of an argument, a function passed in) that calls helpers, "
+            f"{why}, and cash could not read those helpers either, so it cannot check them before serving the "
+            "result: calls like this run uncached.",
+            code="KEY-UNTRACKABLE-DEP",
+            fix="return a list or a tuple rather than an iterator, or write the function as a generator "
+            "(`yield`), whose key holds those helpers.",
+        )
+        return f"code its arguments carry calls helpers, and {why}"
+
     def _untraced(self, spec: CachedFunction, call: Call, why: str, res: Any) -> Any:
         """Hand back *res* of a traced call that cannot be stored."""
-        self._misses.note_not_stored(call.cache_key, self._refuse_untraced(spec, why), spec.name)
+        return self._unstored(spec, call, self._refuse_untraced(spec, why), res)
+
+    def _unstored(self, spec: CachedFunction, call: Call, refusal: str, res: Any) -> Any:
+        """Hand back *res* of a call that is not stored, for *refusal*."""
+        self._misses.note_not_stored(call.cache_key, refusal, spec.name)
         self._calls.log(
             spec.name,
             cache_hit=False,
