@@ -123,14 +123,18 @@ path that does not exist, so the entry never notices the object changing. Use
 
 ## Remote objects: tracked by the store's own validator
 
-<!-- claim: cash/remote_source.py:RemoteFileDataSource @300338c7 broad="the scheme list and validator contract are properties of the whole class" -->
+<!-- claim: cash/remote_source.py:RemoteFileDataSource @67e7eebc broad="the scheme list and validator contract are properties of the whole class" -->
 Object stores keep a validator for every object, such as an ETag, a version id
 or a GCS generation, and it changes when the bytes change. A read of `s3://`,
 `gs://`, `az://` or `https://` through a tracked reader records that validator.
 Each hit asks the store for it again: one small metadata request instead of a
-download. A miss asks twice, before the read and when the result is stored:
-an object replaced in between is not stored under either version
-([`STORE-INPUT-CHANGED`](../../warnings.md#store-input-changed)).
+download. A miss asks once too, before the read, and the entry holds that
+answer.
+
+<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker.add_tracked_remote @cb846d56, cash/tracking/file_dep_snapshot.py:remote_token_as_read @88b2cc72 -->
+An object replaced while the call runs gives no warning: the result is stored
+under the validator from before the read, so the next call finds another one
+and recomputes.
 
 <!-- test:skip reason="needs a reachable bucket" -->
 ```python
@@ -139,7 +143,7 @@ def load_events(url):
     return pd.read_parquet(url)
 
 url = "s3://bucket/events.parquet"
-# first call: downloads, records the ETag (two metadata requests)
+# first call: one metadata request for the ETag, then the download
 load_events(url)
 load_events(url)   # cache hit: one metadata request
 ```
@@ -213,7 +217,7 @@ bound earlier by `from my_lib import read_data` keeps the original. Pass
 ## Edge cases
 
 - **A file that changes during the call.** If a file moved between the read and
-  the end of the call, or a remote object was replaced, the result is returned but not stored
+  the end of the call, the result is returned but not stored
   ([`STORE-INPUT-CHANGED`](../../warnings.md#store-input-changed)), since cash
   can't tell which version it came from. The next call caches normally.
 - **Symlinks** record both the link and its target, so editing the target and

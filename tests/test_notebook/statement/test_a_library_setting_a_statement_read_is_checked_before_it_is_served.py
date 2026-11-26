@@ -15,6 +15,7 @@ import warnings
 
 import pytest
 
+from cash import CashImpurityWarning
 from cash.decorator import code_trace
 from cash.notebook.cache_status import CacheStatus
 from tests._cell_driver import run_cash_cell
@@ -115,3 +116,4 @@ def test_an_unrecorded_statement_reaching_a_library_warns_once(cash_magics, mock
     said = [w for w in caught if "KEY-LIBRARY-STATE-UNSEEN" in str(w.message)]
     assert len(said) == 1, [str(w.message) for w in caught]
     assert "pd.set_option" in str(said[0].message)
+    assert said[0].category is CashImpurityWarning

@@ -61,9 +61,11 @@ def snapshot_tracked_deps(tracker: Any, code_module: str | None = None) -> dict[
     Both land in one dict: they answer the same question ("did what this
     call read change since?"), and every consumer already routes that
     question through ``file_dep_is_fresh``, which branches on the entry.
-    Remote entries cost one metadata request each to snapshot; that is the
-    price of the read being tracked at all, and it is small against the
-    download the entry exists to avoid.
+    A remote entry holds the token the tracker took before the read
+    (`FileAccessTracker.remote_as_read`): one metadata request per object,
+    made then and not again here. That is the price of the read being
+    tracked at all, and it is small against the download the entry exists
+    to avoid.
     """
 
     read_stats = getattr(tracker, "read_stats", {})
@@ -74,7 +76,6 @@ def snapshot_tracked_deps(tracker: Any, code_module: str | None = None) -> dict[
         if path in read_stats
     }
     stats: dict[str, Any] = {}
-    remote_tokens: dict[str, str] = {}
     deps = snapshot_dependencies(
         tracker.get_accessed_files(),
         tracker.get_accessed_remote_urls(),
@@ -83,15 +84,13 @@ def snapshot_tracked_deps(tracker: Any, code_module: str | None = None) -> dict[
         unresolved=getattr(tracker, "unresolved_files", None),
         present=getattr(tracker, "present_files", None),
         stats=stats,
-        remote_tokens=remote_tokens,
+        # Each remote object under the token taken before its read.
+        remote_as_read=getattr(tracker, "remote_as_read", None),
     )
     # The stat each file had as it was snapshotted: the check that no input
     # moved during the call reads it instead of a second stat per file.
     if hasattr(tracker, "snapshot_stats"):
         tracker.snapshot_stats = stats
-    # And the token each remote object had, for the same check.
-    if hasattr(tracker, "snapshot_remote"):
-        tracker.snapshot_remote = remote_tokens
     # A file beside the function's own code is part of this INSTALL, not a
     # fixed location: record where it sits relative to the code, so another
     # install or release checks its own copy.

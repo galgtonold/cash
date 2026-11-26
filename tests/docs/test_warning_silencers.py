@@ -152,6 +152,16 @@ CASES: dict[str, tuple[str, str]] = {
         """,
         "f(1)",
     ),
+    "KEY-LIBRARY-STATE-UNSEEN": (
+        """
+        import asyncio
+
+        @c.cache{DEC}
+        async def f(x):
+            return x + 1{W}
+        """,
+        "asyncio.run(f(1))",
+    ),
     "KEY-NETWORK-READ": (
         """
         import urllib.request
@@ -206,6 +216,15 @@ CASES: dict[str, tuple[str, str]] = {
         "f(1)",
     ),
 }
+
+
+@pytest.fixture(autouse=True)
+def _said_once_a_process_is_said_again(monkeypatch):
+    """KEY-LIBRARY-STATE-UNSEEN is said for the first call a process stores
+    unrecorded: each variant here is that first call."""
+    from cash.decorator import library_reads
+
+    monkeypatch.setattr(library_reads, "UNSEEN_SAID", False)
 
 
 def _silencing_line(code: str) -> str:

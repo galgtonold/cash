@@ -95,7 +95,6 @@ FAILS_OPEN = {
     "notebook/cache_key.py": 1,
     "notebook/callee_reach.py": 4,
     "notebook/helper_memos.py": 2,
-    "notebook/lineage_formula.py": 2,
     "notebook/statement/processor.py": 1,
 }
 

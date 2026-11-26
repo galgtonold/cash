@@ -174,7 +174,7 @@ variable the read produced, and it is checked again before each reuse; see
 [what counts as a change](invalidation.md#what-counts-as-a-change).
 
 ??? warning "Keys survive a restart, not a move to another machine"
-    <!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @29ef2395 -->
+    <!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @389d0e96 -->
     A statement that reads a file folds the file's modification time, size
     and inode change time into its lineage, and one that only checks whether
     a path exists folds whether it is there. A file rewritten with the same

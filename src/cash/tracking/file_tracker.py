@@ -26,7 +26,9 @@ from typing import Any, Optional
 from cash._clock import perf_counter as _perf_counter
 from cash._paths import is_remote_url, normalize_path
 from cash.effect_observer import reset_in_any_context
+from cash.exceptions import DependencyNotFoundError
 from cash.install_paths import normcase_path
+from cash.remote_source import unresolved_token
 from cash.tracking import file_dep_snapshot, io_watch, native_reads
 from cash.tracking.file_dep_snapshot import (
     digest_later,
@@ -209,16 +211,12 @@ class FileAccessTracker:
         # a path. They are re-joined downstream as remote dependency entries.
         self.accessed_remote: set[str] = set()
         #: url -> the token its store gave BEFORE the block's first read of
-        #: it. The entry's token is taken when it is stored, after the block
-        #: ran: an object replaced in between would be recorded as the new
-        #: one next to a value computed from the old
-        #: (`inputs_changed_since_read`).
+        #: it: the token the block's entry records the object under
+        #: (`snapshot_remote_deps`). One taken as the entry is stored, after
+        #: the block ran, would record an object replaced in between as the
+        #: new one next to a value computed from the old, for good. Under
+        #: the token from before, such an entry is stale at its next lookup.
         self.remote_as_read: dict[str, str] = {}
-        #: url -> the token the call's snapshot took of it, for
-        #: `inputs_changed_since_read`; None when no snapshot is pending.
-        self.snapshot_remote: dict[str, str] | None = None
-        # The URLs `inputs_changed_since_read` found as read.
-        self._remote_checked: set[str] = set()
         # Paths this block looked for and did not find. Recorded as their own
         # kind of dependency (``{'absent': True}``) so an entry computed
         # WITHOUT an optional file stops being valid once that file appears --
@@ -546,32 +544,6 @@ class FileAccessTracker:
         for path, before in list(self.listed_stats.items()):
             if path not in self.touched_dirs and folder_stat(path) != before:
                 moved.append(path)
-        moved.extend(self._remote_changed_since_read(reuse_checked))
-        return moved
-
-    def _remote_changed_since_read(self, reuse_checked: bool) -> list[str]:
-        """The remote objects whose token moved between the block's first
-        read of each and now. With *reuse_checked*, one the previous check
-        found as read is not asked again."""
-        taken, self.snapshot_remote = self.snapshot_remote, None
-        if not self.remote_as_read:
-            return []
-        found_as_read = self._remote_checked if reuse_checked else set()
-        checked: set[str] = set()
-        self._remote_checked = checked
-        moved = []
-        for url, before in list(self.remote_as_read.items()):
-            if url in found_as_read:
-                checked.add(url)
-                continue
-            now = taken.get(url) if taken else None
-            if now is None:
-                with untracked():
-                    now = file_dep_snapshot.remote_token_now(url)
-            if file_dep_snapshot.remote_moved(before, now):
-                moved.append(url)
-            else:
-                checked.add(url)
         return moved
 
     def take_checked_stats(self) -> dict[str, os.stat_result]:
@@ -1315,8 +1287,10 @@ class FileAccessTracker:
         """Record a remote *url* read, propagating to the enclosing tracker.
 
         Called BEFORE the read: the first time this block meets *url*, the
-        token its store gives now is kept (`remote_as_read`), for the check
-        that the object was not replaced while the block ran. *token* is
+        token its store gives now is kept (`remote_as_read`), and the
+        block's entry records the object under it. The store is not asked
+        again when the entry is stored: an object replaced while the block
+        ran leaves an entry that is stale at its next lookup. *token* is
         that token where the caller holds it already: the one an entry
         served inside this block was just found fresh under, the one a
         worker process took before its read.
@@ -1329,13 +1303,18 @@ class FileAccessTracker:
             # Cash's own request: not a file or a connection of the block's.
             try:
                 with untracked():
-                    token = file_dep_snapshot.remote_token_now(url, warn=False)
-            except Exception:  # recording a read never fails the read
+                    token = file_dep_snapshot.remote_token_before_read(url)
+            except DependencyNotFoundError:
                 # The store cannot be asked at all (no filesystem package
                 # for the scheme): the snapshot says so when the entry is
-                # stored, as it did before a token was taken here.
+                # stored.
                 logger.debug("[TRACKER] No token before the read of %r", url, exc_info=True)
                 return
+            except Exception:  # recording a read never fails the read
+                # No token from before the read: recorded as one that
+                # could not be read, never as one asked for afterwards.
+                logger.debug("[TRACKER] No token before the read of %r", url, exc_info=True)
+                token = unresolved_token(url)
         for tracker in self._self_and_parents():
             tracker.remote_as_read.setdefault(url, token)
 

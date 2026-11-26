@@ -67,7 +67,7 @@ from ..run_memo import file_component_this_run
 from ..statement.carrier_advances import carrier_candidates
 from ..statement.derivation_edges import apply_share_record, logging_edges
 from ..statement.file_deps import compute_file_hash_component
-from ..statement.run import NO_LOOP_ITERABLE
+from ..statement.run import NO_LOOP_ITERABLE, NO_REMOTE_READS
 from ..tracking_state import outcome_key
 from ..write_observer import observe_writes
 from . import helpers as _helpers
@@ -670,7 +670,7 @@ class ControlStructureProcessor:
         update_lineage: bool = True,
         header_value: Any = NO_LOOP_ITERABLE,
         header_files: frozenset[str] = frozenset(),
-        header_remote: frozenset[str] = frozenset(),
+        header_remote: Mapping[str, str | None] = NO_REMOTE_READS,
         walked: frozenset[str] = frozenset(),
     ) -> ControlStructureResult:
         """
@@ -927,19 +927,26 @@ def _entry_file_state_digest(file_dependencies) -> str | None:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-def _files_read_since(state, reads_before) -> tuple[set[str], set[str], dict[str, str]] | None:
-    """The files, remote objects and probed paths (``{path: answer}``) the
+def _files_read_since(
+    state, reads_before
+) -> tuple[set[str], set[str], dict[str, str], None, None, dict[str, str]] | None:
+    """The arguments of `compute_file_hash_component` for what the
     statements of a structure recorded since *reads_before* (a copy of
-    ``statement_file_reads``), or None when they recorded none."""
+    ``statement_file_reads``): the files, remote objects and probed paths
+    (``{path: answer}``), and each remote object's token from before its
+    first read among them; or None when they recorded none."""
     local: set[str] = set()
     remote: set[str] = set()
     probes: dict[str, str] = {}
+    as_read: dict[str, str] = {}
     for file_key, (files, objects) in state.statement_file_reads.items():
         if reads_before.get(file_key, (None,))[0] is files:
             continue
         local.update(files)
         remote.update(objects)
         probes.update(state.statement_probes.get(file_key) or {})
+        for url, token in (state.statement_remote_as_read.get(file_key) or {}).items():
+            as_read.setdefault(url, token)
     if not (local or remote or probes):
         return None
-    return local, remote, probes
+    return local, remote, probes, None, None, as_read

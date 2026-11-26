@@ -29,7 +29,7 @@ import warnings
 
 import pytest
 
-from cash import Cash
+from cash import Cash, CashImpurityWarning
 from cash.decorator import hit_memo, library_reads, state_memo
 
 pytestmark = [
@@ -416,6 +416,9 @@ def test_the_first_unrecorded_call_stored_says_so_once(c, unrecorded):
     assert len(said) == 1
     assert said[0].message.code == UNSEEN
     assert "adds_one" in str(said[0].message)
+    # It says a served result may be stale, so it is filtered with the
+    # warnings about what a hit does not repeat.
+    assert said[0].category is CashImpurityWarning
     # Otherwise as before: the entry is served by its key.
     assert f.cache_info()["hits"] == 1
     assert g.cache_info()["hits"] == 1
@@ -525,3 +528,22 @@ def test_the_note_can_be_silenced(c, unrecorded):
         assert f(4) == 2.0
     assert not _said(seen)
     assert f.cache_info()["hits"] == 1
+
+
+async def _async_adds_one(x):
+    return x + 1
+
+
+def test_a_filter_on_the_impurity_class_reaches_the_note(c, monkeypatch):
+    """With impurity warnings made errors (a CI that fails on what a hit
+    would not repeat), the first unrecorded call stored fails too: its
+    result may be served under another library setting."""
+    import asyncio
+
+    monkeypatch.setattr(library_reads, "UNSEEN_SAID", False)
+    f = c.cache(_async_adds_one)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        warnings.filterwarnings("error", category=CashImpurityWarning)
+        with pytest.raises(CashImpurityWarning, match="KEY-LIBRARY-STATE-UNSEEN"):
+            asyncio.run(f(1))

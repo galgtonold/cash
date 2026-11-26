@@ -291,7 +291,7 @@ to watch:
 
 ## Library settings cash cannot check
 
-<!-- claim: cash/decorator/runtime.py:CallRunner._warn_settings_unseen @e7105632 -->
+<!-- claim: cash/decorator/runtime.py:CallRunner._warn_settings_unseen @519346d9 -->
 On Python 3.12 and newer, cash checks the library settings a call read
 (`sklearn.set_config(...)`, `pd.set_option(...)`, `np.seterr(...)`, a
 `ContextVar`) before it serves the entry. Before 3.12, with `CASH_TRACE=0`,

@@ -96,6 +96,7 @@ def _snapshot_with_inherited(
     referred: Iterable[str] = (),
     as_read: Mapping[str, tuple[int, int, int]] | None = None,
     read_lstats: Mapping[str, Any] | None = None,
+    remote_as_read: Mapping[str, str] | None = None,
 ) -> dict[str, dict]:
     """Snapshot the files a statement read itself; take the ones it only
     inherited from its inputs' producers as they recorded them. *known* are
@@ -110,7 +111,9 @@ def _snapshot_with_inherited(
     after them; a file no longer as read is recorded as never fresh
     (`snapshot_file_deps`); *read_lstats*: the stats the reads took of the
     files themselves, which it records them as read by where the digest
-    under them is known. The stats this cell run holds already
+    under them is known; *remote_as_read*: the token each remote object had
+    before it was read, which its record holds (`snapshot_remote_deps`).
+    The stats this cell run holds already
     (`own_stats_this_run`) are taken where they say what a stat taken now
     would: the first statement stored below an unstored read of 13,000
     photos stat-ed each again, and each of their 5,700 folders."""
@@ -131,6 +134,7 @@ def _snapshot_with_inherited(
         as_read=as_read,
         taken=own_stats_this_run() if own else None,
         read_lstats=read_lstats,
+        remote_as_read=remote_as_read,
     )
     for path, recorded in inherited_snapshots.items():
         snapshot.setdefault(path, recorded)
@@ -175,9 +179,19 @@ class _RecordsAsRun:
         checked: Mapping[str, Any] | None,
         read_stats: Mapping[str, tuple[int, int, int]] | None = None,
         read_lstats: Mapping[str, Any] | None = None,
+        remote_as_read: Mapping[str, str] | None = None,
     ) -> None:
         self.key = key
-        self._args = (file_dependencies, accessed_remote, known, probes, checked, read_stats, read_lstats)
+        self._args = (
+            file_dependencies,
+            accessed_remote,
+            known,
+            probes,
+            checked,
+            read_stats,
+            read_lstats,
+            remote_as_read,
+        )
         self._inherited = inherited
         self._snapshot: dict[str, dict] | None = None
         self._held: tuple[str, str] | None = None
@@ -191,7 +205,7 @@ class _RecordsAsRun:
         """The records, as made (`_snapshot_with_inherited`), but for those
         of the entries it refers to."""
         if self._snapshot is None:
-            deps, remote, known, probes, checked, read_stats, read_lstats = self._args
+            deps, remote, known, probes, checked, read_stats, read_lstats, remote_as_read = self._args
             inherited = self._inherited
             if inherited is not None:
                 inherited.settle()
@@ -205,6 +219,7 @@ class _RecordsAsRun:
                 referred=inherited.referred if inherited is not None else (),
                 as_read=read_stats,
                 read_lstats=read_lstats,
+                remote_as_read=remote_as_read,
             )
             self._args = None
         return self._snapshot
@@ -676,6 +691,7 @@ class StatementStore:
             checked,
             _as_read(tracker, execution.written_paths),
             read_lstats,
+            execution.remote_as_read,
         )
         if run.cache_key and (all_file_deps or execution.accessed_remote or execution.probes):
             self.tracking_state.records_as_run[run.cache_key] = as_run
@@ -688,9 +704,10 @@ class StatementStore:
         reuse_end_stats: bool = False,
         reuse_checked: bool = False,
     ) -> bool:
-        """Did a file the statement read change after it read it, a remote
-        object it read get replaced, or a folder it listed gain or lose an
-        entry from outside?
+        """Did a file the statement read change after it read it, or a
+        folder it listed gain or lose an entry from outside? (A remote
+        object is not asked about again: its entry holds the token from
+        before the read, so one replaced since is stale at the next lookup.)
 
         The entry's file fingerprints are taken when it is stored, after the
         statement ran: a file another process replaced while it ran would be
@@ -704,9 +721,7 @@ class StatementStore:
         `FileAccessTracker.inputs_changed_since_read`).
         """
         tracker = execution.file_tracker
-        if tracker is None or not (
-            tracker.read_stats or tracker.listed_stats or attribute_or(tracker, "remote_as_read", None)
-        ):
+        if tracker is None or not (tracker.read_stats or tracker.listed_stats):
             return False
         try:
             moved = tracker.inputs_changed_since_read(reuse_end_stats=reuse_end_stats, reuse_checked=reuse_checked)

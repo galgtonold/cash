@@ -16,7 +16,9 @@ import inspect
 import operator
 import sys
 import traceback
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 from cash._clock import perf_counter
@@ -76,6 +78,9 @@ class _NoLoopIterable:
 #: ``StatementRun.loop_iterable`` when the statement evaluates its own header.
 NO_LOOP_ITERABLE: Any = _NoLoopIterable()
 
+#: No remote object read by a loop's header (``StatementRun.header_remote``).
+NO_REMOTE_READS: Mapping[str, str | None] = MappingProxyType({})
+
 
 def over_the_handed_iterable(source: str) -> tuple[str, ast.Module]:
     """*source*, a ``for`` loop, iterating :data:`LOOP_ITERABLE_NAME` in place
@@ -129,7 +134,9 @@ class StatementRun:
     #: The files and remote URLs evaluating that header read. It ran before
     #: the unit's own tracker started, so they are the unit's reads too.
     header_files: frozenset[str] = frozenset()
-    header_remote: frozenset[str] = frozenset()
+    #: Each remote URL with the token its store gave before that read
+    #: (``FileAccessTracker.remote_as_read``), None where none was taken.
+    header_remote: Mapping[str, str | None] = NO_REMOTE_READS
 
     metrics: ProcessResult = field(default_factory=dict)  # type: ignore[assignment]
     process_start: float = 0.0
@@ -469,6 +476,10 @@ class StatementExecution:
     watch_setup: float = 0.0
     accessed_files: set[str] = field(default_factory=set)
     accessed_remote: set[str] = field(default_factory=set)
+    #: The token each of those objects had before the statement read it
+    #: (``FileAccessTracker.remote_as_read``): what its entry and its
+    #: lineage record the object under.
+    remote_as_read: dict[str, str] = field(default_factory=dict)
     #: The paths it checked for without reading them, with their answers
     #: (``probe_answers``): ``absent``, or what the found path was asked to be.
     probes: dict[str, str] = field(default_factory=dict)

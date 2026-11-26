@@ -23,7 +23,7 @@ from __future__ import annotations
 import ast
 import logging
 import time as _time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from cash._user_attrs import attribute_or
@@ -40,7 +40,7 @@ from ..cache_status import CacheStatus
 from ..lineage_store import statement_tag
 from ..loop_split import REST_NEVER, loop_source_hash, split_nodes
 from ..restored_var import identity_digest
-from ..statement.run import NO_LOOP_ITERABLE
+from ..statement.run import NO_LOOP_ITERABLE, NO_REMOTE_READS
 from . import helpers as _helpers
 from . import single_unit_policy
 from .common import (
@@ -65,12 +65,13 @@ _UNSET = object()
 
 class _Header(NamedTuple):
     """A loop header, evaluated once: its value, the files and remote URLs the
-    evaluation read, and the lengths it recorded for sizing the loop
-    (``single_unit_policy.sizing_header``)."""
+    evaluation read (each URL with the token its store gave before the
+    read, None where none was taken), and the lengths it recorded for
+    sizing the loop (``single_unit_policy.sizing_header``)."""
 
     value: Any
     files: frozenset[str]
-    remote: frozenset[str]
+    remote: Mapping[str, str | None]
     sizes: dict[str, int | None]
 
 
@@ -480,7 +481,7 @@ class ForLoopHandler:
         return _Header(
             iterable,
             frozenset(iter_tracker.get_accessed_files()),
-            frozenset(iter_tracker.get_accessed_remote_urls()),
+            {url: iter_tracker.remote_as_read.get(url) for url in iter_tracker.get_accessed_remote_urls()},
             sizes,
         )
 
@@ -636,7 +637,7 @@ class ForLoopHandler:
             # holds the value (`shared_objects._referrers_by_count`).
             header_value=NO_LOOP_ITERABLE if header is None else header.value,
             header_files=frozenset() if header is None else header.files,
-            header_remote=frozenset() if header is None else header.remote,
+            header_remote=NO_REMOTE_READS if header is None else header.remote,
         )
         if result.success and n_iterations and len(result.metrics) == 1:
             metric = result.metrics[0]

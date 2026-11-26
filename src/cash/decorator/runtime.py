@@ -3221,8 +3221,9 @@ class CallRunner:
         else:
             where = "it returns an iterator, whose code runs after the call and is not recorded"
             way_out = "return a finished value such as a list instead of an iterator"
+        # A result that may be stale, not a cache that does nothing.
         self._notices.warn_once(
-            CashCacheIneffectiveWarning,
+            CashImpurityWarning,
             func_name,
             "library_state_unseen",
             f"{func_name} was stored and {where}, so a library setting changed between calls "

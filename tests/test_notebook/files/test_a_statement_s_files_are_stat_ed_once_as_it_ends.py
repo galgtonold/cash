@@ -75,8 +75,8 @@ def components(monkeypatch):
     seen: list[tuple] = []
     real = file_deps.compute_file_hash_component
 
-    def recording(accessed, remote=None, probes=None, stats=None):
-        out = real(accessed, remote, probes, stats=stats)
+    def recording(accessed, remote=None, probes=None, stats=None, **more):
+        out = real(accessed, remote, probes, stats=stats, **more)
         seen.append((set(accessed), remote, probes, dict(stats or {}), out))
         return out
 

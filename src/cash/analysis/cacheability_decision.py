@@ -352,6 +352,15 @@ def cacheability_verdict(
         return CacheabilityVerdict(False, [analysis_failed("scan the statement for calls it must not cache", exc)])
     if forbidden:
         return CacheabilityVerdict(False, list(forbidden), varies=True)
+    # With or without a waiver: what a function that cannot be analysed
+    # reads from the environment would be in no key.
+    try:
+        unread = _unanalysed_callee_reason(code, user_ns)
+    except Exception as exc:  # noqa: BLE001 - an unjudged statement is not a pure one
+        return CacheabilityVerdict(False, [analysis_failed("check the functions the statement calls", exc)])
+    if unread:
+        # What it read is unknown, so its value may differ from run to run.
+        return CacheabilityVerdict(False, [unread], varies=True)
     if not waived:
         try:
             ambient = _helper_ambient_reasons(code, user_ns)
@@ -408,6 +417,22 @@ def cacheability_verdict(
         return CacheabilityVerdict(False, ["Input variable missing lineage"])
 
     return CacheabilityVerdict(True, [], unless_it_draws=drawn_reason)
+
+
+def _unanalysed_callee_reason(code: str, user_ns: Mapping[str, Any]) -> str | None:
+    """Why *code* runs uncached when a function of the user's it calls
+    cannot be analysed (`unanalysed_callee`): what that function reads from
+    the environment or the clock is unknown, and keyed without it a changed
+    variable would be served the old result. NOTEBOOK-ANALYSIS-FAILED says
+    so once per kind of failure."""
+    from cash.notebook.lineage_formula import unanalysed_callee
+
+    failed = unanalysed_callee(code, user_ns)
+    if failed is None:
+        return None
+    fn, exc = failed
+    name = plain_getattr(fn, "__qualname__", plain_getattr(fn, "__name__", "a function"))
+    return analysis_failed(f"read what {name}(), which the statement calls, reads from the environment", exc)
 
 
 #: (function's code, read) pairs already warned about this session.

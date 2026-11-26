@@ -54,8 +54,8 @@ only. Cross-process locking needs Redis as the backend itself; see
 
 ## What travels between machines
 
-<!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @29ef2395, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @627feb62 -->
-<!-- claim: cash/remote_source.py:RemoteFileDataSource @300338c7 broad="the portability claim is a property of the whole source type" -->
+<!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @389d0e96, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @627feb62 -->
+<!-- claim: cash/remote_source.py:RemoteFileDataSource @67e7eebc broad="the portability claim is a property of the whole source type" -->
 === "Decorator"
 
     | What the cached function does | Hits on another machine? |

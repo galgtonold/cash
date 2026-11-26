@@ -388,6 +388,13 @@ class TrackingState:
     # W: StatementLineageBuilder. R: StatementLineage.
     statement_probes: dict[str, dict[str, str]] = field(default_factory=dict)
 
+    # Cache key -> {url: token} of the remote objects that statement read on
+    # its last run, each under the token its store gave before the read
+    # (``FileAccessTracker.remote_as_read``): what a loop it ran in is named
+    # by, in place of a token asked for after the loop.
+    # W: StatementLineageBuilder. R: ControlStructureProcessor.
+    statement_remote_as_read: dict[str, dict[str, str]] = field(default_factory=dict)
+
     # The order statements read and wrote files in this session: a counter,
     # the count at each cache key's last read, and per path the count at the
     # notebook's last write of it with the file's `stat_key` right after. A
