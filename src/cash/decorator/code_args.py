@@ -368,6 +368,18 @@ class CodeArgs:
             fix,
         )
 
+    def code_found_in(self, value: Any) -> tuple:
+        """The objects carrying user code that a key finds in *value*
+        (`iter_code_carriers`), in the order the walk meets them, for the
+        state memo to read again before each reuse: what a thread-local
+        or a list inside it holds moves no watcher. Records no library
+        met on the way into a key build around it."""
+        token = _LIBRARY_CODE_MET.set(None)
+        try:
+            return tuple(self.iter_code_carriers(value))
+        finally:
+            _LIBRARY_CODE_MET.reset(token)
+
     def iter_code_carriers(self, value: Any, _seen: set | None = None):
         """Yield objects in *value* that carry user code, however deep.
 

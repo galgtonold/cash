@@ -554,7 +554,7 @@ class StateMemo:
         STATS["moved_outside"] += 1
         return True
 
-    def _scan(self, registry: Any) -> bool:
+    def _scan(self, registry: Any, code_in: Callable[[Any], tuple]) -> bool:
         """Watch the function's world now, when due; True when it is
         watched at the current world epoch and generation."""
         gen = GEN[0]
@@ -583,7 +583,9 @@ class StateMemo:
         try:
             cells, tags, _callees, family = main_rebinding.watching(
                 watched,
-                lambda: hit_memo.scan(self.spec, registry, environment_ok=True, content=True, reports=reports),
+                lambda: hit_memo.scan(
+                    self.spec, registry, environment_ok=True, content=True, reports=reports, code_in=code_in
+                ),
             )
             if _moved_only_in is not None:
                 self.outside = main_rebinding.outside_namespaces(
@@ -632,7 +634,7 @@ class StateMemo:
                 return cap.state
         else:
             WHY["why_world" if self.world != _world_epoch() else "why_generation"] += 1
-            if not self._scan(keys._registry):
+            if not self._scan(keys._registry, keys._code_args.code_found_in):
                 return build_now(spec, chain, note=note)
         world, gen, outside = self.world, self.gen, _outside()
         token = STATE_CAPTURE.set(True) if self.remembers else None

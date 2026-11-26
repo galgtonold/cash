@@ -376,7 +376,11 @@ def test_the_seed_epoch_kept_in_the_remembered_part_would_be_stale(c, monkeypatc
     monkeypatch.setattr(state_memo, "_PRE_STAGES", 7)
 
     def whole(self, spec, chain, *, note=False):
-        keys = type("Keys", (), {"_code_state_pre": self._code_state_now, "_registry": self._registry})()
+        keys = type(
+            "Keys",
+            (),
+            {"_code_state_pre": self._code_state_now, "_registry": self._registry, "_code_args": self._code_args},
+        )()
         return state_memo.memo_for(spec).code_state(keys, spec, chain, note)
 
     monkeypatch.setattr(KeyBuilder, "_code_state", whole)
