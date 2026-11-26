@@ -8,7 +8,7 @@ nothing": a statement returning a fresh UUID was cached and gave the first
 one on every run, with no word of it, and the variable was in no key. The
 statement now runs every time and says so once
 (``NOTEBOOK-ANALYSIS-FAILED``), and what is built on its value follows the
-value.
+value. ``# @cash:assume-safe`` caches it, as it does for a read cash named.
 """
 
 from __future__ import annotations
@@ -129,14 +129,15 @@ def test_the_statement_and_what_is_built_on_it_follow_the_variable(
     assert below["status"] != CacheStatus.COMPUTED
 
 
-def test_a_waiver_does_not_cache_it_either(reader, unreadable, statement_processor):
-    """``# @cash:assume-safe`` accepts a read cash named; here it could not
-    tell what the function reads."""
+def test_a_waiver_caches_it(reader, unreadable, statement_processor):
+    """``# @cash:assume-safe`` accepts what the function reads, as it does
+    for a read cash named: the first UUID is kept."""
     _run(statement_processor, "t = token()", _WAIVED)
     value = reader["t"]
-    second, _ = _run(statement_processor, "t = token()", _WAIVED)
-    assert second["status"] == CacheStatus.COMPUTED
-    assert reader["t"] != value
+    second, codes = _run(statement_processor, "t = token()", _WAIVED)
+    assert second["status"] != CacheStatus.COMPUTED
+    assert reader["t"] == value
+    assert codes == []
 
 
 def test_a_statement_calling_only_functions_that_are_analysed_still_caches(reader, unreadable, statement_processor):

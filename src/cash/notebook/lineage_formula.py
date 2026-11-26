@@ -940,34 +940,70 @@ def callee_environment_reads(
     return found
 
 
-def unanalysed_callee(
+def unanalysed_callees(
     code: str, user_ns: Mapping[str, Any] | None, reach: Reach | None = None
-) -> tuple[Any, Exception] | None:
-    """The first of the user's functions *code* calls that the decorator's
-    analysis cannot read, with the error it raised; None when it reads
-    them all.
+) -> list[tuple[Any, Exception]]:
+    """The user's functions *code* calls that the decorator's analysis
+    cannot read, each with the error it raised; empty when it reads them all.
 
     What such a function reads from the environment, the clock or a fresh
     UUID is not known, so neither `callee_environment_reads` nor
     `helper_ambient_reads` can speak for it: "could not tell" is not "reads
-    nothing", and the statement calling it runs uncached
-    (`cacheability_verdict`). The same functions, in the same order, as
-    those two walk.
+    nothing", and the statement calling it runs uncached unless the user
+    waived it (`cacheability_verdict`). The same functions, in the same
+    order, as those two walk.
     """
     if not user_ns:
-        return None
+        return []
     if reach is None:
         reach = reached_user_code(code, user_ns)
     covered: set[int] = set()
+    failed: list[tuple[Any, Exception]] = []
     for fn in reach.functions:
         if id(fn) in covered:
             continue
         try:
             report = get_analyzer().analyze(fn)
         except Exception as exc:  # noqa: BLE001 - fails closed: named to the caller, which refuses the statement
-            return fn, exc
+            failed.append((fn, exc))
+            continue
         covered |= report.covered_ids()
-    return None
+    return failed
+
+
+def unanalysed_callee(
+    code: str, user_ns: Mapping[str, Any] | None, reach: Reach | None = None
+) -> tuple[Any, Exception] | None:
+    """The first of `unanalysed_callees`, or None."""
+    failed = unanalysed_callees(code, user_ns, reach)
+    return failed[0] if failed else None
+
+
+def unkeyed_code(fn: Any, user_ns: Mapping[str, Any] | None) -> str | None:
+    """Why cash cannot tell when the code of *fn*, a function a statement
+    reaches, changes; None when a key holds it.
+
+    A function defined in the notebook is keyed by the lineage of the name
+    that holds it, whatever built it. One of a local module is keyed by
+    the module's source file: with no ``.py`` file to read (bytecode
+    alone), or built from text that file does not hold (``exec`` of what
+    was read elsewhere), an edit to it reaches no key.
+    """
+    globals_ = attribute_or(fn, "__globals__", None)
+    if globals_ is None:
+        return "it is not a Python function"
+    if user_ns is not None and globals_ is user_ns:
+        return None
+    module = sys.modules.get(attribute_or(fn, "__module__", None) or "")
+    path = attribute_or(module, "__file__", None) if module is not None else None
+    if not (isinstance(path, str) and path.endswith(".py") and os.path.isfile(path)):
+        return "its module has no source file"
+    built_from = attribute_or(attribute_or(fn, "__code__", None), "co_filename", None)
+    try:
+        same = isinstance(built_from, str) and os.path.samefile(built_from, path)
+    except OSError:
+        same = False
+    return None if same else "it was not built from its module's source file"
 
 
 #: Clocks that only measure time passing: a busy-wait, a timeout loop or a

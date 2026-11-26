@@ -2296,7 +2296,7 @@ every time.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/analysis/cacheability_decision.py:analysis_failed @8d0bd6a1, cash/analysis/cacheability_decision.py:_unanalysed_callee_reason @1577827c -->
+<!-- claim: cash/analysis/cacheability_decision.py:analysis_failed @4056357f -->
 **What happened.** A check that decides whether a statement may be cached
 raised an error: the scan for calls it must not cache, or the analysis of the
 functions it calls, of what they write and of what they read from the
@@ -2307,6 +2307,19 @@ statement runs every time and is not stored. The result is correct.
 
 **What to do.** Nothing in your code needs to change. Please report the
 exception as a bug. The warning is shown once per check and error type.
+
+<!-- claim: cash/analysis/cacheability_decision.py:_unanalysed_callee_reason @8331ae1d, cash/notebook/lineage_formula.py:unkeyed_code @0ee90712, cash/notebook/lineage_formula.py:unanalysed_callees @b411aa4e -->
+When the check that failed is the analysis of a function the statement
+calls, cash does not know what that function reads from the environment or
+the clock. If you know it reads no clock and makes no fresh id, put
+`# @cash:assume-safe` on the statement, or on the function's `def` line: the
+statement is then cached. The function's code and the code it calls are still
+in the key, so an edit to either runs the statement again, and a changed
+environment variable the function read does too. The message says when the
+waiver cannot help: the function belongs to a module with no `.py` file, or
+the module built it from text its file does not hold. cash cannot tell when
+such code changes, so the statement runs every time with or without the
+waiver.
 
 **When it is safe to ignore.** When the statement is cheap to run.
 

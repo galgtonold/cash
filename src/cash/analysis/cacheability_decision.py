@@ -263,7 +263,7 @@ def receiver_is_identity_coupled(value: Any) -> bool:
 _REPORTED_FAILURES: set[tuple[str, str]] = set()
 
 
-def analysis_failed(check: str, exc: BaseException) -> str:
+def analysis_failed(check: str, exc: BaseException, *, fix: str | None = None) -> str:
     """The uncacheable reason for a safety *check* that raised, warned once.
 
     A check whose job is to stop caching cannot answer "nothing found" when it
@@ -283,7 +283,7 @@ def analysis_failed(check: str, exc: BaseException) -> str:
                 CashCacheIneffectiveWarning,
                 "NOTEBOOK-ANALYSIS-FAILED",
                 f"{reason}.",
-                "nothing to change in your code; please report the error so the check can handle it.",
+                fix or "nothing to change in your code; please report the error so the check can handle it.",
             )
         except Exception:
             logger.debug("could not warn about a failed analysis", exc_info=True)
@@ -352,10 +352,8 @@ def cacheability_verdict(
         return CacheabilityVerdict(False, [analysis_failed("scan the statement for calls it must not cache", exc)])
     if forbidden:
         return CacheabilityVerdict(False, list(forbidden), varies=True)
-    # With or without a waiver: what a function that cannot be analysed
-    # reads from the environment would be in no key.
     try:
-        unread = _unanalysed_callee_reason(code, user_ns)
+        unread = _unanalysed_callee_reason(code, user_ns, waived)
     except Exception as exc:  # noqa: BLE001 - an unjudged statement is not a pure one
         return CacheabilityVerdict(False, [analysis_failed("check the functions the statement calls", exc)])
     if unread:
@@ -419,20 +417,79 @@ def cacheability_verdict(
     return CacheabilityVerdict(True, [], unless_it_draws=drawn_reason)
 
 
-def _unanalysed_callee_reason(code: str, user_ns: Mapping[str, Any]) -> str | None:
-    """Why *code* runs uncached when a function of the user's it calls
-    cannot be analysed (`unanalysed_callee`): what that function reads from
-    the environment or the clock is unknown, and keyed without it a changed
-    variable would be served the old result. NOTEBOOK-ANALYSIS-FAILED says
-    so once per kind of failure."""
-    from cash.notebook.lineage_formula import unanalysed_callee
+#: The fix line for a callee the analysis could not read, whose code is keyed.
+_WAIVE_UNREAD_CALLEE = (
+    "nothing to change in your code; please report the error so the check can handle it. If the function "
+    "reads no clock and no fresh id, `# @cash:assume-safe` on the statement, or on the function's `def` "
+    "line, caches the statement anyway: its code and the code it calls are still in the key."
+)
+#: The fix line where the waiver cannot help.
+_UNSEEN_CALLEE = (
+    "please report the error. `# @cash:assume-safe` does not cache this statement: a waiver accepts what "
+    "the function reads, and here cash cannot see the function's code to tell when it changes."
+)
 
-    failed = unanalysed_callee(code, user_ns)
-    if failed is None:
-        return None
-    fn, exc = failed
-    name = plain_getattr(fn, "__qualname__", plain_getattr(fn, "__name__", "a function"))
-    return analysis_failed(f"read what {name}(), which the statement calls, reads from the environment", exc)
+
+def _unanalysed_callee_reason(code: str, user_ns: Mapping[str, Any], waived: bool = False) -> str | None:
+    """Why *code* runs uncached when a function of the user's it calls
+    cannot be analysed (`unanalysed_callees`), or None when it may be cached.
+
+    What that function reads from the environment or the clock is unknown,
+    and keyed without it a changed variable would be served the old result.
+    NOTEBOOK-ANALYSIS-FAILED says so once per kind of failure.
+
+    ``# @cash:assume-safe`` on the statement (*waived*), or on the ``def``
+    line of each such function, accepts those reads, as it accepts a clock
+    read cash named: the statement is cached. Its code is in the key by
+    another path -- the functions the statement reaches are found from
+    their bytecode (`reached_user_code`), a function defined in a cell is
+    keyed by the lineage of its name and one of a local module by the
+    module's source. Not where that path has nothing to read
+    (`unkeyed_code`): the waiver cannot cover code cash cannot see.
+    """
+    from cash.notebook.lineage_formula import unanalysed_callees, unkeyed_code
+
+    refused = None
+    for fn, exc in unanalysed_callees(code, user_ns):
+        name = plain_getattr(fn, "__qualname__", plain_getattr(fn, "__name__", "a function"))
+        unseen = unkeyed_code(fn, user_ns)
+        if unseen:
+            return analysis_failed(
+                f"read {name}(), which the statement calls, and cannot tell when its code changes ({unseen})",
+                exc,
+                fix=_UNSEEN_CALLEE,
+            )
+        if waived or refused is not None:
+            continue
+        if _def_line_waived(fn):
+            continue
+        refused = analysis_failed(
+            f"read what {name}(), which the statement calls, reads from the environment",
+            exc,
+            fix=_WAIVE_UNREAD_CALLEE,
+        )
+    return refused
+
+
+def _def_line_waived(fn: Any) -> bool:
+    """Is ``# @cash:assume-safe`` on *fn*'s ``def`` line, or alone on the
+    line above it? Read from the function's source, wherever it was
+    defined: a module's file or a cell."""
+    from cash.analysis.annotations import line_assumes_safe
+    from cash.exceptions import SOURCE_RETRIEVAL_ERRORS
+    from cash.source_reading import getsource
+
+    try:
+        lines = getsource(fn).splitlines()
+    except SOURCE_RETRIEVAL_ERRORS:
+        return False
+    above = ""
+    for line in lines:
+        text = line.lstrip()
+        if text.startswith(("def ", "async def ")):
+            return line_assumes_safe(line) or (above.startswith("#") and line_assumes_safe(above))
+        above = text
+    return False
 
 
 #: (function's code, read) pairs already warned about this session.

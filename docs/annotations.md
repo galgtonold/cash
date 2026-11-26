@@ -88,7 +88,7 @@ Results that took longer than 0.1 s are usually on disk already.
 
 ### `# @cash:no-cache`
 
-<!-- claim: cash/analysis/cacheability_decision.py:cacheability_verdict @79feac0a, cash/notebook/statement/processor.py:NO_CACHE_REASON @68873902 -->
+<!-- claim: cash/analysis/cacheability_decision.py:cacheability_verdict @354d50b1, cash/notebook/statement/processor.py:NO_CACHE_REASON @68873902 -->
 The statement runs every time and nothing is stored, including the calls inside
 it. The badge shows an `EXECUTED` row; run again, its reason reads `marked
 # @cash:no-cache, so it runs every time`. A statement below that reads its
@@ -130,7 +130,7 @@ The value is still cached and replayed. To get a new draw every run, use
 
 ### `# @cash:assume-safe`
 
-<!-- claim: cash/analysis/cacheability_decision.py:cacheability_verdict @79feac0a, cash/analysis/annotations.py:leading_cell_annotation @0d279828 -->
+<!-- claim: cash/analysis/cacheability_decision.py:cacheability_verdict @354d50b1, cash/analysis/annotations.py:leading_cell_annotation @0d279828 -->
 cash runs a statement with a side effect every time, and it judges effects by
 name: it cannot tell a POST that creates an order from a POST that runs a search.
 `assume-safe` tells it the effect is harmless to skip, so the statement is cached
@@ -156,6 +156,19 @@ clock or calls `input()` still runs every time, and so does one that
 changes in place an object cash cannot store. It applies to its own
 statement, even at the top of a cell. Add `# @cash:ttl=N` when the answer
 can go stale.
+
+<!-- claim: cash/analysis/cacheability_decision.py:_unanalysed_callee_reason @8331ae1d, cash/notebook/lineage_formula.py:unkeyed_code @0ee90712 -->
+It also caches a statement that calls a function of yours cash could not
+analyse ([`NOTEBOOK-ANALYSIS-FAILED`](warnings.md#notebook-analysis-failed)).
+Without the analysis cash does not know whether the function reads the clock
+or makes a fresh id, so the statement runs every time; the comment on the
+statement, or on the function's `def` line, accepts whatever it reads. The
+function's code and the code it calls stay in the key, so an edit still runs
+the statement again, and so does a changed environment variable the function
+read. One case stays uncached with the comment too: a function of a module
+that has no `.py` file, or that the module built from text its file does not
+hold. cash cannot tell when such code changes, and the comment cannot cover
+code cash cannot see.
 
 <!-- claim: cash/analysis/annotations.py:get_statement_annotations @7fbe4d48, cash/analysis/annotations.py:is_assume_safe_block @e4c86526 -->
 In a cell, use this comment rather than `with cash.assume_safe():`, the form
