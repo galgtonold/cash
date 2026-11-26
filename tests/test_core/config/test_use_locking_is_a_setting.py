@@ -27,14 +27,17 @@ import cash
 {setup}
 LOG = os.path.join(os.getcwd(), "runs.log")
 barrier = threading.Barrier({n})
-started = threading.Event()
+entered = threading.Barrier({n})
 
 @cash.cache
 def paid_call(x):
     fd = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe
     os.write(fd, b"x")
     os.close(fd)
-    started.wait(0.5)   # still running when the other callers arrive
+    try:
+        entered.wait({hold})   # still running when the other callers arrive
+    except threading.BrokenBarrierError:
+        pass
     return x
 
 def call(_):
@@ -47,8 +50,12 @@ print("RUNS", os.path.getsize(LOG))
 """
 
 
-def _runs(tmp_path, setup="", env=None, cache_dir=...):
-    (tmp_path / "main.py").write_text(SCRIPT.format(setup=setup, n=N), encoding="utf-8")
+def _runs(tmp_path, setup="", env=None, cache_dir=..., hold=0.5):
+    """How many callers ran the body. Each one in the body holds it until
+    all ``N`` are in, or *hold* seconds pass: one who is let in only after
+    the value is stored is served it, as it should be."""
+    script = SCRIPT.format(setup=setup, n=N, hold=hold)
+    (tmp_path / "main.py").write_text(script, encoding="utf-8")
     kwargs = {} if cache_dir is ... else {"cache_dir": cache_dir}
     out = run_python("main.py", cwd=tmp_path, env=env, **kwargs).stdout
     return int(out.split("RUNS")[1])
@@ -56,8 +63,11 @@ def _runs(tmp_path, setup="", env=None, cache_dir=...):
 
 @pytest.mark.timeout(120)
 def test_without_the_setting_every_concurrent_caller_computes(tmp_path):
-    """The control: the script does overlap its callers."""
-    assert _runs(tmp_path) == N
+    """The control: the script does overlap its callers. Every caller waits
+    in the body for all of them, so none can arrive after the first one has
+    stored however slowly a loaded runner schedules it; a cash that let
+    only some in would hold the body half a minute and count fewer."""
+    assert _runs(tmp_path, hold=30) == N
 
 
 @pytest.mark.timeout(120)
