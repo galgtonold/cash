@@ -84,7 +84,12 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 @pytest.fixture
-def origin():
+def origin(monkeypatch):
+    # Never proxied, and said so: with no proxy setting in the environment,
+    # urllib asks macOS's SystemConfiguration, which crashes a process
+    # forked from one that used it (CPython's multiprocessing docs: fork
+    # is unsafe on macOS). The pool tests below read in a forked worker.
+    monkeypatch.setenv("no_proxy", "127.0.0.1")
     state = _Origin()
     server = LocalThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     server.state = state
