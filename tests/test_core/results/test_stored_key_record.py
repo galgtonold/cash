@@ -242,3 +242,38 @@ def test_a_loop_of_new_keys_keeps_one_view_across_trims_and_writes(tmp_path, mon
             assert record.miss_facts("mod.f", old) == facts_from_doc(record.read("mod.f"), old), (i, old)
     assert len(built) <= 2, f"the view was built {len(built)} times in 500 misses"
     record.close()
+
+
+def test_a_write_landing_while_a_miss_reads_the_record_is_in_its_answer(tmp_path, monkeypatch):
+    """The background write of the first noted key lands while a miss has
+    read the record but not yet looked at its view: the miss answers with
+    what that write wrote, and builds the view no more than once again."""
+    from cash.decorator.stored_keys import facts_from_doc
+
+    monkeypatch.setattr(StoredKeyRecord, "WRITE_INTERVAL", 3600.0)  # written only when the test says
+    record = StoredKeyRecord(lambda: str(tmp_path))
+    record.note_stored("mod.f", "mod.f:s:d:a0", None, _no_ledger)
+    record.flush()
+    record.miss_facts("mod.f", "mod.f:s:d:a0")  # the view, on the record as written
+    record.note_stored("mod.f", "mod.f:s:d:a1", None, _no_ledger)  # held: written a moment ago
+    built = []
+    real_view = stored_keys._View.__init__
+    monkeypatch.setattr(stored_keys._View, "__init__", lambda self, *a: (built.append(1), real_view(self, *a))[1])
+    real_read = StoredKeyRecord._disk_doc
+    landed = []
+
+    def read_then_write(self, path, recheck_after):
+        doc = real_read(self, path, recheck_after)
+        if not landed:
+            landed.append(1)
+            self.flush()  # the write lands between the read and the view
+        return doc
+
+    monkeypatch.setattr(StoredKeyRecord, "_disk_doc", read_then_write)
+    got = record.miss_facts("mod.f", "mod.f:s:d:a1")
+    assert landed
+    monkeypatch.setattr(StoredKeyRecord, "_disk_doc", real_read)
+    assert got == facts_from_doc(record.read("mod.f"), "mod.f:s:d:a1")
+    record.miss_facts("mod.f", "mod.f:s:d:a2")
+    assert len(built) <= 1, f"the view was built {len(built)} times"
+    record.close()
