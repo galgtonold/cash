@@ -190,6 +190,13 @@ dev = [
     # A figure's fig.show() sends a bundle with no text/plain; the display
     # replay test shows it as plain shows it.
     "plotly",
+    # plotly looks for both on fig.show() and remembers the ones it did not
+    # find, a memo px.scatter read before: without them the figure's entry
+    # reads as made under another library setting and the statement runs
+    # once more (test_a_plotly_figure_shows_no_stray_line). kaleido is
+    # only imported, never asked to render, so it needs no browser.
+    "orjson",
+    "kaleido",
     # A seaborn grid holds the user's frame next to a figure its axes hold
     # back; test_a_frame_a_seaborn_grid_holds_stays_the_users.py needs a real one.
     "seaborn",
