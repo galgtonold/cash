@@ -191,8 +191,9 @@ status = %cash_status dict
 - No argument or `--all`: every tracked variable with its last status
   (`EXECUTED`, `CACHED` or `SKIPPED`) and number of records.
 - `NAME`: how that variable was computed: code, inputs, duration and history.
-  Add `--graph` for its dependency graph, `--time` for a timeline, or `--json`
-  for JSON instead of text.
+  Add `--graph` for its dependency graph, `--time` for a timeline (one line
+  per run: the time, `EXECUTED`, `CACHED` or `SKIPPED`, and how long it took),
+  or `--json` for JSON instead of text. Like every magic, it prints plain text.
 - `--clear`: forget all provenance records.
 
 Any other flag, or an extra word, prints an error and shows nothing else.

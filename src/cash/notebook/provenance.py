@@ -208,9 +208,8 @@ class ProvenanceTracker:
         lines = ["", "  Timeline:"]
         for record in history[-10:]:
             ts = time.strftime("%H:%M:%S", time.localtime(record.timestamp))
-            icon = {"computed": "🔧", "restored": "📦", "skipped": "⏭️"}.get(record.status, "❓")
             word = BADGE_WORDS.get(record.status, record.status)
-            lines.append(f"    {ts} {icon} {word} ({record.duration_ms:.1f}ms)")
+            lines.append(f"    {ts} {word} ({record.duration_ms:.1f}ms)")
         return lines
 
     def format_provenance(self, variable: str, show_graph: bool = False, show_timeline: bool = False) -> str:
@@ -228,7 +227,7 @@ class ProvenanceTracker:
             return f"No provenance recorded for '{variable}'"
 
         latest = history[-1]
-        lines.append(f"📋 Provenance for '{variable}':")
+        lines.append(f"Provenance for '{variable}':")
         lines.append(f"  Last recorded: {time.strftime('%H:%M:%S', time.localtime(latest.timestamp))}")
         lines.append(f"  Status: {BADGE_WORDS.get(latest.status, latest.status)}")
         lines.append(f"  Code: {latest.code.strip()[:80]}")
