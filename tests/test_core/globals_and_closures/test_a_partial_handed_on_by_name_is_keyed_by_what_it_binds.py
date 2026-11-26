@@ -125,9 +125,9 @@ print(report(3))
 
 
 def test_the_line_edited_before_the_next_run_recomputes(tmp_path):
-    (tmp_path / "job.py").write_text(textwrap.dedent(MODULE.format(rows=1)))
+    (tmp_path / "job.py").write_text(textwrap.dedent(MODULE.format(rows=1)), encoding="utf-8")
     assert run_python("job.py", cwd=tmp_path).stdout.split() == ["[3]"]
-    (tmp_path / "job.py").write_text(textwrap.dedent(MODULE.format(rows=2)))
+    (tmp_path / "job.py").write_text(textwrap.dedent(MODULE.format(rows=2)), encoding="utf-8")
     assert run_python("job.py", cwd=tmp_path).stdout.split() == ["[6]"]
 
 
