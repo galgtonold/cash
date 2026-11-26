@@ -9,7 +9,8 @@ it holds per thread (a ``threading.local``) and refused it, so every call
 folded the state segment again (`state_memo`).
 
 The scan now watches such a global for what keeps it left out, its class
-and its ``__dict__``, and does not look into it. Every reuse here is
+and its ``__dict__``, and looks into it only for the user code a key
+finds there (`test_code_a_left_out_global_holds_where_no_watcher_sees_is_followed_by_the_state_memo`). Every reuse here is
 checked against a fresh fold (``CASH_STATE_MEMO_VERIFY``): after a write
 the watch sees, after one it does not (into the thread-local), after
 the lock is dropped so the object is keyed again, and with a hasher

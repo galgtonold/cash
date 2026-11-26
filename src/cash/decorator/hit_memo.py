@@ -97,6 +97,8 @@ from .user_code import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from .cached_function import CachedFunction
 
 __all__ = ["ENABLED", "VERIFY", "HitMemo", "HitMemoMismatch", "bump", "flush_all", "status"]
@@ -547,6 +549,10 @@ class _Scan:
         #: watched for that alone (`global_value`)? Not with a hasher
         #: registered.
         self.left_out_ok = False
+        #: The state memo's scan: the user code a key finds in a value,
+        #: as `_Items` (`CodeArgs.code_found_in`); without it a global the
+        #: key leaves out whole is looked into as any value.
+        self.code_in: Callable[[Any], _Items] | None = None
 
     def _first(self, key: Any, obj: Any) -> bool:
         if key in self.seen:
@@ -563,13 +569,37 @@ class _Scan:
         (`GlobalValues.safe_global_hash`). The state memo's scan: one the
         key leaves out whole (`key_values.left_out_whole`) is watched for
         what keeps it left out, its class and its ``__dict__``, and not
-        looked into. Rebinding the name moves the namespace watched already."""
-        if self.left_out_ok and self.content and left_out_whole(v):
+        looked into but for the user code the key still finds in it
+        (`_held_code`). Rebinding the name moves the namespace watched
+        already."""
+        if self.left_out_ok and self.content and self.code_in is not None and left_out_whole(v):
             if self._first(("left out", id(v)), v):
                 self.watch(object.__getattribute__(v, "__dict__"), True)
                 self._keeps_class_and_dict(v)
+                self._held_code(v, names)
             return
         self.value(v, names)
+
+    def _held_code(self, v: Any, names: frozenset) -> None:
+        """The state memo's scan: the user code a key finds in *v*, a
+        global it leaves out whole. Its value is not keyed, but the code
+        it holds is, and what that code reads
+        (`GlobalsFold.held_value_code_parts`), wherever it is held: in a
+        list no watcher sees, or in a ``threading.local``, whose
+        attributes are each thread's own. Which code that is is found
+        again before every reuse, on the thread reusing, by the key's own
+        walk (`CodeArgs.code_found_in`), and compared by identity; each
+        piece is scanned as any value met, its code and its reads
+        watched."""
+        assert self.code_in is not None
+        probe = ContentProbe(v, self.code_in)
+        shallow, self.shallow = self.shallow, False
+        try:
+            for carrier in probe.digest.items:
+                self.value(carrier, names)
+        finally:
+            self.shallow = shallow
+        self.probes[probe] = probe.digest
 
     def watch(self, d: dict, unkeyed: bool) -> None:
         if type(d) is not dict:
@@ -1458,6 +1488,7 @@ def scan(
     environment_ok: bool = False,
     content: bool = False,
     reports: list | None = None,
+    code_in: Callable[[Any], tuple] | None = None,
 ) -> tuple[tuple, tuple, list, _Family | None]:
     """Watch the world of *spec*'s key. Returns the cells and the class
     tags a fast hit compares, the states of the cached functions it
@@ -1467,10 +1498,15 @@ def scan(
     an environment read does not make it ineligible. With *content* (the
     state memo too) a list or an array met is read again on every reuse
     (`ContentProbe`) instead of making it ineligible. *reports*, when
-    given, collects the analyses the scan resolved helpers by."""
+    given, collects the analyses the scan resolved helpers by. *code_in*
+    is the key's walk for the user code a value holds
+    (`CodeArgs.code_found_in`), which a global the key leaves out whole is
+    watched for (`_Scan.global_value`)."""
     func, name = spec.func, spec.name
     s = _Scan(plain_getattr(func, "__module__", None), func)
     s.content = content
+    if code_in is not None:
+        s.code_in = lambda v: _Items(code_in(v))
     hashers = plain_getattr(registry, "arg_hasher", None)
     # A registered hasher may key what a value holds, lock and all.
     s.left_out_ok = content and not (hashers is not None and (hashers.type_hashers or hashers.override_hashers))
