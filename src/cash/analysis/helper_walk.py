@@ -27,6 +27,7 @@ import ast
 import contextlib
 import contextvars
 import dataclasses
+import functools
 import inspect
 import os
 import sys
@@ -867,13 +868,20 @@ class HelperWalk:
         call position: ``fn = helper; fn(x)``, ``_apply(helper, x)``.
 
         Any read name that resolves to a user FUNCTION is a source dependency.
-        Restricted to functions and methods, so modules and arbitrary values
-        are not folded in. The direction is safe: at worst it over-invalidates
-        (a referenced-but-unused function recomputes), never serves stale.
+        Restricted to functions, methods and partials, so modules and
+        arbitrary values are not folded in. The direction is safe: at worst it
+        over-invalidates (a referenced-but-unused function recomputes), never
+        serves stale.
+
+        A partial handed on (``INT = partial(scale, rows=1)``;
+        ``map(INT, xs)``) is queued like one called: its function is walked
+        and its binding noted, so the arguments it was built with reach the
+        key (`GlobalsFold._fold_binding_data`). Before, only a call site
+        queued it, and rebinding ``INT`` to ``rows=2`` served the old result.
         """
         for name in body.visitor.read_names:
             value = body.namespace.get(name)
-            if _is_function(value) or instance_of(value, types.MethodType):
+            if _is_function(value) or _is_bound_or_partial(value):
                 self._queue_helper(body, value, 0, _call_site_path(body, (name,)))
             elif isinstance(value, type):
                 # A user class named but not called by a user path:
@@ -966,8 +974,10 @@ class HelperWalk:
             value = resolve_callee(node, body.namespace, modules_only=False)
             if value is None or is_mock(value):
                 continue
-            if getattr(value, "_cash_cached", False) is True or (
-                (_is_function(value) or inspect.ismethod(value)) and is_user_code(value, self._root_module)
+            if (
+                getattr(value, "_cash_cached", False) is True
+                or ((_is_function(value) or inspect.ismethod(value)) and is_user_code(value, self._root_module))
+                or instance_of(value, functools.partial)
             ):
                 self._queue_helper(body, value, getattr(node, "lineno", 0), _call_site_path(body, chain))
             elif isinstance(value, type):
@@ -1340,6 +1350,13 @@ def _made_anew(arg: Any, made: dict[int, Any]) -> Any:
 def _is_function(value: Any) -> bool:
     """A plain function, or a JIT-compiled one (`cash.jit_functions`)."""
     return type(value) is types.FunctionType or jit_python_function(value) is not None
+
+
+def _is_bound_or_partial(value: Any) -> bool:
+    """A bound method or a ``functools.partial``: a callable that carries
+    data besides its code, queued as a helper wherever it is read
+    (`_queue_named_values`), called or not."""
+    return instance_of(value, types.MethodType) or instance_of(value, functools.partial)
 
 
 def _walk_id(func: Any) -> Any:
