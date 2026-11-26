@@ -5,7 +5,7 @@ arguments. The key looked for ``self`` in the arguments only, so what the
 body reached through it -- a subclass's override of a method and the module
 helpers that override calls -- was never folded. Editing such a helper kept
 the key, and a later process was served the old result whenever the run-time
-trace was off (``CASH_TRACE=0``, Python before 3.12) or could not be built
+trace was off (``CASH_TRACE=0``) or could not be built
 (here: a helper behind a closure decorator).
 
 Each run is a fresh interpreter over one cache folder.

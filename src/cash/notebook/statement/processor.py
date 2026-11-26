@@ -1641,10 +1641,10 @@ class StatementProcessor:
 
     def _warn_settings_unseen(self, run: StatementRun, result: Mapping[str, Any]) -> None:
         """KEY-LIBRARY-STATE-UNSEEN, once a process: a statement reaching a
-        library was stored, and nothing recorded what it ran (below Python
-        3.12, or ``CASH_TRACE=0``), so the library settings it read are not
-        checked before it is served (`Shadow._library_item` does on 3.12+),
-        as an unrecorded ``@cash.cache`` call says."""
+        library was stored, and nothing recorded what it ran (``CASH_TRACE=0``,
+        or no monitoring tool id free), so the library settings it read are
+        not checked before it is served (`Shadow._library_item` does when
+        the statement is recorded), as an unrecorded ``@cash.cache`` call says."""
         from ...decorator import code_trace, library_reads
 
         if library_reads.UNSEEN_SAID or run.skip_cache or not result.get("storage"):
@@ -1655,9 +1655,7 @@ class StatementProcessor:
         if not library_reads.reaches_library(ns[name] for name in run.inputs or () if name in ns):
             return
         library_reads.UNSEEN_SAID = True
-        if not code_trace.TRACEABLE:
-            where = "Python below 3.12 does not record what a statement runs"
-        elif not code_trace.on():
+        if not code_trace.on():
             where = "CASH_TRACE=0 turns off recording what a statement runs"
         else:
             where = "the monitoring tool that records what a statement runs could not be had"
@@ -1669,7 +1667,7 @@ class StatementProcessor:
             "cell (sklearn.set_config, pd.set_option, np.seterr, a ContextVar, an attribute set on a library's "
             "class, ...) is not detected: the statement is restored with the result made under the old "
             "setting. Said once per process.",
-            "run on Python 3.12+ with tracing on (the default), or put `# @cash:no-cache` on a statement "
+            "run with tracing on (the default), or put `# @cash:no-cache` on a statement "
             "whose result a setting changes.",
         )
 

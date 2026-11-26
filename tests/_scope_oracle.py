@@ -32,7 +32,7 @@ PY = sys.version_info[:2]
 # The corpus: (first version it parses on, source)
 # ---------------------------------------------------------------------------
 
-_ANY = (3, 10)
+_ANY = (3, 12)
 
 SNIPPETS: list[tuple[tuple[int, int], str]] = [
     # --- plain bindings --------------------------------------------------

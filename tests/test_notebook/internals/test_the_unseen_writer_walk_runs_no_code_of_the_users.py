@@ -6,8 +6,6 @@ lambdas on one line are told apart by where each starts."""
 
 from __future__ import annotations
 
-import sys
-
 import pytest
 
 from cash.notebook.statement.unseen_writes import SET_LATER, own_writes, writers_without_a_trace
@@ -218,22 +216,11 @@ H = {"g": lambda o: 1, "f": lambda o: calls.append(1) or 1}
 G = {"f": lambda o: calls.append(1) or 1, "g": lambda o: 1}
 
 
-@pytest.mark.skipif(sys.version_info < (3, 11), reason="positions to tell them apart are there from 3.11")
 def test_two_lambdas_on_one_line_are_read_each_as_itself():
     assert own_writes(H["f"].__code__) == {"calls"}
     assert own_writes(H["g"].__code__) == set()
     assert own_writes(G["f"].__code__) == {"calls"}
     assert own_writes(G["g"].__code__) == set()
-
-
-@pytest.mark.skipif(sys.version_info >= (3, 11), reason="3.10 has no positions to tell them apart")
-def test_two_lambdas_on_one_line_are_read_off_their_bytecode_before_3_11():
-    # Their text cannot be told apart, so each is read off its bytecode: one
-    # that loads and calls nothing changes nothing, one that calls may.
-    assert own_writes(H["g"].__code__) == set()
-    assert own_writes(G["g"].__code__) == set()
-    assert own_writes(H["f"].__code__) == {"?"}
-    assert own_writes(G["f"].__code__) == {"?"}
 
 
 def test_a_method_set_on_a_class_later_is_said_to_be_unseeable():

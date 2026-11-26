@@ -36,15 +36,13 @@ def test_blake3_is_asked_for_on_cpython_only():
 
 def test_on_cpython_every_dependency_applies_and_on_pypy_blake3_does_not():
     cpython = {"platform_python_implementation": "CPython", "python_version": "3.12"}
-    pypy = {"platform_python_implementation": "PyPy", "python_version": "3.11"}
+    pypy = {"platform_python_implementation": "PyPy", "python_version": "3.12"}
     assert dependency_floor.applying_dependencies(_dependencies(), cpython) == ["psutil", "blake3"]
     assert dependency_floor.applying_dependencies(_dependencies(), pypy) == ["psutil"]
-    old = {"platform_python_implementation": "CPython", "python_version": "3.10"}
-    assert dependency_floor.applying_dependencies(_dependencies(), old) == ["psutil", "tomli", "blake3"]
 
 
 def test_an_extra_is_not_a_dependency():
-    lines = ["psutil>=5", 'mkdocs>=1.5; extra == "docs"', "pytest; python_version >= '3.10' and extra == 'dev'"]
+    lines = ["psutil>=5", 'mkdocs>=1.5; extra == "docs"', "pytest; python_version >= '3.12' and extra == 'dev'"]
     assert dependency_floor.applying_dependencies(lines) == ["psutil"]
 
 

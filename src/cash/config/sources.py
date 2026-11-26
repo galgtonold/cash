@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import os
 import re
-import sys
 from dataclasses import fields
 from pathlib import Path
 from typing import Any
@@ -75,10 +74,7 @@ def load_toml_layer(path: Path) -> tuple[dict[str, Any], str]:
     """`_load_toml_config`, plus which of the ``TOML_*`` outcomes it was."""
     if not path.exists():
         return {}, TOML_MISSING
-    if sys.version_info >= (3, 11):
-        import tomllib
-    else:  # cash depends on tomli there
-        import tomli as tomllib
+    import tomllib
 
     try:
         with open(path, "rb") as f:

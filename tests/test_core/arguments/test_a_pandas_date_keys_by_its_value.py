@@ -13,7 +13,6 @@ of values without dates are the bytes they were.
 from __future__ import annotations
 
 import datetime
-import sys
 import tracemalloc
 from collections import namedtuple
 from dataclasses import dataclass
@@ -139,7 +138,6 @@ def test_zoned_timestamps_of_one_zone_key_as_one_array():
     assert key(mixed) == key(list(mixed))
 
 
-@pytest.mark.skipif(sys.version_info < (3, 11), reason="no object.__getstate__: a dict is made to look")
 def test_keying_makes_no_dict_for_each_timestamp():
     stamps = list(pd.date_range("2020-01-01", periods=200_000, freq="min"))
     tracemalloc.start()

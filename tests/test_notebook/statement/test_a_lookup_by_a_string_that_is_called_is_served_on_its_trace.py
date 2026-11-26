@@ -1,6 +1,6 @@
 """A statement that looks a function up by a string and calls it at once --
 ``globals()[name](3)``, ``NS.get(name)(3)``, ``getattr(me, name)(3)`` -- is
-served on its trace on Python 3.12+, where before it ran every time.
+served on its trace, where before it ran every time.
 
 Its key cannot name the function the string finds, so the run's trace
 records what was called, the name holding it, and what the function read,

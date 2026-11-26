@@ -23,8 +23,6 @@ from cash.analysis.annotations import CacheAnnotation
 from cash.notebook import shadow
 from cash.notebook.cache_status import CacheStatus
 
-TRACED = sys.version_info >= (3, 12)
-
 _PERSIST = CacheAnnotation(persist=True)
 
 
@@ -75,7 +73,6 @@ def test_a_function_found_by_a_string_hands_its_new_result_on(trace_default, sta
         assert ns["u"] == ns["t"] == ns["make"](3)
 
 
-@pytest.mark.skipif(not TRACED, reason="the trace that sees code changed in place runs on 3.12+")
 def test_a_rerun_the_trace_forced_hands_its_new_result_on(trace_default, statement_processor, mock_shell):
     """``inner`` given new code outside any statement: the trace reran t to
     30, and u was served 7."""
@@ -161,7 +158,6 @@ def test_a_draw_from_an_iterator_no_cell_made_reaches_what_reads_it(trace_defaul
     assert seen == [1, 2, 3]
 
 
-@pytest.mark.skipif(not TRACED, reason="the trace that sees code changed in place runs on 3.12+")
 def test_a_rerun_the_trace_forced_that_came_out_the_same_keeps_what_reads_it(
     trace_default, statement_processor, mock_shell
 ):
@@ -180,7 +176,6 @@ def test_a_rerun_the_trace_forced_that_came_out_the_same_keeps_what_reads_it(
     assert mock_shell.user_ns["u"] == 7
 
 
-@pytest.mark.skipif(not TRACED, reason="the trace that sees code changed in place runs on 3.12+")
 def test_code_changed_back_to_an_equal_result_still_reaches_the_reader(trace_default, statement_processor, mock_shell):
     """``x * 10``, then ``x * 5 * 2``: the second rerun came out as the entry
     the first stored, took the formula's lineage back, and ``u`` was served
@@ -196,7 +191,6 @@ def test_code_changed_back_to_an_equal_result_still_reaches_the_reader(trace_def
         assert mock_shell.user_ns["u"] == 31
 
 
-@pytest.mark.skipif(not TRACED, reason="the trace that follows a function found by a string runs on 3.12+")
 def test_a_draw_by_string_refused_as_it_ran_reaches_what_reads_it(
     trace_default, statement_processor, mock_shell, tmp_path
 ):

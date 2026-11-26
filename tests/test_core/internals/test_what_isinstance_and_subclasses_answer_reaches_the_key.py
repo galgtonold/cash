@@ -18,7 +18,6 @@ import abc
 import collections.abc
 import gc
 import os
-import sys
 import time
 import typing
 
@@ -31,8 +30,8 @@ from cash.exceptions import CashCacheIneffectiveWarning
 pytestmark = [pytest.mark.filterwarnings("ignore::cash.exceptions.CashImpurityWarning")]
 
 
-#: Nothing records what a call ran: before 3.12, or with ``CASH_TRACE=0``.
-UNTRACED = sys.version_info < (3, 12) or os.environ.get("CASH_TRACE", "").strip().lower() in ("0", "off", "false", "no")
+#: Nothing records what a call ran: with ``CASH_TRACE=0``.
+UNTRACED = os.environ.get("CASH_TRACE", "").strip().lower() in ("0", "off", "false", "no")
 
 
 @pytest.fixture
@@ -85,7 +84,7 @@ def thing_is_kind(x):
 
 
 def test_register_through_a_metaclass_of_ones_own(c):
-    """On 3.12+ the trace of what ran sees the set ``register()`` filled.
+    """The trace of what ran sees the set ``register()`` filled.
     Before, nothing does: the call runs uncached, and says so."""
     f = c.cache(thing_is_kind)
     if UNTRACED:

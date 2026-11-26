@@ -78,25 +78,9 @@ def _built_js() -> list[Path]:
 
 
 def _pyproject() -> dict:
-    """Parsed ``pyproject.toml``.
+    """Parsed ``pyproject.toml``."""
+    import tomllib
 
-    Deliberately FAILS rather than skips when no TOML parser is available.
-    Python 3.10 -- the floor -- has no ``tomllib``, but ``tomli`` is in this
-    project's ``[dev]`` install closure there, and ``[dev]`` is required to run
-    this suite at all. A packaging test that quietly disappears on one
-    interpreter of a five-version CI matrix is worse than one that says what to
-    install.
-    """
-    try:
-        import tomllib
-    except ModuleNotFoundError:  # Python 3.10
-        try:
-            import tomli as tomllib  # type: ignore[no-redef]
-        except ModuleNotFoundError:
-            pytest.fail(
-                "no TOML parser: this needs tomllib (Python 3.11+) or tomli. "
-                "`pip install -e '.[dev]'` provides one on every supported version."
-            )
     with open(REPO_ROOT / "pyproject.toml", "rb") as fh:
         return tomllib.load(fh)
 

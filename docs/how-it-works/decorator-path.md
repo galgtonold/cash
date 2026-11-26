@@ -60,9 +60,9 @@ Two limits. A global that cannot be hashed (a live connection, an object
 holding a lock) is left
 out with a [`KEY-UNHASHABLE-GLOBAL`](../warnings.md#key-unhashable-global)
 warning. And reachability is static: code picked at run time, from a dict or
-through `getattr`, is not in the key. On Python 3.12 and newer the call is
-cached on a record of the code it ran, checked before each hit; before 3.12
-it runs uncached with a
+through `getattr`, is not in the key. The call is
+cached on a record of the code it ran, checked before each hit; where that
+record cannot be checked it runs uncached with a
 [`KEY-UNTRACKABLE-DEP`](../warnings.md#key-untrackable-dep) warning. Name such
 code with `depends_on=[...]` to key it directly.
 
@@ -77,7 +77,7 @@ a key reads is still remembered across calls that reach a lock
 (an object holding one as an attribute) still leaves that value unhashable.
 
 A library's settings are not in the key: a library is keyed by its
-installed version. On Python 3.12 and newer each call records, as its body
+installed version. Each call records, as its body
 runs, the settings the code it ran read: an attribute chain from a module
 global that ends on plain data (`sc.settings.n_jobs`, also through a
 property of a settings class's metaclass; pandas' options; through a
@@ -99,7 +99,7 @@ is checked on the value the call entered with. A `ContextVar` holding something
 other than plain data cannot be compared, and the call runs uncached with a
 [`KEY-LIBRARY-STATE-UNREAD`](../warnings.md#key-library-state-unread)
 warning. Not seen: a setting held as an object or a function (a formatter
-callback), one read through a method (`options.get("x")`), and anything before Python 3.12, with `CASH_TRACE=0`, or in a
+callback), one read through a method (`options.get("x")`), and anything with `CASH_TRACE=0` or in a
 coroutine function, whose bodies are not recorded; the first such call
 stored says so once per process, whatever its code calls (a library reached
 through an argument, as in `df.to_string()`, is named nowhere in it), with a
@@ -377,7 +377,7 @@ may not waive a process setting; a comment on the line that calls it, or a
 One case is not cached: a body that picks code from a run-time value
 (`eval`, `exec`, `getattr(obj, name)()`, `importlib.import_module`) runs
 uncached with [`KEY-UNTRACKABLE-DEP`](../warnings.md#key-untrackable-dep),
-because cash cannot tell when that code changes. On Python 3.12+ a lookup by
+because cash cannot tell when that code changes. A lookup by
 name (`getattr`, `import_module`, `__import__`) is the exception: the call is
 keyed as usual, its body runs under `sys.monitoring`, and the entry keeps a
 record of the functions that ran and what each lookup found, which is checked

@@ -9,7 +9,6 @@ checks after the body read each array once between them (`quiet_digests`).
 
 from __future__ import annotations
 
-import sys
 import warnings
 
 import numpy as np
@@ -182,11 +181,6 @@ def test_the_checks_after_a_body_read_each_array_once(c, monkeypatch):
             est.fit()
             reads.append(len(read))
     assert est.log == [1, 1, 1]
-    if sys.version_info < (3, 12):
-        # Below 3.12 a call that changes its argument in place runs
-        # uncached with no key, so nothing is read at all.
-        assert reads == [0, 0, 0]
-        return
     # The first call was checked after its body: every array was read for
     # the key before it and once after it, not once per check.
     assert reads[0] >= 2 * arrays, reads

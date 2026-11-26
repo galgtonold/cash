@@ -28,7 +28,7 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
     - **The random seed in force**, for a function that draws from a global
       random stream.
     <!-- claim: cash/decorator/library_reads.py:fingerprint @9946acbe, cash/decorator/warning_state.py:holds @5f6685de, cash/kept_state.py:logger_state @37d45541 -->
-    - **A library setting the call read**, on Python 3.12 and newer:
+    - **A library setting the call read**:
       `sklearn.set_config(...)`, `pd.set_option(...)`, `np.seterr(...)`, a
       `ContextVar`, an attribute your program set on a library's class
       ([details](decorator-path.md#what-goes-into-the-state)).
@@ -104,13 +104,12 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
     - **A file it or an input read** ([files](#files), below).
     - **An environment variable it reads** by name, in its own text or in a
       function or method of yours it calls, defined in a cell or a module.
-    <!-- claim: cash/tracking/reference_states.py:changed @1949e458, cash/notebook/statement/processor.py:StatementProcessor._note_reference_states @2ffa23c8, cash/tracking/reference_states.py:for_call @fafe1936, cash/tracking/lookups_seen.py:_on_call @c61001a7, cash/tracking/lookups_seen.py:_note_reads @7e6205ac, cash/tracking/lookups_seen.py:_note_globals @77198b83, cash/tracking/lookups_seen.py:_warn_unseen_once @71cd55a2 -->
+    <!-- claim: cash/tracking/reference_states.py:changed @1949e458, cash/notebook/statement/processor.py:StatementProcessor._note_reference_states @2ffa23c8, cash/tracking/reference_states.py:for_call @fafe1936, cash/tracking/lookups_seen.py:_on_call @c61001a7, cash/tracking/lookups_seen.py:_note_reads @7e6205ac, cash/tracking/lookups_seen.py:_note_globals @77198b83, cash/tracking/lookups_seen.py:_warn_unseen_once @9e53c78b -->
     - **An object that pickles by reference** (by its name, as a logger
       pickles as `getLogger(name)`) held by a value it reads, or by a global
       a function it calls reads, or by a value it reads was made from. Its
       name finds it from anywhere, so `logging.getLogger("app").setLevel(10)`,
-      in a cell or in a function, changes it without naming a variable. On
-      Python 3.12 or newer, so is one it finds as it runs: one a call made
+      in a cell or in a function, changes it without naming a variable. So is one it finds as it runs: one a call made
       by its code, or by a function of yours, returns, alone or inside a
       container or plain object (`logging.getLogger("app").level`,
       `lib.settings()["log"].level`), and one its code reads through a
@@ -146,12 +145,12 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
     <!-- claim: cash/tracking/lookups_seen.py:_note_settings @9b2a8c7a, cash/tracking/lookups_seen.py:SETTINGS_MAPPINGS @aff05a26 -->
     - **matplotlib's `rcParams`**, when its code, or a function of yours it
       calls, reads it through a module (`plt.rcParams["font.size"]`,
-      `matplotlib.rcParams.get(...)`), on Python 3.12 or newer: the entry
+      `matplotlib.rcParams.get(...)`): the entry
       keeps its state as the statement found it, and is served only while
       it holds the same, however another cell set it
       (`plt.rcParams["font.size"] = 7`).
     <!-- claim: cash/notebook/shadow/__init__.py:Shadow._library_item @beac3c5b, cash/notebook/shadow/__init__.py:Shadow._library_now @3296947c -->
-    - **A library setting its run read**, on Python 3.12 and newer:
+    - **A library setting its run read**:
       `sklearn.set_config(...)` or a `sklearn.config_context(...)` around
       it, `pd.set_option(...)`, `np.seterr(...)`, a `ContextVar`, an
       attribute your program set on a library's class. A setting changes no

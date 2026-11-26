@@ -7,9 +7,10 @@ name: Nightly integration
 # stable hash of its node id, so the shards never overlap and together run
 # every test. The shards run on the oldest, a middle and the newest Python,
 # on the merge branch when there is one. The wheel-gate job runs alongside
-# the shards, and so do the held-unit job (the unit tests too slow for every
-# push), the self-check job (the unit suite and the core set with every memo
-# checked), the wheels-only install on the oldest Python, the check of the
+# the shards, and so do the Windows unit run on the oldest Python, the
+# held-unit job (the unit tests too slow for every push), the self-check job
+# (the unit suite and the core set with every memo checked), the wheels-only
+# install on the oldest Python, the check of the
 # library code some rules were read in, the speed report
 # and the pandas-prerelease job (the frame memo against the newest pandas).
 on:
@@ -23,8 +24,8 @@ permissions:
   contents: read
 
 jobs:
-  # Every shard on three Pythons: 3.10 (no C extension, no run-time trace,
-  # so a different engine keys and watches the body), 3.12 and the newest.
+  # Every shard on three Pythons: the oldest cash supports, a middle one and
+  # the newest, where cash's source and bytecode hashing can differ.
   # A scheduled run starts from the default branch; the first step moves to
   # the merge branch, where the next change to main is, so the whole suite
   # has run on that commit the morning after. A run started by hand tests
@@ -39,7 +40,7 @@ jobs:
       # shard numbers here: with a second axis the job total no longer is
       # (tests/test_tooling/test_ci_covers_the_suite.py checks both).
       matrix:
-        python: ["3.10", "3.12", "3.14"]
+        python: ["3.12", "3.13", "3.14"]
         shard: [1, 2, 3, 4, 5, 6]
 
     steps:
@@ -78,18 +79,19 @@ jobs:
           --shard=${{ matrix.shard }}/$SHARDS
           -n auto --tb=short -q
 
-  # The unit suite on Windows with Python 3.10, the slowest job of all (45 min
-  # of tests in two shards: its pure-Python heap walks), which a push to the
-  # merge branch leaves out (ci.yml). Run on that branch, where the next
-  # change to main is, so a Windows 3.10 failure shows the morning after.
-  windows-310:
-    name: Windows 3.10 unit shard ${{ matrix.shard }}
+  # The unit suite on Windows with the oldest Python cash supports, which a
+  # push to the merge branch leaves out (ci.yml runs Windows on the newest
+  # only). Run on that branch, where the next change to main is, so a
+  # failure there shows the morning after. Four shards, as ci.yml's Windows
+  # run on the newest Python has.
+  windows-oldest:
+    name: Windows 3.12 unit shard ${{ matrix.shard }}
     runs-on: windows-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3, 4]
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -106,10 +108,12 @@ jobs:
           echo "Testing ${branch:-the default branch}"
           if [ -n "$branch" ]; then git checkout -q "origin/$branch"; fi
 
+      # Keep in step with the first Python classifier in pyproject.toml
+      # (tests/test_tooling/test_ci_covers_the_suite.py checks).
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.10"
+          python-version: "3.12"
           cache: pip
           cache-dependency-path: pyproject.toml
 
@@ -118,8 +122,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      # As ci.yml's unit step, with its Windows 3.10 timeout, but keeping the
-      # tests marked nightly: the only Windows run they get.
+      # As ci.yml's unit step, but keeping the tests marked nightly: the only
+      # Windows run they get.
       - name: Run unit tests
         timeout-minutes: 55
         shell: bash
@@ -129,9 +133,9 @@ jobs:
             --ignore=tests/test_wheel_gate \
             --ignore=tests/docs \
             -m "not perf" \
-            -p tools.test_selection.shard --shard=${{ matrix.shard }}/2 \
+            -p tools.test_selection.shard --shard=${{ matrix.shard }}/4 \
             -n auto --tb=short -q -rs --durations=40 \
-            -o faulthandler_timeout=120 -o timeout=90
+            -o faulthandler_timeout=120
 
   # The unit tests every push leaves out or shortens: those marked nightly
   # (a wheel build and pip install, real kernels per shape), which ci.yml's
@@ -236,7 +240,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.10"
+          python-version: "3.12"
 
       - name: Build the pure-Python wheel
         env:

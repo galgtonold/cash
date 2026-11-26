@@ -94,7 +94,7 @@ hashed by content on every call: about <!-- docnum:cc_cash_array_hit -->2.0 ms<!
   **Met again**, with the same arguments and nothing the key reads changed,
   the call is served without building the key
   ([A hit met again](how-it-works/decorator-path.md#a-hit-met-again)); that
-  needs the C extension, which the wheels for CPython 3.12 and later carry.
+  needs the C extension, which the wheels for CPython carry.
   Without it every hit costs what a first hit costs.
 - **A miss** is what the caller waits for: building the key, running the
   body and serialising the result. The disk write finishes in the

@@ -14,7 +14,6 @@ behave as plain Python.
 
 from __future__ import annotations
 
-import sys
 import textwrap
 from pathlib import Path
 
@@ -24,9 +23,6 @@ from tests._scripts import run_python
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
-needs_trace = pytest.mark.skipif(
-    sys.version_info < (3, 12), reason="the call trace needs sys.monitoring (Python 3.12+)"
-)
 
 DIGEST = """
     import random
@@ -143,7 +139,6 @@ def _runs(folder: Path, *argvs: tuple[str, ...]) -> list[str]:
     return [run_python("main.py", *argv, cwd=folder, env=env).stdout.strip().splitlines()[-1] for argv in argvs]
 
 
-@needs_trace
 def test_a_traced_call_reading_a_scipy_distribution_hits_in_a_new_process(tmp_path):
     pytest.importorskip("scipy.stats")
     assert _runs(tmp_path / "conf", ("conf", "none"), ("conf", "none")) == [
@@ -152,7 +147,6 @@ def test_a_traced_call_reading_a_scipy_distribution_hits_in_a_new_process(tmp_pa
     ]
 
 
-@needs_trace
 def test_draws_from_the_held_module_rng_behave_as_drawing_from_the_module(tmp_path):
     pytest.importorskip("scipy.stats")
     argvs = [("0",), ("0",), ("1",), ("none",), ("none",)]

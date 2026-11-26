@@ -440,8 +440,7 @@ def _function_digest(fn: types.FunctionType, depth: int = 0) -> str | None:
     the same way. ``bump, peek = make_counter()`` remade by each Run All is
     the same ``peek`` while its ``n`` is; by identity, a statement reading
     it ran again each time. None when a value cannot be hashed."""
-    # ``co_qualname`` is new in Python 3.11.
-    parts = [held_code_digest(fn) or attribute_or(fn.__code__, "co_qualname", fn.__qualname__)]
+    parts = [held_code_digest(fn) or fn.__code__.co_qualname]
     held: list[Any] = [*(fn.__defaults__ or ()), *(fn.__kwdefaults__ or {}).values()]
     for cell in fn.__closure__ or ():
         try:

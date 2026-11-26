@@ -20,14 +20,11 @@ and replayed on a hit, so the program goes on as without cash.
 from __future__ import annotations
 
 import json
-import sys
 import textwrap
 
 import pytest
 
 from tests._scripts import run_python
-
-pytestmark = pytest.mark.skipif(sys.version_info < (3, 12), reason="sys.monitoring is Python 3.12+")
 
 np = pytest.importorskip("numpy")
 

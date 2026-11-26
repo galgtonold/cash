@@ -674,7 +674,7 @@ def _pickling_refusal(value: Any) -> str | None:
     if kind.__reduce_ex__ is not object.__reduce_ex__ or kind.__reduce__ is not object.__reduce__:
         return f"is a {class_name(kind)}, which pickles through its own __reduce__"
     getstate = plain_getattr(kind, "__getstate__", None)
-    if getstate is None or getstate is plain_getattr(object, "__getstate__", None):
+    if getstate is None or getstate is object.__getstate__:
         return None
     try:
         state = value.__getstate__()

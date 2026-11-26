@@ -90,7 +90,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.12", "3.14"]
+        python-version: ["3.12", "3.14"]
     steps:
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
@@ -120,9 +120,7 @@ jobs:
           fresh
           "$RUNNER_TEMP/v/bin/python" -m pip install -q "$GITHUB_WORKSPACE"/dist/*.tar.gz
           "$RUNNER_TEMP/v/bin/python" -c "$check"
-          if python -c "import sys; sys.exit(sys.version_info < (3, 12))"; then
-            "$RUNNER_TEMP/v/bin/python" -c "import cash._native as n, sys; sys.exit(not n.AVAILABLE)"
-          fi
+          "$RUNNER_TEMP/v/bin/python" -c "import cash._native as n, sys; sys.exit(not n.AVAILABLE)"
 
           echo "== sdist without a compiler (CC=false)"
           fresh

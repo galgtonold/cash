@@ -1180,8 +1180,8 @@ _TZ = operator.attrgetter("tz")
 
 #: An instance's attributes, None or empty when it has none. Not
 #: ``__dict__``, which makes a dict for each instance that has none: 344 MB
-#: for a million Timestamps. Python 3.10 has no ``object.__getstate__``.
-_OWN_STATE = plain_getattr(object, "__getstate__", operator.attrgetter("__dict__"))
+#: for a million Timestamps.
+_OWN_STATE = object.__getstate__
 
 
 def _date_form(value: Any) -> Any:

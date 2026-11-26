@@ -37,10 +37,6 @@ pytestmark = [
     pytest.mark.filterwarnings("ignore::cash.exceptions.CashImpurityWarning"),
 ]
 
-RECORDED = sys.version_info >= (3, 12)
-needs_recording = pytest.mark.skipif(
-    not RECORDED, reason="a body's reads are recorded with sys.monitoring, Python 3.12 or newer"
-)
 
 LIBRARY = """
 import contextvars
@@ -220,7 +216,6 @@ def _scenarios(lib):
     return calls, setter, fast
 
 
-@needs_recording
 def test_a_changed_library_setting_is_seen(lib, c, path):
     calls, setter, fast = _scenarios(lib)
     ctx = contextvars.copy_context()
@@ -243,7 +238,6 @@ def test_a_changed_library_setting_is_seen(lib, c, path):
         decimal.getcontext().prec = saved
 
 
-@needs_recording
 def test_the_miss_names_the_setting(lib, c):
     f = c.cache(lib.by_metaclass)
     lib.settings.n_jobs = 1
@@ -255,7 +249,6 @@ def test_the_miss_names_the_setting(lib, c):
     lib.settings.n_jobs = 1
 
 
-@needs_recording
 def test_library_code_that_reads_no_setting_is_not_watched_again(lib, c):
     f = c.cache(lib.quiet)
     for i in range(3):
@@ -276,7 +269,6 @@ class _Box:
 OBJ_VAR = contextvars.ContextVar("cash_ut_obj_var")
 
 
-@needs_recording
 def test_a_context_variable_holding_an_object_runs_uncached_with_a_warning(c):
     ctx = contextvars.copy_context()
 
@@ -295,8 +287,6 @@ def test_a_context_variable_holding_an_object_runs_uncached_with_a_warning(c):
 
 def test_numpy_print_options_and_error_handling(c, path):
     np = pytest.importorskip("numpy")
-    if not RECORDED:
-        pytest.skip("a body's reads are recorded with sys.monitoring, Python 3.12 or newer")
 
     def shown(n):
         return repr(np.arange(n) * 1.123456789)
@@ -335,7 +325,6 @@ print(f(7), f.cache_info()["hits"])
 """
 
 
-@needs_recording
 def test_a_setting_is_checked_in_another_process(tmp_path):
     site = tmp_path / "venv" / "lib" / "site-packages"
     site.mkdir(parents=True)
@@ -355,17 +344,7 @@ def test_a_setting_is_checked_in_another_process(tmp_path):
     assert run(1) == ["7", "0"]
 
 
-@pytest.mark.skipif(RECORDED, reason="from Python 3.12 the reads are recorded")
-def test_before_312_nothing_is_recorded(lib, c):
-    # What the body reads cannot be seen without sys.monitoring: the entry
-    # keeps no library reads (documented in how-it-works/decorator-path).
-    f = c.cache(lib.by_metaclass)
-    f(7)
-    f(7)
-    assert f.cache_info()["hits"] == 1
-
-
-# Where a body is not recorded (below 3.12, CASH_TRACE=0, a coroutine) the
+# Where a body is not recorded (CASH_TRACE=0, a coroutine) the
 # settings it reads are not checked: the first stored call says so, once a
 # process, whatever its own code names. A library reached through an
 # argument's method (``df.to_string()``) is named nowhere in that code.
@@ -376,8 +355,7 @@ UNSEEN = "KEY-LIBRARY-STATE-UNSEEN"
 @pytest.fixture
 def unrecorded(monkeypatch):
     monkeypatch.setattr(library_reads, "UNSEEN_SAID", False)
-    if RECORDED:
-        monkeypatch.setenv("CASH_TRACE", "0")
+    monkeypatch.setenv("CASH_TRACE", "0")
 
 
 def _said(seen):
@@ -429,7 +407,7 @@ def _fix_of(message) -> str:
 
 
 def test_the_way_out_named_fits_why_nothing_was_recorded(c, unrecorded):
-    """With the recording off by ``CASH_TRACE=0`` (or below Python 3.12) the
+    """With the recording off by ``CASH_TRACE=0`` the
     fix names that, and not a way out for coroutines."""
     with warnings.catch_warnings(record=True) as seen:
         warnings.simplefilter("always")
@@ -437,7 +415,7 @@ def test_the_way_out_named_fits_why_nothing_was_recorded(c, unrecorded):
     [said] = _said(seen)
     fix = _fix_of(said.message)
     assert fix.startswith("pass the setting in as an argument, ")
-    assert ("unset CASH_TRACE" if RECORDED else "run on Python 3.12 or newer") in fix
+    assert ("unset CASH_TRACE") in fix
     assert "sync function" not in fix and "iterator" not in fix
 
 
@@ -446,8 +424,8 @@ async def doubles_later(x):
 
 
 def test_a_coroutine_is_not_told_to_do_what_it_already_does(c, monkeypatch):
-    """A coroutine's body is never recorded: on Python 3.12+ with tracing on,
-    the first fix named used to be "run on Python 3.12+ with tracing on"."""
+    """A coroutine's body is never recorded: with tracing on,
+    the first fix named used to be "run with tracing on"."""
     import asyncio
 
     monkeypatch.setattr(library_reads, "UNSEEN_SAID", False)
@@ -504,7 +482,6 @@ def test_a_coroutine_reaching_a_library_says_so(c, monkeypatch):
     assert "coroutine" in str(said[0].message)
 
 
-@needs_recording
 def test_a_recorded_call_says_nothing(c, monkeypatch):
     pytest.importorskip("numpy")
     monkeypatch.setattr(library_reads, "UNSEEN_SAID", False)

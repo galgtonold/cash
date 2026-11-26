@@ -185,24 +185,6 @@ CASES: dict[str, tuple[str, str]] = {
         """,
         "f(-1)",
     ),
-    "KEY-UNRESOLVED-CALL": (
-        """
-        def helper(x):
-            return x * 2
-
-        class Api:
-            @property
-            def run(self):
-                return helper
-
-        api = Api()
-
-        @c.cache{DEC}
-        def f(x):
-            return api.run(x){W}
-        """,
-        "f(1)",
-    ),
     "KEY-UNHASHABLE-GLOBAL": (
         """
         import threading
@@ -261,21 +243,7 @@ def _wrap_in_block(body: str) -> str:
     return "import cash\n" + "".join(lines[:first]) + head + "".join(inside) + "".join(lines[end:])
 
 
-#: Codes shown only on some Pythons: KEY-UNRESOLVED-CALL before 3.12 (from
-#: 3.12 the call is served on a trace of what it ran instead), and
-#: CACHE-ARG-WRITTEN-BACK from 3.12 (below it, a call that changes its
-#: argument is not recorded, so it runs every time instead).
-_FIRES_ON = {
-    "KEY-UNRESOLVED-CALL": sys.version_info < (3, 12),
-    "CACHE-ARG-WRITTEN-BACK": sys.version_info >= (3, 12),
-}
-
-PARAMS = [
-    pytest.param(code, marks=pytest.mark.skipif(not _FIRES_ON[code], reason="not shown on this Python"))
-    if code in _FIRES_ON
-    else code
-    for code in sorted(CASES)
-]
+PARAMS = sorted(CASES)
 
 
 def _fires(tmp_path: Path, code: str, variant: str) -> bool:

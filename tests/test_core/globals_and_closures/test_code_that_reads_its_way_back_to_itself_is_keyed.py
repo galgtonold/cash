@@ -49,9 +49,7 @@ JOB = """
         return reg.KINDS["shape"]().area() * n
 
 
-    # Below Python 3.12 the first call a process stores says this once.
-    unseen = "KEY-LIBRARY-STATE-UNSEEN" if sys.version_info < (3, 12) else ""
-    print(run(2), run.cache_info()["misses"], [w["code"] for w in run.cache_info()["warnings"] if w["code"] != unseen])
+    print(run(2), run.cache_info()["misses"], [w["code"] for w in run.cache_info()["warnings"]])
 """
 
 

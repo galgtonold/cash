@@ -16,7 +16,6 @@ Each run is a fresh interpreter; the script counts the full folds.
 
 from __future__ import annotations
 
-import sys
 import textwrap
 
 import pytest
@@ -25,7 +24,6 @@ from tests._scripts import run_python
 
 pytestmark = [
     pytest.mark.core,
-    pytest.mark.skipif(sys.version_info < (3, 12), reason="the code trace needs sys.monitoring (Python 3.12+)"),
 ]
 
 COUNTING = """

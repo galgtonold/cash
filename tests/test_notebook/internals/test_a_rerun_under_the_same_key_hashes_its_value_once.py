@@ -18,18 +18,12 @@ is the same.
 
 from __future__ import annotations
 
-import sys
-
 import pytest
 
 from cash.analysis.annotations import CacheAnnotation
 from cash.notebook import shadow
 from cash.notebook.call_entries import CallEntries
 from tests._work_counts import hashed_bytes
-
-pytestmark = pytest.mark.skipif(
-    sys.version_info < (3, 12), reason="the trace that sees code changed in place runs on 3.12+"
-)
 
 _PERSIST = CacheAnnotation(persist=True)
 MB = 1 << 20

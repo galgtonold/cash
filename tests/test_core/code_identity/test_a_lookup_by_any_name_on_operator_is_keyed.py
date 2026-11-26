@@ -3,15 +3,14 @@
 xclim picks its comparison with ``getattr(operator, f"__{op}__")``. Whatever
 name it is handed, it finds one of the standard library's ``operator``
 functions, which no code of the user's defines: the call is keyed by its
-arguments, on every Python, called at once or bound to a local first. On
-Python 3.12+ a call traced for another lookup checks ``operator``'s names
+arguments, on every Python, called at once or bound to a local first. A
+call traced for another lookup checks ``operator``'s names
 instead of refusing a lookup whose name the recorder could not read.
 """
 
 from __future__ import annotations
 
 import operator
-import sys
 
 import pytest
 
@@ -43,10 +42,8 @@ class _Ops:
 
 
 def test_beside_a_lookup_on_a_class_of_the_users_it_is_stored(disk_cash):
-    """A lookup on a user's class makes the call traced on 3.12+; the
-    ``operator`` lookup in the same call is checked there, not refused.
-    Before 3.12 there is no trace, and the lookup on the class runs the call
-    uncached."""
+    """A lookup on a user's class makes the call traced; the
+    ``operator`` lookup in the same call is checked there, not refused."""
 
     def pick(op):
         return getattr(operator, f"__{op}__")
@@ -56,5 +53,4 @@ def test_beside_a_lookup_on_a_class_of_the_users_it_is_stored(disk_cash):
         return pick(op)(getattr(_Ops, kind)(x), 1)
 
     assert [apply("double", "add", 3), apply("double", "add", 3)] == [7, 7]
-    traced = sys.version_info >= (3, 12)
-    assert apply.cache_info()["hits"] == (1 if traced else 0), apply.cache_info()["miss_reasons"]
+    assert apply.cache_info()["hits"] == 1, apply.cache_info()["miss_reasons"]

@@ -17,17 +17,9 @@ file). Anything else still runs every time.
 
 from __future__ import annotations
 
-import sys
-
 import numpy as np
 import pandas as pd
 import pytest
-
-needs_trace = pytest.mark.skipif(
-    sys.version_info < (3, 12),
-    reason="what a call ran is recorded with sys.monitoring, Python 3.12+; below it a call that changes its "
-    "argument in place runs every time, with a warning",
-)
 
 
 def _change(v):
@@ -76,7 +68,6 @@ def _same(a, b) -> bool:
     return type(a) is type(b) and a == b
 
 
-@needs_trace
 @pytest.mark.parametrize("kind", list(KINDS))
 def test_the_state_left_in_the_argument_is_written_back_on_a_hit(disk_cash, kind):
     runs = []
@@ -108,7 +99,6 @@ def test_the_state_left_in_the_argument_is_written_back_on_a_hit(disk_cash, kind
     assert _same(v, expected), (v, expected)
 
 
-@needs_trace
 def test_a_view_of_the_argument_sees_the_write(disk_cash):
     """The state goes into the array's memory, which its views share."""
     runs = []

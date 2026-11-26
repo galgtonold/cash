@@ -87,7 +87,7 @@ _CHUNK = 1 << 20
 #: An object's key in a walk's places: its address as ``object``'s hash
 #: gives it, one to one with ``id()`` (the address turned by four bits),
 #: whatever hash its class has. Not ``id()``, which raises an audit event
-#: per object: with a Python audit hook (cash's, before Python 3.12) the
+#: per object: with a Python audit hook (cash's, without the C extension) the
 #: ids of a 300,000-node trie took longer than building it. Turned, the
 #: keys of objects 16 bytes apart no longer meet in a dict's table.
 _PLACE = object.__hash__

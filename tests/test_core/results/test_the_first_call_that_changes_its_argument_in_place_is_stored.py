@@ -13,7 +13,6 @@ the first call is not stored.
 
 from __future__ import annotations
 
-import sys
 import textwrap
 import warnings
 
@@ -22,13 +21,6 @@ import pandas as pd
 import pytest
 
 from tests._scripts import run_python
-
-needs_trace = pytest.mark.skipif(
-    sys.version_info < (3, 12),
-    reason="what a call ran is recorded with sys.monitoring, Python 3.12+; below it a call that changes its "
-    "argument in place runs every time, with a warning",
-)
-pytestmark = needs_trace
 
 
 def _clip(a):

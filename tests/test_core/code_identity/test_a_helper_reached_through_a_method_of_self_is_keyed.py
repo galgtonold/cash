@@ -6,8 +6,8 @@ reads one from a module global), and calls ``obj.fit(x)``, which calls
 ``self.step(x)``, which calls ``H.scale(x)`` in a module of the project.
 
 The object's code is keyed by what its methods load by name: ``H``, never
-``H.scale``. On Python 3.12+ the trace of what the call ran names
-``scale`` and checks it; before 3.12, or with ``CASH_TRACE=0``, nothing did,
+``H.scale``. The trace of what the call ran names
+``scale`` and checks it; with ``CASH_TRACE=0`` nothing did,
 and an edit to ``scale`` was served the result from before it. Without a
 trace the helpers the purity walk of each method reaches are in the key.
 

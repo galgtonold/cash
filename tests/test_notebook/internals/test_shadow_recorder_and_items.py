@@ -14,8 +14,6 @@ import pytest
 from cash.notebook import shadow
 from cash.tracking import trace_items as items
 
-pytestmark = pytest.mark.skipif(sys.version_info < (3, 12), reason="sys.monitoring")
-
 
 @pytest.fixture
 def on():

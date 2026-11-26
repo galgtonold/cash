@@ -10,8 +10,6 @@ import pytest
 
 from cash.tracking.file_tracker import FileAccessTracker
 
-pytestmark = pytest.mark.skipif(sys.version_info < (3, 12), reason="sys.monitoring needs Python 3.12")
-
 
 def test_importing_a_user_module_while_the_recorder_runs_records_no_folder(tmp_path, monkeypatch):
     from cash.decorator import code_trace

@@ -165,8 +165,8 @@ is computed again.
 These switches have no field: set them in the environment before the
 process starts (before the kernel starts, for a notebook).
 
-<!-- claim: cash/decorator/code_trace.py:on @5a4beff8 -->
-On Python 3.12 and newer, cash also records which of your functions each cached
+<!-- claim: cash/decorator/code_trace.py:on @c38c40c0 -->
+cash also records which of your functions each cached
 call and statement ran, and checks that record before serving the result: a
 result whose code changed in a way the key missed runs again. `CASH_TRACE=0`
 turns that check off. Calls that pick code by a run-time name are still

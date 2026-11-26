@@ -77,7 +77,7 @@ def test_the_first_hit_from_disk_keeps_the_bytes_read(tmp_path, walks, make):
     assert metadata["size"] == kept.nbytes
     if value_watch.WATCHING:
         # Proving a plain object unchanged takes the C watchers; without
-        # them (below Python 3.12) the next hit unpickles a copy of its own.
+        # them the next hit unpickles a copy of its own.
         assert produce() is first, "the next hit did not hand back the kept object"
     else:
         assert produce() == first

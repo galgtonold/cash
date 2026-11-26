@@ -160,8 +160,8 @@ def test_the_key_is_the_one_walking_every_helper_again_gives(tmp_path, trace):
 
 
 # A helper reached only through a method of ``self`` (``H.h3`` in
-# ``Base.m0_1``): with a trace (3.12+) the call's trace names it; without one
-# (before 3.12, ``CASH_TRACE=0``) the methods' helpers are in the key.
+# ``Base.m0_1``): with a trace the call's trace names it; without one
+# (``CASH_TRACE=0``) the methods' helpers are in the key.
 #
 # Four fresh interpreters, each importing cash: about 13 s on Linux, past
 # the 30 s default on a Windows runner, where pytest-timeout ends the whole

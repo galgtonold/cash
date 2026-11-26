@@ -495,7 +495,7 @@ def _plain_getter(prop: Any) -> frozenset[str] | None:
             return None
         if op.opname.startswith("LOAD_FAST") and op.argval != first:
             return None
-        if op.opname == "LOAD_ATTR" and sys.version_info >= (3, 12) and (op.arg or 0) & 1:
+        if op.opname == "LOAD_ATTR" and (op.arg or 0) & 1:
             return None  # a method loaded to call
     return frozenset(code.co_names)
 

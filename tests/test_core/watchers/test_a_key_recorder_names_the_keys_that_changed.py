@@ -12,7 +12,7 @@ import pytest
 
 from cash._native import cwatch
 
-pytestmark = pytest.mark.skipif(cwatch is None, reason="the C extension is not loaded (Python below 3.12, or off)")
+pytestmark = pytest.mark.skipif(cwatch is None, reason="the C extension is not loaded")
 
 
 class Thing:

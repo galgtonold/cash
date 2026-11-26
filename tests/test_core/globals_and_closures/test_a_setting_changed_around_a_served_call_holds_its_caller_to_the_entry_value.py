@@ -21,7 +21,6 @@ call never read itself, still brings its value.
 
 from __future__ import annotations
 
-import sys
 import textwrap
 
 import pytest
@@ -37,9 +36,6 @@ sk_utils = pytest.importorskip("sklearn.utils")
 
 pytestmark = [
     pytest.mark.filterwarnings("ignore::cash.exceptions.CashImpurityWarning"),
-    pytest.mark.skipif(
-        sys.version_info < (3, 12), reason="a body's reads are recorded with sys.monitoring, Python 3.12 or newer"
-    ),
 ]
 
 X = np.arange(10.0)

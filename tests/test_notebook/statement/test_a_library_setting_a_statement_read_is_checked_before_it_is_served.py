@@ -2,10 +2,10 @@
 served, and the badge says which one moved.
 
 ``s = df.to_string()`` names ``df`` alone: a ``pd.set_option`` made since
-moves no lineage it reads. On Python 3.12+ the run records the settings the
+moves no lineage it reads. The run records the settings the
 library code it ran read (``library_reads``, as for a traced ``@cash.cache``
 call), and a hit is served only while each holds the value it was stored
-under. Below 3.12, or with ``CASH_TRACE=0``, nothing records them: cash says
+under. With ``CASH_TRACE=0``, nothing records them: cash says
 so once (KEY-LIBRARY-STATE-UNSEEN).
 """
 
@@ -49,7 +49,7 @@ def options_restored():
     pd.reset_option("display.max_rows")
 
 
-@pytest.mark.skipif(not code_trace.on(), reason="records what a statement ran: Python 3.12+, CASH_TRACE on")
+@pytest.mark.skipif(not code_trace.on(), reason="records what a statement ran: CASH_TRACE on")
 class TestRecorded:
     def test_a_changed_option_the_run_read_reruns_it_and_names_the_option(
         self, cash_magics, mock_shell, options_restored
@@ -97,7 +97,7 @@ def df_text(shell, precision: int) -> str:
 
 
 def test_an_unrecorded_statement_reaching_a_library_warns_once(cash_magics, mock_shell, monkeypatch):
-    """Below 3.12 or with ``CASH_TRACE=0`` (the notebook's traces off), a
+    """With ``CASH_TRACE=0`` (the notebook's traces off), a
     stored statement reaching a library says once that a setting changed
     since is not seen, as an unrecorded ``@cash.cache`` call does."""
     from cash.decorator import library_reads

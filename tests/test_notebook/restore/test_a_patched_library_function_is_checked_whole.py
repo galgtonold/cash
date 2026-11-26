@@ -34,7 +34,7 @@ from cash.decorator import code_trace
 from tests._cell_driver import run_cash_cell
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S as F
 
-pytestmark = pytest.mark.skipif(not code_trace.on(), reason="reads the trace of the run (3.12+)")
+pytestmark = pytest.mark.skipif(not code_trace.on(), reason="reads the trace of the run")
 
 STATEMENT = f"w = (run(xs), (time.sleep({F}), 0)[1])"
 RUN = "def run(xs):\n    return statistics.mean(xs)\n"

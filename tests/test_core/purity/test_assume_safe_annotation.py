@@ -173,7 +173,7 @@ def test_strict_mode_honours_the_annotation(tmp_path):
 def test_it_waives_the_class_that_runs_uncached(tmp_path):
     """``untrackable_dep`` runs uncached by default; the per-line waiver is the
     statement-scoped equivalent of ``assume_safe=True`` for it. (``eval``: a
-    lookup by name is cached on a trace on Python 3.12+.)"""
+    lookup by name is cached on a trace.)"""
 
     def audited(text):
         return eval(text)  # @cash:assume-safe

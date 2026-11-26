@@ -11,7 +11,7 @@ digest is then handed back instead of hashing the value again.
 
 The digest itself always comes from cash's own Python hashing, so a key is
 the same with the extension and without it. Without it (a pure-Python
-install, PyPy, Python before 3.12, a free-threaded build, or
+install, PyPy, a free-threaded build, or
 ``CASH_PURE_PYTHON=1``), `digest` simply hashes: no value is ever "provably
 unchanged", which is what cash did before. ``CASH_CWATCH_VERIFY=1`` hashes
 again behind every reuse and raises `WatchMismatch` when the two differ.

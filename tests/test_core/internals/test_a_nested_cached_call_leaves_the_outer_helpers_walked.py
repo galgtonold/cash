@@ -19,7 +19,6 @@ does, in this process and the next.
 from __future__ import annotations
 
 import json
-import sys
 import textwrap
 
 import pytest
@@ -186,13 +185,6 @@ def test_an_outer_call_appending_to_its_argument_replays_as_plain_python(tmp_pat
         assert got["alias"]
         assert got["fresh"] == [2, 2]
         assert got["one"] == [1, 1]
-    if sys.version_info < (3, 12):
-        # What a call ran is recorded with sys.monitoring, Python 3.12+:
-        # below it a call that changes its argument in place runs every
-        # time (with a warning), here and in the next process.
-        assert first["hits"] == second["hits"] == 0
-        assert first == second
-        return
     assert first["hits"] > 0
     # A new process serves every call, and writes the list back as it ran.
     assert second == {**first, "hits": 8, "misses": 0}

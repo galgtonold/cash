@@ -218,7 +218,7 @@ def statement_looks_up_by_string(code: str, namespace: Mapping[str, Any] | None)
 
 # -- lookups a trace can follow ---------------------------------------------
 #
-# On Python 3.12+ a statement's run is recorded (`cash.notebook.shadow`), and
+# A statement's run is recorded (`cash.notebook.shadow`), and
 # with CALL events on the code that looks a name up, so is every callable it
 # calls: the one a string found among them, and the name that holds it, are
 # then in the trace, checked before a hit is served. That covers a lookup

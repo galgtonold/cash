@@ -1,7 +1,7 @@
 """``import cash`` must work without the libraries cash only works *with*.
 
-``pip install cash-lib`` installs cash's own dependencies (psutil, and tomli
-on Python 3.10) and nothing it merely supports: pandas, polars, pyarrow,
+``pip install cash-lib`` installs cash's own dependencies (psutil and
+blake3) and nothing it merely supports: pandas, polars, pyarrow,
 numpy, matplotlib, ipywidgets, redis and boto3 are there only when the user
 already uses them. Nor does it install IPython or the Jupyter kernel stack
 (ipykernel, jupyter_client, jupyter_core, traitlets): a notebook's kernel

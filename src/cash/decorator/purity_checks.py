@@ -2463,7 +2463,7 @@ class PurityChecks:
                 # (`HelperWalk._note_decided_at_run_time`).
                 what = f"it runs a check the class's own metaclass answers ({describe_untrackable(untrackable)})"
                 fix = (
-                    "on Python 3.12 and newer cash checks what the call ran instead; "
+                    "with tracing on (unset CASH_TRACE) cash checks what the call ran instead; "
                     "`# @cash:assume-safe` on that line caches anyway."
                 )
             else:

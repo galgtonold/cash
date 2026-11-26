@@ -20,14 +20,11 @@ with its reason.
 from __future__ import annotations
 
 import json
-import sys
 import textwrap
 
 import pytest
 
 from tests._scripts import run_python
-
-TRACED = sys.version_info >= (3, 12)
 
 _SAMPLERS = """
 import functools
@@ -169,42 +166,28 @@ def walk(tmp_path):
     return _run
 
 
-needs_trace = pytest.mark.skipif(not TRACED, reason="a call that picks code by name is traced on Python 3.12+")
-
-
-@needs_trace
 def test_the_driver_hits_on_repeat_and_leaves_the_sampler_as_plain_python_does(walk):
     assert walk("plain") == {"runs": 1, "hits": 2, "why": None}
 
 
-@needs_trace
 def test_a_second_process_hits_the_stored_entry(walk):
     assert walk("plain")["runs"] == 1
     assert walk("plain") == {"runs": 0, "hits": 3, "why": None}
 
 
-@needs_trace
 def test_an_in_place_change_deep_inside_still_runs_every_time(walk):
     got = walk("logged")
     assert (got["runs"], got["hits"]) == (3, 0)
     assert "changed something else in its arguments in place" in got["why"]
 
 
-@needs_trace
 def test_a_binding_on_an_object_that_is_no_argument_still_runs_every_time(walk):
     got = walk("held")
     assert (got["runs"], got["hits"]) == (3, 0)
     assert "holder.last_ = ... - attribute mutation that changes the argument 'holder'" in got["why"]
 
 
-@needs_trace
 def test_a_bound_value_out_of_the_replay_scope_still_runs_every_time(walk):
     got = walk("view")
     assert (got["runs"], got["hits"]) == (3, 0)
     assert "sampler.view_ shares memory with the argument 'X'" in got["why"]
-
-
-@pytest.mark.skipif(TRACED, reason="below Python 3.12 there is no trace to serve the call on")
-def test_below_3_12_the_driver_runs_every_time(walk):
-    got = walk("plain")
-    assert (got["runs"], got["hits"]) == (3, 0)

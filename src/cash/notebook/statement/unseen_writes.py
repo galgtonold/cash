@@ -8,7 +8,7 @@ in an object-dtype column (``s + 1``), a closure's cell, a classmethod, an
 item two steps down (``d[k][0] + 1``). When such a function appends to a
 global list (``calls.append(1)``), a served entry drops the append.
 
-On Python 3.12+ every function of the user's that ran is recorded
+Every function of the user's that ran is recorded
 (``trace_recorder.Unit.codes``). After a run, `unseen_writers` reads each
 one's own text for what it changes outside its objects: a global it changes
 or rebinds (``calls.append(1)``), a variable of a closure it changes. A
@@ -73,15 +73,15 @@ UNSEEN_WRITES_REASON = (
 #: The same without a record of what ran (`writers_without_a_trace`): the
 #: method may run, nothing says it did.
 COULD_RUN_REASON = (
-    "{fn}() could run in this statement (no record of what runs is kept here: Python before 3.12, "
-    "CASH_TRACE=0, or a debugger holding sys.monitoring) and changes {targets}, which the statement's own "
-    "text does not reach; a stored result would not change {it}"
+    "{fn}() could run in this statement (no record of what runs is kept here: CASH_TRACE=0, or a debugger "
+    "holding sys.monitoring) and changes {targets}, which the statement's own text does not reach; a stored "
+    "result would not change {it}"
 )
 #: And when a value the statement reads was too big to look through: every
 #: class of the user's alive with such a method counts.
 COULD_RUN_TOO_BIG_REASON = (
     "{fn}() could run in this statement: a value it reads is too big to look through, and no record of what "
-    "runs is kept here (Python before 3.12, CASH_TRACE=0, or a debugger holding sys.monitoring); it changes "
+    "runs is kept here (CASH_TRACE=0, or a debugger holding sys.monitoring); it changes "
     "{targets}, which the statement's own text does not reach, and a stored result would not change {it}"
 )
 #: What `writers_without_a_trace` gives for a special method set on a class
@@ -98,8 +98,8 @@ SET_LATER_REASON = (
 UNREADABLE = "<unreadable>"
 UNREADABLE_REASON = (
     "cash could not look through what this statement reads for a special method of yours that could run "
-    "in it, and no record of what runs is kept here (Python before 3.12, CASH_TRACE=0, or a debugger holding "
-    "sys.monitoring); the statement runs every time"
+    "in it, and no record of what runs is kept here (CASH_TRACE=0, or a debugger holding sys.monitoring); "
+    "the statement runs every time"
 )
 
 #: Why a statement whose only unseen writer ran inside a garbage collection
@@ -233,9 +233,7 @@ def _held_as(code: types.CodeType, spaces: Iterable[Mapping[str, Any]]) -> str:
                     member = member.__func__
                 if type(member) is types.FunctionType and member.__code__ is code:
                     return f"{_CLASS_QUALNAME(cls)}.{attr}"
-    # No ``co_qualname`` before 3.11, where a memo's body is read without a
-    # trace (`helper_memos.bodies_run`): its own name then.
-    return attribute_or(code, "co_qualname", code.co_name)
+    return code.co_qualname
 
 
 def live_writers(
@@ -321,8 +319,8 @@ def writers_without_a_trace(
     too_big: set[str] | None = None,
 ) -> list[tuple[str, tuple[str, ...]]]:
     """What `unseen_writers` would find, read from the objects instead of a
-    trace (none on Python 3.10 and 3.11, with ``CASH_TRACE=0``, or while a
-    debugger holds `sys.monitoring`): a special method of a class of the
+    trace (none with ``CASH_TRACE=0``, or while a debugger holds
+    `sys.monitoring`): a special method of a class of the
     user's whose objects *statement* reaches through what it reads (an item
     of a container, ``d[k][0]``; an attribute; an object-dtype array or
     column; a function's closure or the globals it names) that changes
@@ -772,25 +770,6 @@ def _live_writing_classes(namespace: Mapping[str, Any], hc: Any) -> list[type]:
     return [c for c in bound + users_module_classes() + hc.live_users_classes() if hc.reaching_special_functions(c)]
 
 
-#: The methods ``@dataclass`` writes from text (``dataclasses._create_fn``).
-_DATACLASS_MADE = frozenset(
-    {
-        "__init__",
-        "__repr__",
-        "__eq__",
-        "__lt__",
-        "__le__",
-        "__gt__",
-        "__ge__",
-        "__hash__",
-        "__setattr__",
-        "__delattr__",
-        "__getstate__",
-        "__setstate__",
-    }
-)
-
-
 def library_made(code: types.CodeType, globals_: Mapping[str, Any]) -> bool:
     """Is *code* a method a library wrote for a class of the user's, from
     text of its own: what ``@dataclass`` (``__create_fn__``), attrs
@@ -807,10 +786,6 @@ def library_made(code: types.CodeType, globals_: Mapping[str, Any]) -> bool:
     if filename != "<string>":
         return False
     if attribute_or(code, "co_qualname", "").startswith("__create_fn__.<locals>."):
-        return True
-    if sys.version_info < (3, 11) and code.co_firstlineno == 2 and code.co_name in _DATACLASS_MADE:
-        # No ``co_qualname`` before 3.11: ``__create_fn__`` puts the method
-        # it makes on its second line, under one of these names.
         return True
     name = globals_.get("__name__") if isinstance(globals_, Mapping) else None
     return code.co_name == "<lambda>" and isinstance(name, str) and name.startswith("namedtuple_")
@@ -951,7 +926,7 @@ def _bytecode_writes(code: types.CodeType) -> frozenset[str] | None:
             elif op.startswith(_CALLS_OR_DRAWS):
                 calls = True
         pending.extend(k for k in c.co_consts if isinstance(k, types.CodeType))
-    if calls and (attributes or not names <= _PURE_BUILTINS or sys.version_info < (3, 12)):
+    if calls and (attributes or not names <= _PURE_BUILTINS):
         return None
     return frozenset(out)
 
@@ -1112,8 +1087,6 @@ def _function_node(code: types.CodeType) -> ast.FunctionDef | ast.AsyncFunctionD
     lambdas = [node for node in walk_tree(tree) if isinstance(node, ast.Lambda)]
     if len(lambdas) < 2:
         return lambdas[0] if lambdas else None
-    if sys.version_info < (3, 11):
-        return None  # no positions to tell them apart by
     # Several on its lines (``{'g': lambda o: 1, 'f': lambda o: calls.append(1)}``):
     # the one whose body starts where *code*'s first instruction of its own
     # does; none found, its text is not known.
@@ -1154,8 +1127,6 @@ def _lambda_in_its_text(code: types.CodeType) -> ast.Lambda | None:
     lambdas = [node for node in walk_tree(tree) if isinstance(node, ast.Lambda) and node.lineno == code.co_firstlineno]
     if len(lambdas) < 2:
         return lambdas[0] if lambdas else None
-    if sys.version_info < (3, 11):
-        return None
     starts = [
         (line, col)
         for line, _, col, end in code.co_positions()
@@ -1178,7 +1149,7 @@ _NO_ARGUMENTS = ast.arguments(
 
 
 def _comprehension_node(code: types.CodeType, kind: type) -> ast.Lambda | None:
-    """A generator expression (or, before 3.12, a comprehension) that ran
+    """A generator expression that ran
     apart from the function it was made in, as a function whose body it is:
     the one of its kind on its first line of its file (all of them, when
     the line has several). None if the file no longer has one there."""

@@ -13,7 +13,7 @@ through review.
 
 ## Setup
 
-You need Python 3.10 or later and Git.
+You need Python 3.12 or later and Git.
 
 ```bash
 git clone https://github.com/galgtonold/cash.git
@@ -42,7 +42,7 @@ its sources, or when the disk is nearly full (`--min-free-gb`, default 5).
 `docs-test` holds the packages the documentation's examples import. Without it,
 `pytest tests/docs` fails on real imports.
 
-On Python 3.12 or newer with a C compiler, the editable install also compiles
+With a C compiler, the editable install also compiles
 the C extension (`src/cash/_c/`) into `src/cash/`. After changing its C
 sources, rebuild it with `python hatch_build.py`. Without a compiler, or with
 `CASH_PURE_PYTHON=1`, cash runs its pure-Python path; `cash info` shows which.
@@ -175,7 +175,7 @@ pytest tests/docs
 The integration core set is the few hundred integration tests that together
 cover every line, feature and step sequence of the whole suite, plus at least
 5% of each feature folder's tests; the whole suite runs nightly on Python
-3.10, 3.12 and 3.14. Don't run the whole suite while iterating. To re-pick the
+3.12, 3.13 and 3.14. Don't run the whole suite while iterating. To re-pick the
 core set after large changes, see `tools/test_selection/`.
 
 **Show that a new test fails without your fix:**

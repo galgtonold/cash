@@ -238,7 +238,7 @@ class TestBothTiersRunTheSuite:
             assert sorted(shards) == [f"{i}/{n}" for i in range(1, n + 1)], (key, shards)
         oldest, newest = _supported_pythons()[0], _supported_pythons()[-1]
         # The oldest Python on macOS, the newest on Windows and macOS: Windows
-        # on the oldest, the slowest job of all, runs in the full tier only.
+        # on the oldest runs in the full tier and nightly.
         assert {("macos-latest", oldest), ("macos-latest", newest), ("windows-latest", newest)} <= set(groups), groups
         assert any(os_name == "ubuntu-latest" for os_name, _ in groups), groups
         assert {oldest, newest} <= set(_tiers()["branch"]["core"])
@@ -360,8 +360,8 @@ class TestTheIntegrationSuiteRuns:
         assert "strategy.job-total" not in job
 
     def test_the_nightly_shards_run_on_the_oldest_and_the_newest_python(self):
-        """3.10 has no C extension and no run-time trace: another engine keys
-        the code and watches the body there."""
+        """cash's source and bytecode hashing can differ from one Python to
+        the next: the whole suite runs on both ends of what cash supports."""
         job = _job(NIGHTLY_YML.read_text(encoding="utf-8"), "integration")
         pythons = re.findall(r'"(3\.\d+)"', re.search(r"python: \[([^\]]+)\]", job).group(1))
         supported = _supported_pythons()

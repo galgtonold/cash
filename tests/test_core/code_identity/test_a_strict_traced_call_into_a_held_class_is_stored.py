@@ -17,15 +17,12 @@ compared with the same program run without cash.
 
 from __future__ import annotations
 
-import sys
-
 import pytest
 
 from tests.test_core.code_identity._edited_project import edited_runs
 
 pytestmark = [
     pytest.mark.core,
-    pytest.mark.skipif(sys.version_info < (3, 12), reason="the code trace needs sys.monitoring (Python 3.12+)"),
 ]
 
 FITLIB = """

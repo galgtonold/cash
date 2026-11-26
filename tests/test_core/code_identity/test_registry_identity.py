@@ -58,7 +58,7 @@ def test_same_line_lambdas_distinct_entries(tmp_path):
 
 
 def test_same_line_lambdas_differing_only_in_nested_code_are_distinct(tmp_path):
-    """A comprehension (before 3.12) and a lambda inside a lambda are nested
+    """A comprehension and a lambda inside a lambda are nested
     code objects: the pin must see into them."""
     c = _cash(tmp_path)
     double, triple = c.cache(lambda xs: [x * 2 for x in xs]), c.cache(lambda xs: [x * 3 for x in xs])

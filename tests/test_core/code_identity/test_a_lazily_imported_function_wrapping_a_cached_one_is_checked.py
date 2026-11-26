@@ -8,7 +8,6 @@ function or to the layer around it is still seen."""
 
 from __future__ import annotations
 
-import sys
 import textwrap
 
 import pytest
@@ -16,7 +15,6 @@ import pytest
 from tests._scripts import run_python
 
 pytestmark = [
-    pytest.mark.skipif(sys.version_info < (3, 12), reason="a call that picks code by name is traced on 3.12+"),
     pytest.mark.timeout(300),
 ]
 

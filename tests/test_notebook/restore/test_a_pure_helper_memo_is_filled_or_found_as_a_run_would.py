@@ -29,17 +29,12 @@ a statement runs, which is what a restart and Run All compute too.
 
 from __future__ import annotations
 
-import sys
-
 from cash.notebook import helper_memos
 from cash.notebook.ipython.session import CashSession
 from tests._cell_driver import run_cash_cell
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 SLEEP = ABOVE_PERSISTENCE_FLOOR_S
-#: Whether cash reads which calls a helper makes (3.11 on), and so calls the
-#: body of a pure one; on 3.10 a statement over such a memo runs.
-CALLS_READ = sys.version_info >= (3, 11)
 SEG = (
     "import functools, time\n\n@functools.cache\n"
     "def seg(n):\n    return [(i, i + length) for length in reversed(range(2, n)) for i in range(n - length)]"
@@ -96,11 +91,7 @@ def test_an_answer_the_run_read_that_the_memo_lacks_is_computed_and_the_entry_se
     _restart(cash_magics)
     reasons = _reasons(monkeypatch)
     seen = _run(cash_magics, cells)
-    if CALLS_READ:
-        assert seen[2] == ["RESTORED"], (seen, reasons)
-    else:
-        assert seen[2] == ["COMPUTED"], (seen, reasons)
-        assert "does not hold the answers the statement read" in str(reasons[READ]), reasons
+    assert seen[2] == ["RESTORED"], (seen, reasons)
     ns = cash_magics.shell.user_ns
     assert ns["b"] == _length(5) + _length(9)
     assert ns["seg"](9) == [(i, i + n) for n in reversed(range(2, 9)) for i in range(9 - n)]
@@ -117,12 +108,10 @@ def test_an_answer_the_run_read_changed_in_place_is_not_computed_into_a_hit():
     before = helper_memos.watched(ns)
     exec("b = len(seg(5)) + len(seg(9))", ns)
     records = helper_memos.used(before, ns=ns, changes=[])
-    assert isinstance(records, list) and records[0]["pure"] is CALLS_READ, records
+    assert isinstance(records, list) and records[0]["pure"] is True, records
     seg.cache_clear()
     assert helper_memos.unfilled(records, ns) is not None
-    # Control: unchanged, the answer it read is computed into the memo (3.11
-    # on; on 3.10 the body is not called, and the memo is held to what it
-    # held as the statement began, which it holds).
+    # Control: unchanged, the answer it read is computed into the memo.
     exec(SEG, ns)
     ns["seg"](5)
     before = helper_memos.watched(ns)
@@ -159,11 +148,7 @@ def test_an_answer_the_run_computed_that_the_memo_holds_is_found_and_the_entry_s
     # The cells below the helper again in the same kernel, as after an edit
     # above them: the memo holds every answer they computed.
     seen = _run(cash_magics, cells, [1, 2])
-    if CALLS_READ:
-        assert seen == [["RESTORED"], ["RESTORED"]], (seen, reasons)
-    else:
-        assert seen == [["COMPUTED"], ["COMPUTED"]], (seen, reasons)
-        assert all("already holds an answer the statement computed" in str(reasons[c]) for c in (FILL, READ)), reasons
+    assert seen == [["RESTORED"], ["RESTORED"]], (seen, reasons)
     ns = cash_magics.shell.user_ns
     assert (ns["a"], ns["b"]) == (_length(5) + _length(6), _length(5) + _length(9))
     assert ns["seg"].cache_info().currsize == 3
@@ -188,16 +173,15 @@ def test_a_lookup_finding_an_answer_changed_in_place_by_the_run_refuses_it():
     before = helper_memos.watched(ns)
     exec("seg(9).append((0, 0)); r = len(seg(9))", ns)
     records = helper_memos.used(before, ns=ns, changes=[])
-    assert isinstance(records, list) and records[0]["pure"] is CALLS_READ, records
+    assert isinstance(records, list) and records[0]["pure"] is True, records
     reason = helper_memos.unfilled(records, ns)
     assert reason is not None and "already holds an answer the statement computed" in reason
-    # Control: a run that only read it (3.11 on; on 3.10 the body is not
-    # called to compare, and the answer the run computed is refused).
+    # Control: a run that only read it.
     exec(SEG, ns)
     before = helper_memos.watched(ns)
     exec("r = len(seg(9))", ns)
     records = helper_memos.used(before, ns=ns, changes=[])
-    assert (helper_memos.unfilled(records, ns) is None) is CALLS_READ
+    assert helper_memos.unfilled(records, ns) is None
 
 
 def test_an_answer_the_run_computed_that_its_output_holds_is_not_found_into_a_hit(cash_magics, monkeypatch):
@@ -251,8 +235,8 @@ def test_a_helper_calling_anything_but_pure_builtins_is_never_called_by_cash():
     ns = _guarded()
     for name in ("call_arg", "call_method", "call_item", "call_global", "call_map"):
         assert not helper_memos._calls_only_pure(ns[name]), name
-    assert helper_memos._calls_only_pure(ns["builtins_only"]) is CALLS_READ
-    assert helper_memos._calls_only_pure(_seg()) is CALLS_READ
+    assert helper_memos._calls_only_pure(ns["builtins_only"])
+    assert helper_memos._calls_only_pure(_seg())
 
 
 def _seg():

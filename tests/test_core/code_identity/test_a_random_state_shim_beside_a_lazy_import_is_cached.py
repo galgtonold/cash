@@ -9,7 +9,7 @@ loaded yet whose top level cash cannot read: the two together refused every
 call (KEY-UNTRACKABLE-DEP), though either alone is left to the trace or
 named as the import.
 
-On Python 3.12 and newer the lookups trace the call anyway, and an import
+The lookups trace the call anyway, and an import
 that runs is in that trace: a seeded call hits in the next process and an
 edit to the lazily imported module recomputes. An unseeded draw is frozen
 with a warning, as everywhere else.
@@ -17,7 +17,6 @@ with a warning, as everywhere else.
 
 from __future__ import annotations
 
-import sys
 import textwrap
 
 import pytest
@@ -26,7 +25,6 @@ from tests._scripts import run_python
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
-TRACED = sys.version_info >= (3, 12)
 
 RNG = textwrap.dedent("""
     import numpy as np
@@ -120,7 +118,6 @@ def _run(tmp_path, seed="0", sparse="dense", *, cash=True):
     return proc.stdout.strip().splitlines()[0], proc.stderr
 
 
-@pytest.mark.skipif(not TRACED, reason="a trace of what a call ran needs sys.monitoring (Python 3.12+)")
 @pytest.mark.parametrize("sparse", ["dense", "sparse"])
 def test_a_seeded_call_hits_in_the_next_process_with_the_plain_result(tmp_path, sparse):
     _write(tmp_path)
@@ -132,7 +129,6 @@ def test_a_seeded_call_hits_in_the_next_process_with_the_plain_result(tmp_path, 
     assert "[RUN]" not in err, f"an unedited seeded run must hit:\n{err}"
 
 
-@pytest.mark.skipif(not TRACED, reason="a trace of what a call ran needs sys.monitoring (Python 3.12+)")
 def test_an_edit_to_the_lazily_imported_module_recomputes(tmp_path):
     _write(tmp_path)
     first, _ = _run(tmp_path, sparse="sparse")
@@ -147,14 +143,10 @@ def test_an_edit_to_the_lazily_imported_module_recomputes(tmp_path):
 def test_an_unseeded_draw_is_frozen_with_a_warning(tmp_path):
     """A draw from the global stream no seed stands behind keeps the first
     value, as any unseeded draw does, and says so (RANDOM-UNSEEDED). With
-    no trace (before 3.12) the lookups by name run it every time."""
+    no trace the lookups by name run it every time."""
     _write(tmp_path)
     first, err = _run(tmp_path, seed="none")
     assert "[RUN]" in err
-    if not TRACED:
-        _, err = _run(tmp_path, seed="none")
-        assert "[RUN]" in err and "code picked by a run-time name" in err, err
-        return
     assert "RANDOM-UNSEEDED" in err, err
     out, _ = _run(tmp_path, seed="none")
     assert out == first

@@ -56,9 +56,7 @@ _VERSION = re.compile(r"v?(\d+\.\d+\.\d+)")
 # Numbers that are legitimately not cash's own version. Each needs a reason --
 # an unexplained entry here is how a real drift gets waved through.
 ALLOWED = {
-    "3.10.0",  # Python version floors
-    "3.11.0",
-    "3.12.0",
+    "3.12.0",  # Python version floors
     "3.13.0",
     "3.14.0",
 }

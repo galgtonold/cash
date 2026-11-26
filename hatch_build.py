@@ -3,8 +3,7 @@
 hatchling builds the package as before; this hook only adds the compiled
 module to the wheel. The extension is optional everywhere:
 
-* It is built only on CPython 3.12 or newer (the dict, function and type
-  watchers it uses arrived in 3.12). Anywhere else the wheel is pure Python.
+* It is built only on CPython. Anywhere else the wheel is pure Python.
 * ``CASH_PURE_PYTHON=1`` skips it on purpose: that is how the universal
   ``py3-none-any`` wheel is built.
 * When compiling fails (no compiler, no Python headers), the build prints a
@@ -56,8 +55,6 @@ def skip_reason() -> str | None:
         return "CASH_PURE_PYTHON is set"
     if platform.python_implementation() != "CPython":
         return f"{platform.python_implementation()} is not CPython"
-    if sys.version_info < (3, 12):
-        return "it needs Python 3.12 or newer"
     if not sorted(C_DIR.glob("*.c")):
         return f"no C sources in {C_DIR}"
     return None

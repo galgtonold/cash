@@ -118,7 +118,7 @@ class TestGlobalReadInNestedScope:
         assert f.explain(arg).reason != "hit"
 
     def test_listcomp_of_genexp_invalidates(self, make_module):
-        # Mixed nesting: an inlined (3.12+) comprehension wrapping a genexp
+        # Mixed nesting: an inlined comprehension wrapping a genexp
         # that owns its own scope.
         mod = make_module(
             "compglobals_mixed",

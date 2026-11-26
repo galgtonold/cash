@@ -21,8 +21,6 @@ import pytest
 from cash.decorator import code_trace
 from cash.tracking.trace_recorder import Unit
 
-pytestmark = pytest.mark.skipif(not code_trace.TRACEABLE, reason="sys.monitoring is Python 3.12+")
-
 WAIT = 20
 
 

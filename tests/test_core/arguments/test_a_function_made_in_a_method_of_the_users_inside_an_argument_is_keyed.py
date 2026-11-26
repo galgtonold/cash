@@ -68,9 +68,7 @@ MAIN = """
     with warnings.catch_warnings(record=True) as caught:
         out = [fit(Model(a, b, lock), 2) for _ in range(2)]
     info = fit.cache_info()
-    # Below Python 3.12 the first call a process stores says this once.
-    unseen = "KEY-LIBRARY-STATE-UNSEEN" if sys.version_info < (3, 12) else ""
-    codes = sorted({str(getattr(w.message, "code", "")) for w in caught} - {"", unseen})
+    codes = sorted({str(getattr(w.message, "code", "")) for w in caught} - {""})
     print(out, info["hits"], info["misses"], codes)
 """
 

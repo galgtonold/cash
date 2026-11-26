@@ -36,9 +36,7 @@ MAX_NODES = 5_000_000
 
 _KERNELS = (
     _native.kernels
-    if _native.kernels is not None
-    and hasattr(_native.kernels, "set_layouts")
-    and (3, 12) <= sys.version_info[:2] <= (3, 14)
+    if _native.kernels is not None and hasattr(_native.kernels, "set_layouts") and sys.version_info[:2] <= (3, 14)
     else None
 )
 

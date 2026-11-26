@@ -3,9 +3,9 @@
 ``getattr(module, name)(x)``, ``importlib.import_module(name)`` and
 ``__import__(name)`` choose the code a call runs from a value, so a key built
 from the code the function names cannot see an edit to it
-(KEY-UNTRACKABLE-DEP). On Python 3.12 and newer such a call is keyed as any
-other, and on a miss its body runs under ``sys.monitoring``: the user code
-that ran, and each lookup by name, are recorded. The entry keeps that trace
+(KEY-UNTRACKABLE-DEP). Such a call is keyed as any other, and on a miss its
+body runs under ``sys.monitoring``: the user code that ran, and each lookup
+by name, are recorded. The entry keeps that trace
 as a list of *items*, each naming something by module and qualified name with
 the digest it had, and a lookup serves the entry only when every item still
 holds that digest (`verify`). The key is never replaced: a trace only adds a
@@ -107,7 +107,6 @@ from ..tracking.process_registries import register_atexit
 from ..tracking.tracker_context import untracked
 
 __all__ = [
-    "TRACEABLE",
     "TraceUnit",
     "active",
     "begin",
@@ -120,16 +119,14 @@ __all__ = [
     "verify",
 ]
 
-#: ``sys.monitoring`` is there: Python 3.12 or newer.
-TRACEABLE = sys.version_info >= (3, 12)
 _OFF = ("0", "off", "false", "no")
 
 
 def on() -> bool:
-    """Is every cached call recorded and served on its trace? On 3.12+
-    unless ``CASH_TRACE=0``; a call that picks code by name is recorded
-    either way."""
-    return TRACEABLE and os.environ.get("CASH_TRACE", "").strip().lower() not in _OFF
+    """Is every cached call recorded and served on its trace? Yes, unless
+    ``CASH_TRACE=0``; a call that picks code by name is recorded either
+    way."""
+    return os.environ.get("CASH_TRACE", "").strip().lower() not in _OFF
 
 
 #: Names a code object holds when it may look code up by name: CALL events
@@ -184,7 +181,7 @@ _LINE_STATUS: weakref.WeakKeyDictionary[types.CodeType, bool] = _weak.WeakKeyDic
 
 def covers(issues: Iterable[PurityIssue]) -> bool:
     """Can a trace stand in for *issues*, the run-time lookups of a call's
-    tree: all of them lookups by name (`is_name_lookup`), on 3.12+?
+    tree: all of them lookups by name (`is_name_lookup`)?
 
     A lazy import of a module not loaded yet (UNREAD_MODULE) beside them
     is covered too while the trace is on: the lookups trace the call
@@ -193,7 +190,7 @@ def covers(issues: Iterable[PurityIssue]) -> bool:
     the same import in an argument's code (`CallRunner._carrier_refusal`).
     Alone, with no lookup to trace the call, it still refuses."""
     issues = list(issues)
-    if not TRACEABLE or not issues:
+    if not issues:
         return False
     lookups = sum(1 for i in issues if is_name_lookup(i))
     if lookups == len(issues):
@@ -451,7 +448,7 @@ def _recorder_class() -> type:
             # and the caller waited on it forever.
             mon = getattr(sys, "monitoring", None)
             if mon is None:
-                self.reason = "sys.monitoring needs Python 3.12 or newer"
+                self.reason = "this Python has no sys.monitoring"
                 return False
             # Held weakly: a notebook compiles each statement it runs into
             # code of its own, and a long session kept every one of them.
@@ -1304,7 +1301,7 @@ def begin(*, watch_globals: bool = False, surface: bool = False) -> Any:
     and `build` refuses a call that changed one. *surface*: its trace will
     be built with *narrow* (`build`), so the closure cells of the code that
     starts are digested with classes by their surface."""
-    rec = _recorder() if TRACEABLE else None
+    rec = _recorder()
     return rec.begin("decorator", watch_globals=watch_globals, surface=surface) if rec is not None else None
 
 

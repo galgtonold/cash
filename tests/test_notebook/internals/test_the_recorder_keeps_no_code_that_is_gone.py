@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import gc
 import linecache
-import sys
 
 import pytest
 
@@ -19,8 +18,6 @@ from cash.analysis.annotations import CacheAnnotation
 from cash.decorator import code_trace
 from cash.notebook import shadow
 from cash.notebook.cache_status import CacheStatus
-
-pytestmark = pytest.mark.skipif(sys.version_info < (3, 12), reason="traces are recorded on Python 3.12+")
 
 _PERSIST = CacheAnnotation(persist=True)
 

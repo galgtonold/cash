@@ -212,13 +212,13 @@ calls, so editing `mean_reversion` keeps the `momentum` entries. A hit costs
 about what a direct call to a cached strategy costs (around 0.7 ms with seven
 small pandas strategies, against about 2 ms for the table form).
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks._warn_untrackable @54508976 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks._warn_untrackable @f9cd7b17 -->
 Looking the function up by a name at run time, with `getattr(module, name)()`
-or `importlib.import_module(name)`, is not keyed. On Python 3.12 and newer the
+or `importlib.import_module(name)`, is not keyed. The
 call is cached anyway, on a record of the code it ran that is checked before
-each hit; before 3.12, or when that record cannot be checked, the function
+each hit; when that record cannot be checked, the function
 runs uncached with a [`KEY-UNTRACKABLE-DEP`](warnings.md#key-untrackable-dep)
-warning. A table is keyed on every version.
+warning. A table is always keyed.
 
 ## Code in installed packages
 
@@ -291,10 +291,10 @@ to watch:
 
 ## Library settings cash cannot check
 
-<!-- claim: cash/decorator/runtime.py:CallRunner._warn_settings_unseen @519346d9 -->
-On Python 3.12 and newer, cash checks the library settings a call read
+<!-- claim: cash/decorator/runtime.py:CallRunner._warn_settings_unseen @7b843346 -->
+cash checks the library settings a call read
 (`sklearn.set_config(...)`, `pd.set_option(...)`, `np.seterr(...)`, a
-`ContextVar`) before it serves the entry. Before 3.12, with `CASH_TRACE=0`,
+`ContextVar`) before it serves the entry. With `CASH_TRACE=0`,
 for an `async` function, or for code a returned iterator runs, it cannot see
 those reads: a call made after such a setting changed is served the result
 made under the old one, also when the library is reached through an
@@ -413,8 +413,7 @@ paths from the project root or pass absolute paths.
   reads (a global, read in a helper, a method or another module of yours),
   one where cash cannot tell (the code looks names up by a string, as
   `globals()["G"]` does, or the call is not recorded, as an `async`
-  function's is not, nor any call before Python 3.12, which has no
-  `sys.monitoring` to record it with), and any other
+  function's is not), and any other
   argument (a list of lists, a frame given a new column, an object of your
   class changed other than as the next item says) are not stored, so they
   run every time. Return a modified copy instead (`rows = sorted(rows)`).
@@ -523,8 +522,8 @@ paths from the project root or pass absolute paths.
 
 <!-- claim: cash/backends/set_order.py:restore @d4e04f7d -->
 - A set in a result comes back with the same items. With the
-  [C extension](getting-started/installation.md#the-c-fast-path) on CPython
-  3.12 to 3.14, it also iterates in the order the stored set did, wherever
+  [C extension](getting-started/installation.md#the-c-fast-path) up to CPython
+  3.14, it also iterates in the order the stored set did, wherever
   the result holds it. Elsewhere a `for` loop may meet the items in another
   order than in the call that made it, and so may a set of strings in a new
   process, as in plain Python. Use `sorted(s)` where the order matters.

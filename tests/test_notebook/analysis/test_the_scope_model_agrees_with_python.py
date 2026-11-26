@@ -86,7 +86,6 @@ def test_when_python_evaluates_each_annotation_is_told_apart():
     }
 
 
-@pytest.mark.skipif(sys.version_info < (3, 12), reason="type parameters are Python 3.12 syntax")
 def test_a_type_parameter_is_local_to_its_definition_and_its_bound_is_read():
     model = sm.scope_model(ast.parse("def ident[T: Bound](x: T) -> T:\n    return x"))
     assert model.global_reads() == {"Bound"}

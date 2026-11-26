@@ -280,8 +280,8 @@ class CodeArgs:
         """Say once that code reached through an argument resolves a dependency
         at runtime (*issues*, `carrier_lookups`), which the key cannot name.
 
-        The call is served only on a trace of what it ran (Python 3.12+, a
-        lookup by name), or runs uncached, as the same line in the cached
+        The call is served only on a trace of what it ran (a lookup by
+        name), or runs uncached, as the same line in the cached
         function's own body does (``untrackable_dep``): a method of an
         argument's class was never analysed, and ``getattr(MOD, name)()``
         there served a stale result. ``# @cash:assume-safe`` on the line, or
@@ -1181,8 +1181,8 @@ class CodeArgs:
 
     def _carrier_helper_parts(self, carrier: Any, owner_code: Any) -> list[str]:
         """Key parts for the helpers the code *carrier* runs reaches, when
-        no trace of the call will check them: before Python 3.12, with
-        ``CASH_TRACE=0``, or for a coroutine (`code_trace.on`).
+        no trace of the call will check them: with ``CASH_TRACE=0``, or for
+        a coroutine (`code_trace.on`).
 
         Its code is keyed by what it loads by name
         (`CodeSurface.code_surface_hash`), which misses a helper reached

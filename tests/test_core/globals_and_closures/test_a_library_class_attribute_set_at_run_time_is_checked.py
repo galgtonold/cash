@@ -9,7 +9,7 @@ path. Now the methods that ran are recorded with the class they ran on, and
 the plain class attributes they read off ``self``/``cls`` are kept with the
 entry (`library_reads`), checked again on lookup as any library setting.
 
-Below Python 3.12 (and with ``CASH_TRACE=0``) nothing is recorded: the first
+With ``CASH_TRACE=0`` nothing is recorded: the first
 stored call reaching the library says so once per process with
 KEY-LIBRARY-STATE-UNSEEN.
 """
@@ -34,10 +34,6 @@ pytestmark = [
     pytest.mark.filterwarnings("ignore::cash.exceptions.CashCacheIneffectiveWarning"),
 ]
 
-RECORDED = sys.version_info >= (3, 12)
-needs_recording = pytest.mark.skipif(
-    not RECORDED, reason="a body's reads are recorded with sys.monitoring, Python 3.12 or newer"
-)
 
 LIBRARY = """
 class Model:
@@ -187,7 +183,6 @@ def _settle(cached, plain, path):
         time.sleep(0.01)
 
 
-@needs_recording
 def test_a_class_attribute_set_between_calls_is_seen(lib, c, path):
     try:
         for plain, target in _scenarios(lib):
@@ -206,7 +201,6 @@ def test_a_class_attribute_set_between_calls_is_seen(lib, c, path):
         _reset(lib)
 
 
-@needs_recording
 def test_the_miss_names_the_attribute(lib, c):
     def library_function(x):
         return lib.run(x)
@@ -221,7 +215,6 @@ def test_the_miss_names_the_attribute(lib, c):
         _reset(lib)
 
 
-@needs_recording
 def test_a_class_cache_a_method_fills_is_not_a_setting(lib, c):
     def remembered(x):
         return lib.Model(x).remembered()
@@ -257,7 +250,6 @@ print(f(7), f.cache_info()["hits"], g(7), g.cache_info()["hits"])
 """
 
 
-@needs_recording
 def test_an_attribute_set_by_the_script_is_checked_in_another_process(tmp_path):
     site = _install(tmp_path)
     script = tmp_path / "run.py"
@@ -293,8 +285,7 @@ def test_unrecorded_a_call_reaching_the_class_says_so_once(lib, c, monkeypatch, 
     library_versions.forget()
     monkeypatch.setattr(library_versions, "per_user_cache_root", lambda: tmp_path / "user")
     monkeypatch.setattr(library_reads, "UNSEEN_SAID", False)
-    if RECORDED:
-        monkeypatch.setenv("CASH_TRACE", "0")
+    monkeypatch.setenv("CASH_TRACE", "0")
     try:
         with warnings.catch_warnings(record=True) as seen:
             warnings.simplefilter("always")
@@ -312,7 +303,6 @@ def test_unrecorded_a_call_reaching_the_class_says_so_once(lib, c, monkeypatch, 
         library_versions.forget()
 
 
-@needs_recording
 def test_a_method_first_run_on_another_class_is_still_watched(lib, c, path):
     # ``Base.compute`` first runs on a class whose ``scale`` is the
     # instance's: no class setting read there. Run later on a class holding

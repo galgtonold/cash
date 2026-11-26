@@ -15,7 +15,6 @@ The check runs in a fresh process, whose monitoring tool ids are free.
 
 from __future__ import annotations
 
-import sys
 import textwrap
 
 import pytest
@@ -24,7 +23,6 @@ from tests._scripts import run_python
 
 pytestmark = [
     pytest.mark.core,
-    pytest.mark.skipif(sys.version_info < (3, 12), reason="traces are recorded on Python 3.12+"),
 ]
 
 READY = textwrap.dedent("""

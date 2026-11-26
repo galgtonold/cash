@@ -17,8 +17,6 @@ import pytest
 
 from cash.decorator import code_trace
 
-pytestmark = pytest.mark.skipif(not code_trace.TRACEABLE, reason="sys.monitoring is Python 3.12+")
-
 _PLUGINS = """
 def common(x):
     return x + 1

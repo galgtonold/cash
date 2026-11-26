@@ -585,7 +585,7 @@ class KeyBuilder:
         read (UNREAD_MODULE), in a method the call may never run, needs no
         key part when the call is traced: an import that runs is in the
         trace (``first_import``), with the code of that module that ran and
-        the globals it read. Without a trace (Python < 3.12, ``CASH_TRACE=0``)
+        the globals it read. Without a trace (``CASH_TRACE=0``)
         an edit to that module could not be seen, so the call runs uncached.
         """
         traced = code_trace.on() and not coroutine
@@ -3201,20 +3201,17 @@ class CallRunner:
 
     def _warn_settings_unseen(self, func: Callable, func_name: str) -> None:
         """Say once a process that a call stored without its body recorded
-        does not have the library settings it read checked: below Python
-        3.12, with ``CASH_TRACE=0`` and for a coroutine nothing sees them
+        does not have the library settings it read checked: with
+        ``CASH_TRACE=0`` and for a coroutine nothing sees them
         (`library_reads`). Said for the first such call of any kind: a
         library reached through an argument's method (``df.to_string()``)
         is not named in the function's own code."""
         library_reads.UNSEEN_SAID = True
-        # The way out depends on why nothing was recorded: "run on Python
-        # 3.12+ with tracing on" is already true for a coroutine there.
+        # The way out depends on why nothing was recorded: "run with
+        # tracing on" is already true for a coroutine.
         if inspect.iscoroutinefunction(func):
             where = "a coroutine's body is not recorded"
             way_out = "move the part that reads the setting into a sync function and cache that one instead"
-        elif not code_trace.TRACEABLE:
-            where = "Python below 3.12 does not record what a body reads"
-            way_out = "run on Python 3.12 or newer"
         elif not code_trace.on():
             where = "CASH_TRACE=0 turns off recording what a body reads"
             way_out = "unset CASH_TRACE"
