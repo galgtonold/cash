@@ -140,6 +140,17 @@ def _method_load(ins: dis.Instruction) -> bool:
     return ins.opname == "LOAD_ATTR" and bool((ins.arg or 0) & 1)
 
 
+def _called(ins: list[dis.Instruction], k: int) -> bool:
+    """Is the global the ``LOAD_GLOBAL`` at *k* loads called itself? One
+    loaded with a call's NULL (``name(...)``) is, unless an attribute is
+    read off it next: Python 3.12 loads a name an import bound with the
+    NULL ahead of it when an attribute of it is called (``m.f(x)``,
+    ``console.log(x)``), where 3.13 pushes the NULL after the chain."""
+    if not (ins[k].arg or 0) & 1:
+        return False
+    return not (k + 1 < len(ins) and ins[k + 1].opname == "LOAD_ATTR")
+
+
 def global_attr_chains(scopes: tuple, name: str, getattr_is_builtin: bool) -> tuple[tuple[str, ...], ...] | None:
     """The attribute chains *scopes* read off the global *name*, when every
     load of it heads one: ``name.a.b`` (``LOAD_ATTR`` after ``LOAD_GLOBAL``)
@@ -161,7 +172,7 @@ def global_attr_chains(scopes: tuple, name: str, getattr_is_builtin: bool) -> tu
                 return None
             if op.opname != "LOAD_GLOBAL":
                 continue
-            if (op.arg or 0) & 1:
+            if _called(ins, k):
                 return None  # `name(...)`: called
             chain: tuple[str, ...] = ()
             j = k + 1
@@ -222,7 +233,7 @@ def module_attr_chains(scopes: tuple, path: tuple[str, ...]) -> tuple[tuple[str,
                 return None
             if op.opname != "LOAD_GLOBAL":
                 continue
-            if (op.arg or 0) & 1:
+            if _called(ins, k):
                 return None  # `m(...)`: called
             attrs: list[str] = []
             methods: list[bool] = []
