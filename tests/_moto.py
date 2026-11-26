@@ -88,14 +88,22 @@ def stop_fsspec_io_thread() -> None:
     asyn = sys.modules.get("fsspec.asyn")
     if asyn is None or asyn.loop[0] is None:
         return
-    s3fs = sys.modules.get("s3fs")
-    if s3fs is not None:
-        s3fs.S3FileSystem.clear_instance_cache()
     with asyn.get_lock():
         loop, thread = asyn.loop[0], asyn.iothread[0]
         asyn.loop[0] = asyn.iothread[0] = None
     if loop is None:
         return
+    s3fs = sys.modules.get("s3fs")
+    if s3fs is not None:
+        # Closed on the loop while it runs: dropped with it, each one's
+        # HTTP session would be reported unclosed in whatever test the
+        # collector then ran in.
+        for fs in list(s3fs.S3FileSystem._cache.values()):
+            creator = getattr(fs, "_s3creator", None)
+            if creator is not None and getattr(fs, "loop", None) is loop:
+                with contextlib.suppress(Exception):  # closing a session the server dropped
+                    asyncio.run_coroutine_threadsafe(creator.__aexit__(None, None, None), loop).result(timeout=10)
+        s3fs.S3FileSystem.clear_instance_cache()
     with contextlib.suppress(Exception):  # a loop already stopped has no executor to wait for
         asyncio.run_coroutine_threadsafe(loop.shutdown_default_executor(), loop).result(timeout=10)
     loop.call_soon_threadsafe(loop.stop)
