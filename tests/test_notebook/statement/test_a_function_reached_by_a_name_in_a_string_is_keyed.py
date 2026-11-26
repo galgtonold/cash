@@ -120,7 +120,7 @@ def test_a_changed_global_of_a_module_function_is_seen(run, mock_shell, lib_modu
 def test_it_runs_every_time_and_says_why(cash_magics, cash_instance, mock_shell):
     """No entry is stored for it, the call inside it included: none could
     ever be found again. (A lookup whose value is called at once is served
-    on its trace on 3.12+: `test_a_lookup_by_a_string_that_is_called_is_served_on_its_trace`.)"""
+    on its trace: `test_a_lookup_by_a_string_that_is_called_is_served_on_its_trace`.)"""
     cash_magics.cash_on("")
     cells = [DEFINITIONS, CASES["eval-in-a-helper"][0], "r = g()"]
     reasons = []

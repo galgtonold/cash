@@ -205,7 +205,7 @@ class Recorder:
     def install(self) -> bool:
         mon = getattr(sys, "monitoring", None)
         if mon is None:
-            self.reason = "sys.monitoring needs Python 3.12 or newer"
+            self.reason = "this Python has no sys.monitoring"
             return False
         for tool in self.tool_ids:
             if mon.get_tool(tool) is None:

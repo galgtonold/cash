@@ -15,14 +15,9 @@ import dis
 import email.message
 import json.decoder
 import logging
-import sys
 import types
 
-import pytest
-
 from cash.decorator import library_reads
-
-pytestmark = pytest.mark.skipif(sys.version_info < (3, 12), reason="the raw bytecode read is 3.12+")
 
 
 def _by_dis(code):

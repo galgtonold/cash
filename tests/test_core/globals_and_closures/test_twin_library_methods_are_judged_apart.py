@@ -27,9 +27,6 @@ pytestmark = [
     pytest.mark.core,
     pytest.mark.filterwarnings("ignore::cash.exceptions.CashImpurityWarning"),
     pytest.mark.filterwarnings("ignore::cash.exceptions.CashCacheIneffectiveWarning"),
-    pytest.mark.skipif(
-        sys.version_info < (3, 12), reason="a body's reads are recorded with sys.monitoring, Python 3.12 or newer"
-    ),
 ]
 
 # ``compute`` sits on the same lines with the same text in both modules,

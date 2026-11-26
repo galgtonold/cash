@@ -96,7 +96,7 @@ def _marks_ignore(hint: Any) -> bool:
     origin = typing.get_origin(hint)
     if origin is Annotated:
         return any(m is _IGNORE or m is Ignore for m in getattr(hint, "__metadata__", ()))
-    if origin is typing.Union or (hasattr(types, "UnionType") and origin is types.UnionType):
+    if origin is typing.Union or origin is types.UnionType:
         return any(_marks_ignore(a) for a in typing.get_args(hint))
     return False
 

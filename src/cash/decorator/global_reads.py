@@ -137,7 +137,7 @@ def _method_load(ins: dis.Instruction) -> bool:
     """Is *ins* a load of a method to call (``obj.m(...)``)?"""
     if ins.opname == "LOAD_METHOD":
         return True
-    return ins.opname == "LOAD_ATTR" and sys.version_info >= (3, 12) and bool((ins.arg or 0) & 1)
+    return ins.opname == "LOAD_ATTR" and bool((ins.arg or 0) & 1)
 
 
 def global_attr_chains(scopes: tuple, name: str, getattr_is_builtin: bool) -> tuple[tuple[str, ...], ...] | None:
@@ -161,7 +161,7 @@ def global_attr_chains(scopes: tuple, name: str, getattr_is_builtin: bool) -> tu
                 return None
             if op.opname != "LOAD_GLOBAL":
                 continue
-            if sys.version_info >= (3, 11) and (op.arg or 0) & 1:
+            if (op.arg or 0) & 1:
                 return None  # `name(...)`: called
             chain: tuple[str, ...] = ()
             j = k + 1
@@ -222,7 +222,7 @@ def module_attr_chains(scopes: tuple, path: tuple[str, ...]) -> tuple[tuple[str,
                 return None
             if op.opname != "LOAD_GLOBAL":
                 continue
-            if sys.version_info >= (3, 11) and (op.arg or 0) & 1:
+            if (op.arg or 0) & 1:
                 return None  # `m(...)`: called
             attrs: list[str] = []
             methods: list[bool] = []

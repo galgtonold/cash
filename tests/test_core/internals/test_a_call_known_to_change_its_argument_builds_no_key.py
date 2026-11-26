@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import functools
 import logging
-import sys
 import warnings
 
 import pytest
@@ -82,11 +81,6 @@ def test_a_first_change_no_later_call_can_write_back_keeps_its_verdict(disk_cash
     assert len(builds) == 1, len(builds)
 
 
-@pytest.mark.skipif(
-    sys.version_info < (3, 12),
-    reason="what a call ran is recorded with sys.monitoring, Python 3.12+; below it a call that changes its "
-    "argument in place runs every time, with a warning (the tests above)",
-)
 def test_a_first_change_a_later_call_writes_back_keeps_no_verdict(tmp_path, monkeypatch):
     # A registered hasher names the array by what it returns: the first
     # call is not stored, and the next takes its state first and is.

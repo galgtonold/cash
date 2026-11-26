@@ -37,9 +37,6 @@ preprocessing = pytest.importorskip("sklearn.preprocessing")
 
 pytestmark = [
     pytest.mark.filterwarnings("ignore::cash.exceptions.CashImpurityWarning"),
-    pytest.mark.skipif(
-        sys.version_info < (3, 12), reason="a body's reads are recorded with sys.monitoring, Python 3.12 or newer"
-    ),
 ]
 
 X = np.arange(6.0).reshape(3, 2)

@@ -285,7 +285,7 @@ _CHAINS = CodeMap()
 #: is most of what watching a library costs a miss.
 QUIET = CodeSet()
 #: Whether this process has said KEY-LIBRARY-STATE-UNSEEN: a call stored
-#: without its body recorded (below 3.12, ``CASH_TRACE=0``, a coroutine),
+#: without its body recorded (``CASH_TRACE=0``, a coroutine),
 #: or a notebook statement stored without its run recorded, has no setting
 #: checked, said once (`CallRunner._warn_settings_unseen`, the statement
 #: processor's `_warn_settings_unseen`).
@@ -381,10 +381,10 @@ _BINARY_OP = _OP.get("BINARY_OP", -1)
 _NB_SUBSCR = next((i for i, (name, _sign) in enumerate(getattr(dis, "_nb_ops", ())) if name == "NB_SUBSCR"), -1)
 #: A chain from a closure's variable, not a global, starts with this mark.
 DEREF = "@"
-#: LOAD_GLOBAL and LOAD_ATTR keep a flag in the low bit of their argument
-#: (3.11 and 3.12 on): the name index is the rest.
-_SHIFT_GLOBAL = 1 if sys.version_info >= (3, 11) else 0
-_SHIFT_ATTR = 1 if sys.version_info >= (3, 12) else 0
+#: LOAD_GLOBAL and LOAD_ATTR keep a flag in the low bit of their argument:
+#: the name index is the rest.
+_SHIFT_GLOBAL = 1
+_SHIFT_ATTR = 1
 
 
 def _chains(
@@ -673,7 +673,7 @@ def self_names(code: types.CodeType) -> tuple[str, ...]:
 
 def _attrs_off_first_dis(code: types.CodeType) -> set[str]:
     """`self_names` read through `dis`, where `_attrs_off_first` does not
-    know the bytecode (before Python 3.12)."""
+    know the bytecode (`_raw_scan_opcodes`)."""
     names: set[str] = set()
     first = code.co_varnames[0]
     on_first = False
@@ -690,7 +690,7 @@ def _attrs_off_first_dis(code: types.CodeType) -> set[str]:
 
 
 def _attrs_off_first(code: types.CodeType) -> set[str]:
-    """`self_names` read off the raw bytecode (Python 3.12 and newer): each
+    """`self_names` read off the raw bytecode: each
     ``LOAD_ATTR`` right after a load of local 0, the first argument (the
     second of a packed pair, ``LOAD_FAST_LOAD_FAST``, which is the one on
     top), its name ``co_names[arg >> 1]``. An ``EXTENDED_ARG`` is part of
@@ -728,7 +728,7 @@ def _attrs_off_first(code: types.CodeType) -> set[str]:
 
 def _raw_scan_opcodes() -> tuple[bool, int, int, int, frozenset[int], frozenset[int]]:
     """What `_attrs_off_first` reads: whether this Python's bytecode is the
-    one it knows (3.12 and newer), and the opcodes it looks for."""
+    one it knows, and the opcodes it looks for."""
     import opcode
 
     opmap = opcode.opmap
@@ -736,7 +736,7 @@ def _raw_scan_opcodes() -> tuple[bool, int, int, int, frozenset[int], frozenset[
         code for name, code in opmap.items() if name.startswith("LOAD_FAST") and name.count("LOAD_FAST") == 1
     )
     pair = frozenset(code for name, code in opmap.items() if name.count("LOAD_FAST") == 2)
-    known = sys.version_info >= (3, 12) and opmap.get("CACHE") == 0 and "LOAD_ATTR" in opmap and bool(single)
+    known = opmap.get("CACHE") == 0 and "LOAD_ATTR" in opmap and bool(single)
     return known, opmap.get("CACHE", -1), opmap.get("EXTENDED_ARG", -1), opmap.get("LOAD_ATTR", -1), single, pair
 
 

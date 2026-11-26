@@ -8,8 +8,8 @@ no object of a class of the user's modules): it found nothing, so the key
 lost ``mylib``'s code and data, and a cell's ``mylib.K = 14`` served the
 old ``t``. With 10 objects the walk saw the class.
 
-On Python 3.12+ the trace of what ran (``CASH_TRACE``) caught the stale hit;
-the tests turn it off, as before 3.12.
+The trace of what ran (``CASH_TRACE``) caught the stale hit;
+the tests turn it off.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ def shop(tmp_path, monkeypatch):
     name = f"_held_class_shop_{os.getpid()}_{id(tmp_path)}"
     (tmp_path / f"{name}.py").write_text(SHOP, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
-    # As before Python 3.12: no trace of what ran checks a hit there.
+    # No trace of what ran checks a hit here.
     monkeypatch.setenv("CASH_TRACE", "0")
     monkeypatch.setattr(shadow, "SHADOW", None)
     # The test harness's own classes (``tests.conftest.MockShell``) count as
@@ -112,7 +112,7 @@ def test_unchanged_the_reader_is_served(cash_magics, mock_shell, shop, size):
 
 @pytest.fixture
 def traced_shop(tmp_path, monkeypatch):
-    """The shop with the trace on (3.12+): a walk stops at an object of the
+    """The shop with the trace on: a walk stops at an object of the
     class, and the hit is served only on its trace."""
     if not shadow.requested() or shadow.SHADOW is None:
         pytest.skip("the trace of what ran is not on here")

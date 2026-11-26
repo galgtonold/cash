@@ -9,7 +9,7 @@ instruction's ``(opname, argval)`` as ``dis`` does: the same instructions
 in the same order (``EXTENDED_ARG`` included, inline ``CACHE`` entries
 skipped), every ``EXTENDED_ARG`` prefix folded into the argument after
 it, and the same ``argval`` -- the constant, the name (``LOAD_GLOBAL``'s
-and ``LOAD_ATTR``'s index shifted as 3.11 and 3.12 store them), the
+and ``LOAD_ATTR``'s index shifted past its flag bit), the
 variable or pair of variables, the comparison, the jump target.
 
 The decoding is built once from ``dis``'s own tables (which opcodes take an
@@ -34,7 +34,7 @@ GLOBAL_WRITES = frozenset({"STORE_GLOBAL", "DELETE_GLOBAL"})
 DEREF_WRITES = frozenset({"STORE_DEREF", "DELETE_DEREF"})
 
 #: How an argument is resolved into ``argval`` (`_KIND`).
-_RAW, _CONST, _CONST_UNKNOWN, _NAME, _JREL, _JABS, _LOCAL, _FREE, _PAIR, _COMPARE, _FORMAT, _CONVERT = range(12)
+_RAW, _CONST, _NAME, _JREL, _JABS, _LOCAL, _PAIR, _COMPARE, _FORMAT, _CONVERT = range(10)
 
 _ALL_OPNAME: list[str] = list(getattr(dis, "_all_opname", dis.opname))
 _ALL_OPMAP: dict[str, int] = dict(getattr(dis, "_all_opmap", dis.opmap))
@@ -49,8 +49,6 @@ def _deop(op: int) -> int:
 
 
 def _cache_entries(op: int) -> int:
-    if _V < (3, 11):
-        return 0
     size = getattr(dis, "_get_cache_size", None)
     if size is not None:
         return size(_ALL_OPNAME[op])
@@ -58,22 +56,16 @@ def _cache_entries(op: int) -> int:
 
 
 def _has_arg(op: int) -> bool:
-    if _V >= (3, 12):
-        return op in opcode.hasarg
-    return op >= dis.HAVE_ARGUMENT
+    return op in opcode.hasarg
 
 
 def _kind(op: int) -> tuple[int, int]:
     """``(kind, shift)`` of *op*'s argument, in the order ``dis`` asks."""
     name = _ALL_OPNAME[op]
     if op in dis.hasconst:
-        if _V == (3, 11) and name != "LOAD_CONST":
-            return _CONST_UNKNOWN, 0  # 3.11 resolves only LOAD_CONST's
         return _CONST, 0
     if op in dis.hasname:
-        if name == "LOAD_GLOBAL" and _V >= (3, 11):
-            return _NAME, 1
-        if name == "LOAD_ATTR" and _V >= (3, 12):
+        if name in ("LOAD_GLOBAL", "LOAD_ATTR"):
             return _NAME, 1
         if name == "LOAD_SUPER_ATTR":
             return _NAME, 2
@@ -99,18 +91,10 @@ def _kind(op: int) -> tuple[int, int]:
         return _JABS, 0
     if op in dis.hasjrel:
         return _JREL, 0
-    if _V >= (3, 11):
-        if op in dis.haslocal or op in dis.hasfree:
-            return _LOCAL, 0
-        if op in dis.hascompare:
-            return _COMPARE, 4 if _V >= (3, 12) else 0
-    else:
-        if op in dis.haslocal:
-            return _LOCAL, 0
-        if op in dis.hascompare:
-            return _COMPARE, 0
-        if op in dis.hasfree:
-            return _FREE, 0
+    if op in dis.haslocal or op in dis.hasfree:
+        return _LOCAL, 0
+    if op in dis.hascompare:
+        return _COMPARE, 4
     if name == "FORMAT_VALUE":
         return _FORMAT, 0
     return _RAW, 0
@@ -130,12 +114,11 @@ _HASARG = [_has_arg(_DEOP[op]) for op in range(256)]
 _KINDS = [_kind(_DEOP[op]) for op in range(256)]
 _BACKWARD = [_backward(_DEOP[op]) for op in range(256)]
 #: Bytes a relative jump counts from past its own unit: the cache entries
-#: after it on 3.12 and later, none before.
-_JUMP_CACHES = [2 * _CACHES[op] if _V >= (3, 12) else 0 for op in range(256)]
+#: after it.
+_JUMP_CACHES = [2 * _CACHES[op] for op in range(256)]
 _CMP_OP = tuple(dis.cmp_op)
 _FORMAT_CONVERTERS = getattr(dis, "FORMAT_VALUE_CONVERTERS", ())
 _CONVERTED = (None, str, repr, ascii)
-_UNKNOWN = getattr(dis, "UNKNOWN", None)
 
 
 def instructions(code: types.CodeType) -> list[tuple[str, Any]]:
@@ -149,13 +132,7 @@ def _scan(code: types.CodeType, keep: frozenset[int] | None) -> list[tuple[str, 
     raw = code.co_code
     consts = code.co_consts
     names = code.co_names
-    if _V >= (3, 11):
-        varname = code._varname_from_oparg  # type: ignore[attr-defined]
-        cells: tuple = ()
-    else:
-        varnames = code.co_varnames
-        varname = varnames.__getitem__
-        cells = code.co_cellvars + code.co_freevars
+    varname = code._varname_from_oparg  # type: ignore[attr-defined]
     opnames, deops, caches_of, hasarg, kinds = _OPNAME, _DEOP, _CACHES, _HASARG, _KINDS
     out: list[tuple[str, Any]] = []
     append = out.append
@@ -199,14 +176,10 @@ def _scan(code: types.CodeType, keep: frozenset[int] | None) -> list[tuple[str, 
             argval = _CMP_OP[arg >> shift]
         elif kind == _JABS:
             argval = arg * 2
-        elif kind == _FREE:
-            argval = cells[arg]
         elif kind == _FORMAT:
             argval = (_FORMAT_CONVERTERS[arg & 0x3][0], bool(arg & 0x4))
-        elif kind == _CONVERT:
+        else:  # _CONVERT
             argval = _CONVERTED[arg]
-        else:  # _CONST_UNKNOWN
-            argval = _UNKNOWN
         append((opnames[op], argval))
     return out
 

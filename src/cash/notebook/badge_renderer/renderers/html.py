@@ -1231,9 +1231,6 @@ def _overhead_html(ob: OverheadBreakdown, rp: _RenderPass) -> str:
         return ""
 
     def _part(e: OverheadEntry) -> str:
-        # Build the optional title in its own f-string: a backslash inside an
-        # f-string *expression* is a SyntaxError before Python 3.12, and the
-        # project still supports 3.10/3.11.
         title = f' title="{_esc(e.tooltip)}"' if e.tooltip else ""
         return (
             f'<span class="c3-ovh-part"{title}>{_esc(e.label)}'

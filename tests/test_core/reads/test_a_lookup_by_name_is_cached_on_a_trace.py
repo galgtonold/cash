@@ -2,11 +2,11 @@
 
 ``getattr(module, name)(x)`` and ``importlib.import_module(name)`` choose the
 code a call runs from a value, which a key built from the code the function
-names cannot see. On Python 3.12+ the call is keyed as any other, its body is
+names cannot see. The call is keyed as any other, its body is
 recorded on ``sys.monitoring``, and a later call is served only while every
 function that ran, and what each lookup found, is unchanged
-(`cash.decorator.code_trace`). Before 3.12 such a call runs uncached
-(KEY-UNTRACKABLE-DEP). ``eval``/``exec`` always run uncached.
+(`cash.decorator.code_trace`). ``eval``/``exec`` always run uncached
+(KEY-UNTRACKABLE-DEP).
 """
 
 from __future__ import annotations
@@ -19,9 +19,6 @@ import warnings
 import pytest
 
 from tests._scripts import run_python
-
-TRACED = sys.version_info >= (3, 12)
-needs_monitoring = pytest.mark.skipif(not TRACED, reason="sys.monitoring is Python 3.12+")
 
 _PLUGINS = """
 def double(x):
@@ -80,7 +77,6 @@ def pick(name, x):
 """
 
 
-@needs_monitoring
 def test_a_second_call_is_served(load):
     m = load(_BY_NAME)
     with warnings.catch_warnings(record=True) as caught:
@@ -91,7 +87,6 @@ def test_a_second_call_is_served(load):
     assert not [w for w in caught if "KEY-UNTRACKABLE-DEP" in str(w.message)]
 
 
-@needs_monitoring
 def test_another_name_runs_another_function(load):
     m = load(_BY_NAME)
     assert m.pick("double", 5) == 10
@@ -100,7 +95,6 @@ def test_another_name_runs_another_function(load):
     assert m.RUNS == ["double", "triple"]
 
 
-@needs_monitoring
 def test_a_name_read_from_a_global_that_changes_runs_the_new_function(load):
     m = load(
         """
@@ -119,7 +113,6 @@ def test_a_name_read_from_a_global_that_changes_runs_the_new_function(load):
     assert m.RUNS == ["double", "triple"]
 
 
-@needs_monitoring
 def test_an_edit_to_the_picked_function_runs_it_again(load, tmp_path):
     m = load(_BY_NAME)
     assert m.pick("double", 5) == 10
@@ -132,7 +125,6 @@ def test_an_edit_to_the_picked_function_runs_it_again(load, tmp_path):
     assert m.RUNS == ["double", "double"]
 
 
-@needs_monitoring
 def test_an_edit_to_a_function_it_did_not_pick_keeps_the_entry(load, tmp_path):
     m = load(_BY_NAME)
     assert m.pick("double", 5) == 10
@@ -144,7 +136,6 @@ def test_an_edit_to_a_function_it_did_not_pick_keeps_the_entry(load, tmp_path):
     assert m.RUNS == ["double"]
 
 
-@needs_monitoring
 def test_a_monkeypatched_function_runs_and_the_real_one_comes_back(load, monkeypatch):
     m = load(_BY_NAME)
     assert m.pick("double", 5) == 10
@@ -155,7 +146,6 @@ def test_a_monkeypatched_function_runs_and_the_real_one_comes_back(load, monkeyp
     assert m.RUNS == ["double", "double", "double"]
 
 
-@needs_monitoring
 def test_an_alias_rebound_to_another_function_is_seen(load):
     m = load(_BY_NAME)
     m.plugins.alias = m.plugins.double
@@ -165,7 +155,6 @@ def test_an_alias_rebound_to_another_function_is_seen(load):
     assert m.RUNS == ["alias", "alias"]
 
 
-@needs_monitoring
 def test_a_new_module_attribute_that_shadows_the_fallback_is_seen(load):
     """``getattr(mod, name, default)``: the name is not read (three
     arguments), so the whole namespace is checked, and the attribute added
@@ -185,7 +174,6 @@ def test_a_new_module_attribute_that_shadows_the_fallback_is_seen(load):
     assert m.RUNS == ["fast", "fast"]
 
 
-@needs_monitoring
 def test_a_method_a_subclass_adds_over_the_base_one_is_seen(load):
     m = load(
         """
@@ -202,7 +190,6 @@ def test_a_method_a_subclass_adds_over_the_base_one_is_seen(load):
     assert m.RUNS == ["score", "score"]
 
 
-@needs_monitoring
 def test_a_module_imported_by_name_is_checked_by_its_code(load, tmp_path):
     m = load(
         """
@@ -222,7 +209,6 @@ def test_a_module_imported_by_name_is_checked_by_its_code(load, tmp_path):
     assert m.RUNS == ["plugins", "plugins"]
 
 
-@needs_monitoring
 def test_a_picked_function_with_a_side_effect_is_not_served(load):
     m = load(
         _BY_NAME,
@@ -261,18 +247,6 @@ def test_eval_and_exec_still_run_uncached(load, name, line):
     assert any("KEY-UNTRACKABLE-DEP" in str(w.message) for w in caught)
 
 
-@pytest.mark.skipif(TRACED, reason="before 3.12 there is no sys.monitoring to record with")
-def test_before_3_12_a_lookup_by_name_runs_uncached(load):
-    m = load(_BY_NAME)
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        assert m.pick("double", 5) == 10
-        assert m.pick("double", 5) == 10
-    assert m.RUNS == ["double", "double"]
-    assert any("KEY-UNTRACKABLE-DEP" in str(w.message) for w in caught)
-
-
-@needs_monitoring
 def test_a_new_process_is_served_and_sees_an_edit(tmp_path):
     (tmp_path / "plugins.py").write_text(textwrap.dedent(_PLUGINS), encoding="utf-8")
     (tmp_path / "main.py").write_text(
@@ -300,7 +274,6 @@ def test_a_new_process_is_served_and_sees_an_edit(tmp_path):
     assert run_python("main.py", cwd=tmp_path).stdout.split() == ["ran", "800"]
 
 
-@needs_monitoring
 def test_code_the_picked_function_runs_on_a_thread_is_in_the_trace(load, tmp_path):
     pool = """
 from concurrent.futures import ThreadPoolExecutor
@@ -323,7 +296,6 @@ def fan_out(x):
     assert m.RUNS == ["fan_out", "fan_out"]
 
 
-@needs_monitoring
 def test_a_cached_function_served_inside_stands_for_its_state(load, tmp_path):
     """The picked function is cached itself and served inside the call: its
     body does not run, so the trace names its state, which an edit moves."""

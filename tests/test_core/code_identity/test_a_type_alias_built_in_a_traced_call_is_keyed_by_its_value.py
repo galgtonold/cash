@@ -9,7 +9,6 @@ it: an edit to the alias is seen, an unchanged one hits.
 
 from __future__ import annotations
 
-import sys
 import textwrap
 
 import pytest
@@ -19,7 +18,6 @@ from tests._scripts import run_python
 pytestmark = [
     pytest.mark.core,
     pytest.mark.timeout(300),
-    pytest.mark.skipif(sys.version_info < (3, 12), reason="a `type` statement and sys.monitoring need 3.12"),
 ]
 
 OPS = textwrap.dedent("""

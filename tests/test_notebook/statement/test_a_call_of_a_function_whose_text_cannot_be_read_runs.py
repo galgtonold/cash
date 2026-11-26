@@ -4,7 +4,7 @@ runs every time, unless its bytecode shows it changes nothing.
 ``exec("def inner(x): ... getattr(LOG, 'append')(x) ...")`` defines a function
 with no source. The statement's analysis reads a callee's writes off its text
 and took one with none for a builtin, so ``v = inner(3)`` was served without
-traces (``CASH_TRACE=0``, Python before 3.12) and ``LOG`` missed the item
+traces (``CASH_TRACE=0``) and ``LOG`` missed the item
 plain Python appends.
 """
 

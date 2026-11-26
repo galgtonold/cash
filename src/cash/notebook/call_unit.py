@@ -465,7 +465,7 @@ def _ran_unseen_writes(call: Any, unit: Any) -> bool:
     a call slow enough to be stored was served after a restart with
     ``calls`` left empty. The callee's own code is the call's analysis's
     (what it writes is watched, or put back with the entry). Without a
-    trace (Python 3.10 and 3.11, ``CASH_TRACE=0``), what the call's text
+    trace (``CASH_TRACE=0``), what the call's text
     could run is read from its objects instead (`writers_without_a_trace`),
     as for a statement."""
     # Here, not at the top: the statement package imports this module.

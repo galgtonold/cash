@@ -1044,7 +1044,7 @@ def _hash_is_unsalted(node: ast.expr | None) -> bool:
     arithmetic on it; that of text, bytes and dates is salted with the
     process's seed, and that of a plain object is its address."""
     if isinstance(node, ast.Constant):
-        return isinstance(node.value, (int, float, complex)) or (node.value is None and sys.version_info >= (3, 12))
+        return isinstance(node.value, (int, float, complex)) or node.value is None
     if isinstance(node, ast.UnaryOp):
         return _hash_is_unsalted(node.operand)
     if isinstance(node, ast.BinOp):

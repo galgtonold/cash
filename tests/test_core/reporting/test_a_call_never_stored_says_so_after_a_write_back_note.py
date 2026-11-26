@@ -11,12 +11,10 @@ have.
 
 from __future__ import annotations
 
-import sys
 import textwrap
 import warnings
 
 import numpy as np
-import pytest
 
 from tests._scripts import run_python
 
@@ -28,11 +26,6 @@ def _shown(fn, *args):
     return [(getattr(w.message, "code", None), str(w.message)) for w in caught if hasattr(w.message, "code")]
 
 
-@pytest.mark.skipif(
-    sys.version_info < (3, 12),
-    reason="what a call ran is recorded with sys.monitoring, Python 3.12+; below it the call runs every time "
-    "(test_a_call_changing_its_argument_runs_every_time_below_python_3_12.py)",
-)
 def test_the_write_back_note_has_its_own_code(disk_cash):
     @disk_cash.cache
     def clip_in_place(a):

@@ -22,7 +22,6 @@ cached calls leave exactly that state, or run every time.
 from __future__ import annotations
 
 import dataclasses
-import sys
 import textwrap
 import threading
 import types
@@ -510,7 +509,7 @@ def test_a_method_setting_its_own_attributes_says_nothing(full_warning_text, dis
 
 
 def test_without_the_c_watcher_the_attributes_are_compared(disk_cash, monkeypatch):
-    """Below Python 3.12, or without the C extension, the ``__dict__`` is
+    """Without the C extension, the ``__dict__`` is
     copied before the body and compared after it."""
     monkeypatch.setattr(rewrite_in_place, "cwatch", None)
     for method in (fit_fresh, fit_alias, fit_delete):
@@ -568,11 +567,6 @@ def test_a_second_process_replays_what_the_first_stored(tmp_path):
         out = run_python(script, tmp_path / ".cash", log, cwd=tmp_path)
         assert out.stdout.strip() == "ok", out.stderr
     assert log.read_text(encoding="utf-8").count("ran") == 1
-
-
-@pytest.mark.skipif(sys.version_info >= (3, 12), reason="the fallback without dict watchers is below Python 3.12")
-def test_below_3_12_the_copy_compare_path_is_taken():
-    assert rewrite_in_place.cwatch is None
 
 
 def test_a_cached_bound_method_replays_on_its_instance(disk_cash):

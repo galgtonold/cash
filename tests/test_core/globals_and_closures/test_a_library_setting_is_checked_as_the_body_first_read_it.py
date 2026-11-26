@@ -23,9 +23,6 @@ pytestmark = [
     pytest.mark.filterwarnings("ignore::cash.exceptions.CashImpurityWarning"),
 ]
 
-needs_recording = pytest.mark.skipif(
-    sys.version_info < (3, 12), reason="a body's reads are recorded with sys.monitoring, Python 3.12 or newer"
-)
 
 LIBRARY = """
 cached_backends = {}
@@ -137,7 +134,6 @@ print(first, hits, f.cache_info()["hits"] - hits)
 """
 
 
-@needs_recording
 def test_a_dict_the_body_fills_is_kept_as_first_read_and_a_changed_setting_still_misses(tmp_path):
     site = tmp_path / "venv" / "lib" / "site-packages"
     site.mkdir(parents=True)
@@ -167,7 +163,6 @@ def test_a_dict_the_body_fills_is_kept_as_first_read_and_a_changed_setting_still
     assert run(1) == (plain1, 0)
 
 
-@needs_recording
 def test_a_dict_the_body_fills_holding_another_key_misses(tmp_path):
     site = tmp_path / "venv" / "lib" / "site-packages"
     site.mkdir(parents=True)
@@ -191,7 +186,6 @@ def test_a_dict_the_body_fills_holding_another_key_misses(tmp_path):
     assert run(foreign) == ["14", "0", "1"]
 
 
-@needs_recording
 @pytest.mark.parametrize("how", ["attribute", "global", "entry", "list"])
 def test_a_counter_the_body_bumps_is_recomputed(tmp_path, how):
     # The body reads a library counter and bumps it: the next call, in the
@@ -252,7 +246,6 @@ def helper(x):
 """
 
 
-@needs_recording
 def test_a_compiled_modules_table_of_addresses_is_checked_in_its_process_only(tmp_path):
     site = tmp_path / "venv" / "lib" / "site-packages"
     site.mkdir(parents=True)
@@ -309,7 +302,6 @@ print(f(7), f.cache_info()["hits"])
 """
 
 
-@needs_recording
 def test_an_editable_installs_path_map_is_no_setting(tmp_path):
     site = tmp_path / "venv" / "lib" / "site-packages"
     site.mkdir(parents=True)

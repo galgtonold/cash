@@ -11,7 +11,6 @@ to an object of the same kind, defined by the same module text.
 from __future__ import annotations
 
 import json
-import sys
 import textwrap
 from pathlib import Path
 
@@ -123,13 +122,11 @@ def test_namedtuple_methods_of_a_user_class_are_read_in_a_new_process(tmp_path):
     second = _run(code)
     # What only the second process analyses is stored by it, and read by the third.
     third = _run(code)
-    # Every report the first two processes stored is read, none walked again. On
-    # Python 3.12+ the trace reaches the three namedtuple methods and walks
-    # them; below 3.12 the walk reads the source only and stops at
-    # collections' code, so it stores the report of ``top`` alone.
+    # Every report the first two processes stored is read, none walked again. The
+    # trace reaches the three namedtuple methods and walks them.
     stored = first["stats"]["stored"] + second["stats"]["stored"]
     assert third["stats"]["loaded"] == stored, (first["stats"], second["stats"], third["stats"])
-    assert third["stats"]["loaded"] >= (3 if sys.version_info >= (3, 12) else 1), third["stats"]
+    assert third["stats"]["loaded"] >= 3, third["stats"]
     assert not third["stats"]["missed"], third["stats"]
     assert not second["stats"]["refused"] and not third["stats"]["refused"]
     assert (second["key"], second["value"]) == (third["key"], third["value"]) == (first["key"], first["value"])

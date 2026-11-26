@@ -10,14 +10,10 @@ cut short is not checked against (``trace_failed``).
 
 from __future__ import annotations
 
-import sys
-
 import pytest
 
 from cash import Cash
 from tests._modules import forget_module
-
-pytestmark = pytest.mark.skipif(sys.version_info < (3, 12), reason="traces are recorded on Python 3.12+")
 
 MODULE = """
 class Cls:

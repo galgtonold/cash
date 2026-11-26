@@ -25,12 +25,6 @@ import pytest
 
 pytestmark = pytest.mark.core
 
-needs_trace = pytest.mark.skipif(
-    sys.version_info < (3, 12),
-    reason="what a call ran is recorded with sys.monitoring, Python 3.12+; below it a call that changes its "
-    "argument in place runs every time, with a warning",
-)
-
 
 def _filler(cache):
     runs = []
@@ -81,7 +75,6 @@ def _run(tmp_path):
     return json.loads(p.stdout.strip().splitlines()[-1])
 
 
-@needs_trace
 def test_a_hit_in_another_process_fills_out_and_returns_it(tmp_path):
     first = _run(tmp_path)
     second = _run(tmp_path)
@@ -90,7 +83,6 @@ def test_a_hit_in_another_process_fills_out_and_returns_it(tmp_path):
     assert second == {"runs": 0, "same": True, "out": expected}, "the second process ran the call again"
 
 
-@needs_trace
 def test_a_hit_returns_the_out_handed_in(disk_cash):
     fill, runs = _filler(disk_cash)
     x = np.arange(6.0)
@@ -106,7 +98,6 @@ def test_a_hit_returns_the_out_handed_in(disk_cash):
     assert out[0] == 7.0
 
 
-@needs_trace
 def test_an_out_of_another_shape_or_dtype_misses(disk_cash):
     fill, runs = _filler(disk_cash)
     x = np.arange(6.0)
@@ -120,7 +111,6 @@ def test_an_out_of_another_shape_or_dtype_misses(disk_cash):
     assert len(runs) == 3
 
 
-@needs_trace
 def test_out_holding_other_values_before_the_call_misses(disk_cash):
     """The key holds what ``out`` held before the call, as for any argument."""
     fill, runs = _filler(disk_cash)
@@ -130,7 +120,6 @@ def test_out_holding_other_values_before_the_call_misses(disk_cash):
     assert len(runs) == 2
 
 
-@needs_trace
 def test_a_hit_into_a_view_writes_into_its_base(disk_cash):
     fill, runs = _filler(disk_cash)
     x = np.arange(6.0)
@@ -141,17 +130,6 @@ def test_a_hit_into_a_view_writes_into_its_base(disk_cash):
     assert len(runs) == 1
     assert result is view
     assert big.tolist() == [0.0, 0.0, 0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 0.0, 0.0]
-
-
-@pytest.mark.skipif(sys.version_info >= (3, 12), reason="the 3.12+ behaviour is tested above")
-def test_below_312_it_runs_every_time_and_returns_out(disk_cash):
-    fill, runs = _filler(disk_cash)
-    x = np.arange(6.0)
-    for _ in range(2):
-        out = np.zeros(6)
-        assert fill(x, out=out) is out
-        assert out.tolist() == (x * 2).tolist()
-    assert len(runs) == 2
 
 
 class Buffer:

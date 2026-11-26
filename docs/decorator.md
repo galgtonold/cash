@@ -387,8 +387,7 @@ changed. The second list is what cash does not see, and what to do about it.
       global naming a library class or a builtin (`DTYPE = np.float32`,
       `AGG = sum`) counts by what it names.
     - The **classes it uses**: their code, their class attributes, and the
-      module globals their methods read, inherited ones included. On Python
-      3.12 and newer, a class of yours reached through module data (an
+      module globals their methods read, inherited ones included. A class of yours reached through module data (an
       object in a module global, a table of classes) counts by its name, its
       bases, what it holds and its method names, plus the code of the
       methods a call runs: editing a method no call runs keeps the entries.
@@ -435,7 +434,7 @@ changed. The second list is what cash does not see, and what to do about it.
       argument comes from (a pandas frame, a fitted model), and of the
       packages that library requires: an upgrade recomputes
       ([Code in installed packages](decorator-limitations.md#code-in-installed-packages)).
-    - **Library settings** the code read, on Python 3.12 and newer:
+    - **Library settings** the code read:
       `sklearn.set_config(...)`, `pd.set_option(...)`, NumPy's error
       handling and print options, `decimal`'s context, a `ContextVar`, an
       attribute set on a library's class. An entry is served only while they
@@ -458,8 +457,7 @@ changed. The second list is what cash does not see, and what to do about it.
     - The **clock**, a random UUID, or the whole environment
       (`os.environ.copy()`): pass the value as an argument
       ([`KEY-AMBIENT-READ`](warnings.md#key-ambient-read)).
-    - **Code picked by a run-time name**: `eval` runs uncached, and so do
-      `getattr(mod, name)()` and `importlib.import_module` before Python 3.12
+    - **Code picked by a run-time name**: `eval` runs uncached
       ([`KEY-UNTRACKABLE-DEP`](warnings.md#key-untrackable-dep)).
     - A file read by a reader cash does not know: use `file_depends_on=`.
     - The decorator's own parameters (`ttl`, `cache_if`, `strict`, ...):
@@ -979,7 +977,7 @@ function, without hashing it where it can, from when it was returned:
 |---|---|
 | A numpy array (not of objects) | nothing to check: it is read-only, and keyed by its hash |
 | A pandas frame or series (copy-on-write pandas) | its blocks, index, columns and `attrs` being the same objects, as for [a hit](#frozen-and-large-arguments) handed back |
-| Dicts, lists, sets and instances of plain classes, of 64 KiB or more | the C extension's watchers (Python 3.12+); a list, tuple or set only while a notebook or script-level variable holds it, so from its first use on |
+| Dicts, lists, sets and instances of plain classes, of 64 KiB or more | the C extension's watchers; a list, tuple or set only while a notebook or script-level variable holds it, so from its first use on |
 | The same, under 64 KiB | its content, hashed at every use (a few microseconds to about 50) |
 | Anything else (no C extension, a value holding an array inside a dict, a class with its own pickled state, a pandas frame without copy-on-write) | its size (a frame's shape or dtypes, a list's or dict's length) at every use, its content at the 8th use and every 64th after that, and at every use under `CASH_DEBUG=1` |
 
@@ -1006,7 +1004,7 @@ object. Only while cash can prove it unchanged since:
 |---|---|
 | A numpy array (not of objects) | it is handed out read-only, over a read-only base, so `a.flags.writeable = True` raises; its shape, dtype and strides are checked |
 | A pandas frame or series (copy-on-write pandas) | cash keeps a reference to its blocks, so any write through pandas copies a block first; its blocks, index, columns, their names and `attrs` are checked to be the same objects. Object columns must hold only strings and numbers |
-| Dicts, lists, sets and instances of plain classes, of 64 KiB or more | the C extension's watchers (Python 3.12+), as for any [watched argument](how-it-works/cache-keys-and-lineage.md#hashing-values) |
+| Dicts, lists, sets and instances of plain classes, of 64 KiB or more | the C extension's watchers, as for any [watched argument](how-it-works/cache-keys-and-lineage.md#hashing-values) |
 | Anything else (a small value, a value holding an array inside a dict, a class with its own pickled state) | nothing: each hit gets a new copy, as without `frozen=` |
 
 If the object was changed after all, it is never handed out again:
@@ -1086,7 +1084,7 @@ would skip or get wrong:
 | Reads the clock, a random UUID, or an environment variable by computed name | Warns ([`KEY-AMBIENT-READ`](warnings.md#key-ambient-read)) and caches the first value |
 | Reads an environment variable by literal name, the working directory, or the command line (`sys.argv`, `parser.parse_args()`) | Puts the value in the key. No warning |
 | Changes a setting the process keeps outside any variable: `np.seterr`, a library logger's level or handler, `warnings.simplefilter`, `os.environ`, `os.chdir`, `sys.path`, `atexit.register` | Warns ([`IMPURE-OBSERVED-EFFECTS`](warnings.md#impure-observed-effects)) and runs uncached, every time: a hit, or a new process, would leave the setting unmade. A waiver where the change is made caches it, as for a file write: `# @cash:assume-safe` on its line or on the `def` line, or a `with cash.assume_safe():` block around it ([details](how-it-works/decorator-path.md#side-effects)) |
-| Uses `eval`/`exec`, `importlib`, or `getattr(obj, name)()` with a computed name, or calls a function `exec`/`eval` built from a string (rules or formulas loaded from a file) | Warns ([`KEY-UNTRACKABLE-DEP`](warnings.md#key-untrackable-dep)) and runs uncached, because edits to that code can't be tracked; on Python 3.12+ a `getattr` or `importlib` lookup is cached on a checked record of the code it ran instead. `strict=True` raises `CashImpureFunctionError` |
+| Uses `eval`/`exec`, `importlib`, or `getattr(obj, name)()` with a computed name, or calls a function `exec`/`eval` built from a string (rules or formulas loaded from a file) | Warns ([`KEY-UNTRACKABLE-DEP`](warnings.md#key-untrackable-dep)) and runs uncached, because edits to that code can't be tracked; a `getattr` or `importlib` lookup is cached on a checked record of the code it ran instead. `strict=True` raises `CashImpureFunctionError` |
 
 **When writing a file is part of the job** (a report, a thumbnail, a saved
 model), a hit skips the write. Split the function: cache the computation, and

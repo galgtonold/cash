@@ -239,8 +239,7 @@ _STATE_IS_DICT: TypeMemo[bool] = TypeMemo()
 _NO_CODE_LEAVES = frozenset(IMMUTABLE_LEAF_TYPES)
 
 
-# None before Python 3.11, where ``object`` has no ``__getstate__``.
-_OBJECT_GETSTATE = plain_getattr(object, "__getstate__", None)
+_OBJECT_GETSTATE = object.__getstate__
 
 
 def _state_is_its_dict(t: type) -> bool:

@@ -14,7 +14,6 @@ A module whose top level binds only constants still hits.
 
 from __future__ import annotations
 
-import sys
 import textwrap
 
 import pytest
@@ -23,7 +22,6 @@ from tests._scripts import run_python
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(600)]
 
-TRACED = sys.version_info >= (3, 12)
 
 HELPMOD = {
     "env": 'import os\n\nK = int(os.environ.get("LZ_K", "1"))\n',
@@ -110,7 +108,7 @@ def test_a_value_bound_from_outside_the_source_recomputes(tmp_path, path, source
         want = str(3 * K_OF[source](setting))
         out, err = _run(tmp_path, path, setting, trace)
         assert out == [want, want], f"setting {setting}: served a value bound before the change:\n{err}"
-        if setting == last and (path == "body" or (trace == "1" and TRACED)):
+        if setting == last and (path == "body" or trace == "1"):
             # Unchanged, it is served: on the trace, or once the body's
             # import has loaded the module.
             assert err.count("[RUN]") <= (1 if path == "body" else 0), err

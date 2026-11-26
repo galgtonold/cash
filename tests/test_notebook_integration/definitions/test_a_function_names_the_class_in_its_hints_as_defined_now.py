@@ -10,8 +10,6 @@ the class; that holds for hints Python evaluates when the ``def`` runs, for
 quoted ones, and for the ones Python 3.14 evaluates on first use.
 """
 
-import sys
-
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
@@ -46,13 +44,12 @@ CASES = {
         "R 2",
     ),
 }
-if sys.version_info >= (3, 12):
-    CASES["the_bound_of_a_type_parameter"] = (
-        "def ident[T: Kind](x: T) -> T:\n    return x",
-        "print('R', ident.__type_params__[0].__bound__ is Kind)",
-        "R True",
-        "R True",
-    )
+CASES["the_bound_of_a_type_parameter"] = (
+    "def ident[T: Kind](x: T) -> T:\n    return x",
+    "print('R', ident.__type_params__[0].__bound__ is Kind)",
+    "R True",
+    "R True",
+)
 
 
 @pytest.mark.parametrize("case", sorted(CASES))

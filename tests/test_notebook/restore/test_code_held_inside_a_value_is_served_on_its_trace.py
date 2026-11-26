@@ -21,7 +21,7 @@ from tests.test_notebook.restore.test_code_that_ran_unseen_and_changes_state_is_
     main_namespace,  # noqa: F401 - a fixture
 )
 
-pytestmark = pytest.mark.skipif(not code_trace.on(), reason="reads the trace of the run (3.12+)")
+pytestmark = pytest.mark.skipif(not code_trace.on(), reason="reads the trace of the run")
 
 SLEEP = f"(time.sleep({F}), 0)[1]"
 

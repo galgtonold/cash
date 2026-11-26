@@ -5,7 +5,7 @@ user's (``model.SVC["m"].fit(x)``, a library installed as an editable
 checkout). Its key held each such class by all its code and all the code
 that code names (``Model`` -> ``Minimizer`` and every method of each), so
 editing ``Minimizer.shgo`` recomputed a fit that never calls it. While the
-call's body is recorded (Python 3.12+, ``CASH_TRACE`` on) the key holds the
+call's body is recorded (``CASH_TRACE`` on) the key holds the
 class by its surface -- its name, its bases, what it holds, its methods by
 name -- and the trace checks the code of each method that ran, and what
 that code read. With the trace off, or when it could not be recorded, the
@@ -17,15 +17,12 @@ compared with the same program run without cash.
 
 from __future__ import annotations
 
-import sys
-
 import pytest
 
 from tests.test_core.code_identity._edited_project import edited_runs
 
 pytestmark = pytest.mark.core
 
-TRACED = sys.version_info >= (3, 12)
 
 MINIMIZER = """
 SCALE = 3
@@ -211,7 +208,6 @@ def _value_and_hits(out: str) -> tuple[str, int]:
     return value, int(hits)
 
 
-@pytest.mark.skipif(not TRACED, reason="the code trace needs sys.monitoring (Python 3.12+)")
 @pytest.mark.parametrize("reach", list(REACH))
 @pytest.mark.parametrize("edit", list(UNRUN))
 def test_an_edit_to_code_no_call_runs_is_served(tmp_path, reach, edit):
@@ -257,7 +253,6 @@ def test_unchanged_code_is_served_with_the_trace_on_or_off(tmp_path, reach):
         assert _value_and_hits(plain)[0] == EXPECTED
 
 
-@pytest.mark.skipif(not TRACED, reason="the code trace needs sys.monitoring (Python 3.12+)")
 @pytest.mark.parametrize("untraced", list(UNTRACED))
 @pytest.mark.parametrize("edit", ["unchanged", "uncalled method", "called directly"])
 def test_a_call_whose_trace_cannot_be_built_is_checked_on_all_the_code(tmp_path, edit, untraced):

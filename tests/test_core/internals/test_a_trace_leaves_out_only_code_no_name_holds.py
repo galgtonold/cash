@@ -26,7 +26,6 @@ from cash.decorator import code_trace
 
 pytestmark = [
     pytest.mark.core,
-    pytest.mark.skipif(not code_trace.TRACEABLE, reason="the trace recorder needs sys.monitoring (Python 3.12+)"),
 ]
 
 MODULE = textwrap.dedent("""

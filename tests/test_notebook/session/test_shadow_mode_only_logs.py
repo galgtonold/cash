@@ -7,15 +7,12 @@ key's, and checks misses against earlier traces.
 from __future__ import annotations
 
 import json
-import sys
 
 import pytest
 
 from cash.analysis.annotations import CacheAnnotation
 from cash.notebook import shadow
 from cash.notebook.cache_status import CacheStatus
-
-pytestmark = pytest.mark.skipif(sys.version_info < (3, 12), reason="sys.monitoring")
 
 _PERSIST = CacheAnnotation(persist=True)
 

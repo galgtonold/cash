@@ -23,7 +23,7 @@ from ..analysis.purity_report import UNREAD_MODULE, PurityReport, describe_untra
 from ..code_digest import callable_identity, compiled_identity, extension_file_digest
 from ..data_source import DataSource, state_token_of
 from ..diagnostics import warn_diagnostic
-from ..exceptions import CashCacheIneffectiveWarning, CashImpurityWarning
+from ..exceptions import CashCacheIneffectiveWarning
 from ..graph import DependencyGraph
 from ..source_norm import bytecode_identity
 from . import code_trace, hit_memo, state_memo
@@ -230,15 +230,13 @@ class FunctionRegistry:
         #: one registered under that name.
         self.cached_callees: dict[str, dict[str, Any]] = {}
         #: func_name -> the calls it makes through a property or
-        #: ``__getattr__`` to code the key cannot name (`populate`): on 3.12+
-        #: served on a trace of what they reached, before that uncached.
+        #: ``__getattr__`` to code the key cannot name (`populate`): served
+        #: on a trace of what they reached.
         self.unresolved_calls: dict[str, list[str]] = {}
         #: func_name -> the modules not loaded yet its tree imports, whose
         #: top level cash cannot read before they are (UNREAD_MODULE), as
         #: its last `refresh_helper_bindings` found them.
         self.unread_imports: dict[str, frozenset[str]] = {}
-        #: Functions already warned KEY-UNRESOLVED-CALL about (`populate`).
-        self._unresolved_warned: set[str] = set()
 
     def report_for(self, func: Callable[..., Any], func_name: str) -> PurityReport | None:
         """*func*'s own purity report: a closure's, else the one under *func_name*."""
@@ -586,7 +584,7 @@ class FunctionRegistry:
                         # KEY-UNTRACKABLE-DEP: code picked by a run-time name
                         # (`getattr(mod, name)()`, `import_module`, `eval`) is
                         # not in the key. assume_safe=True caches anyway; a
-                        # lookup by name is cached on a trace on 3.12+.
+                        # lookup by name is cached on a trace.
                         if code_trace.covers(report.untrackable):
                             lookups.extend(report.untrackable)
                             unread.update(filter(None, map(unread_module, report.untrackable)))
@@ -607,13 +605,7 @@ class FunctionRegistry:
                             )
                 gaps = self.unresolved_gaps(name)
                 if gaps and reason is None:
-                    if code_trace.TRACEABLE:
-                        unresolved.extend(gaps)
-                    else:
-                        reason = MissReason(
-                            MissKind.UNTRACKABLE,
-                            f"{name} calls {gaps[0]}(...) through a property or __getattr__, so the call ran uncached",
-                        )
+                    unresolved.extend(gaps)
                 for dep in self.graph.get_dependencies(name):
                     dep_func = self.functions.get(dep)
                     if dep_func is not None:
@@ -672,20 +664,8 @@ class FunctionRegistry:
                 if called != func_name:
                     self.graph.add_dependency(func_name, called)
             self.unresolved_calls[func_name] = list(gaps)
-            gaps = self.unresolved_gaps(func_name)
-            if gaps and not code_trace.TRACEABLE and func_name not in self._unresolved_warned:
-                # On 3.12+ the call is served on a trace of what it reached
-                # (`refresh_helper_bindings`): nothing to warn about.
-                self._unresolved_warned.add(func_name)
-                warn_diagnostic(
-                    CashImpurityWarning,
-                    "KEY-UNRESOLVED-CALL",
-                    f"{func_name} calls {gaps[0]}(...) through a property or __getattr__, which cash does "
-                    "not run to find what it returns, so the function that call reaches is not in the key: "
-                    f"calls of {func_name} run uncached.",
-                    f"call the function by its own name (module.function), or name it with depends_on=[...] "
-                    f"on {func_name}'s decorator.",
-                )
+            # Its calls through a property or ``__getattr__`` are served on
+            # a trace of what they reached (`refresh_helper_bindings`).
             with reach_pass():
                 report = get_analyzer().analyze(func)
         except Exception as e:

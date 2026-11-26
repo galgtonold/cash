@@ -17,12 +17,10 @@ code a trace sees: it is told from the call to its callback.
 
 from __future__ import annotations
 
-import sys
 import warnings
 
 import pytest
 
-from cash.tracking import lookups_seen
 from tests._cell_driver import run_cash_cell
 
 NODE = "class Node:\n    def __init__(self):\n        self.me = self\n"
@@ -73,18 +71,10 @@ def _status_of(cash_magics, statement):
     return [str(s["status"]) for s in cash_magics._last_cell_metrics["statements"] if s.get("code") == statement]
 
 
-#: Below Python 3.12 nothing records the code a statement runs, so a
-#: finalizer its text does not name is not seen, and the statement is served.
-needs_trace = pytest.mark.skipif(
-    sys.version_info < (3, 12),
-    reason="sys.monitoring needs Python 3.12: below it cash does not see the finalizer a statement runs",
-)
-
-
 @pytest.mark.usefixtures("store_everything")
 @pytest.mark.parametrize(
     "setup",
-    [pytest.param(case, marks=() if case in SEEN_BY_ITS_TEXT else needs_trace) for case in CASES.values()],
+    list(CASES.values()),
     ids=list(CASES),
 )
 def test_the_finalizer_runs_on_every_run(cash_magics, mock_shell, setup):
@@ -108,28 +98,3 @@ def test_the_finalizer_runs_on_every_run(cash_magics, mock_shell, setup):
     assert [w for w in caught if getattr(w.message, "code", None) == "NOTEBOOK-UNSEEN-WRITES"], (
         "the statement ran every time without saying why"
     )
-
-
-@pytest.mark.skipif(sys.version_info >= (3, 12), reason="from Python 3.12 the finalizer is seen (above)")
-@pytest.mark.usefixtures("store_everything")
-@pytest.mark.parametrize(
-    "setup",
-    [case for case in CASES.values() if case not in SEEN_BY_ITS_TEXT],
-    ids=[k for k, v in CASES.items() if v not in SEEN_BY_ITS_TEXT],
-)
-def test_below_python_3_12_a_warning_names_the_finalizer_unseen(cash_magics, monkeypatch, setup):
-    """Below Python 3.12 the finalizer is not seen, and the statement may be
-    served without its change: NOTEBOOK-LOOKUPS-UNSEEN says so, naming
-    finalizers and the Python that sees them."""
-    monkeypatch.setattr(lookups_seen, "_warned_unseen", False)
-    statement = "y = churn(3)"
-    cells = [setup, statement]
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        run_cash_cell(cash_magics, setup, cells=cells)
-        for _ in range(2):
-            run_cash_cell(cash_magics, statement, cells=cells)
-    said = [str(w.message) for w in caught if getattr(w.message, "code", None) == "NOTEBOOK-LOOKUPS-UNSEEN"]
-    assert len(said) == 1, "the unseen finalizer was not said"
-    assert "finalizer" in said[0]
-    assert "Python 3.12" in said[0]

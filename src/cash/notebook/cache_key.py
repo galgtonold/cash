@@ -538,8 +538,7 @@ def called_function_dependencies(
             # it imports is known only when it runs (``KEY-UNTRACKABLE-DEP``).
             if by_string is not None:
                 by_string.add(name)
-        # The function's nested code too: a comprehension (its own code
-        # object before Python 3.12), a generator expression, a lambda or an
+        # The function's nested code too: a generator expression, a lambda or an
         # inner function reads its globals at call time as the body does.
         for code_obj in _nested_codes_of(codes_of(name)):
             if body_imports is not None:
@@ -622,7 +621,7 @@ def _looks_up_by_string(
 
 def lookups_followed(code: str, by_string: set[str], traced: set[str], user_ns: Mapping[str, Any]) -> bool:
     """Does the trace of the statement *code* follow every lookup by a string
-    in *by_string* (`string_lookups`): Python 3.12+ with traces on, and each
+    in *by_string* (`string_lookups`): traces on, and each
     lookup's value called at once? Its run is then keyed as any other, and
     served only when the trace is checked."""
     from ..decorator import code_trace

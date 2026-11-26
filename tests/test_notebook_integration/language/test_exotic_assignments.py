@@ -36,8 +36,6 @@ walrus-as-receiver / attribute / container-element / ternary alias,
 exhausted generators.
 """
 
-import sys
-
 import pytest
 
 pytestmark = [pytest.mark.timeout(90)]
@@ -197,12 +195,7 @@ def test_match_capture_bindings_edit_invalidation(nb_runner):
     "prefix",
     [
         pytest.param("", id="annassign"),
-        # The kernel runs this interpreter, and `type` statements parse from 3.12.
-        pytest.param(
-            "type Vec = list[int]\n",
-            id="with_type_alias",
-            marks=pytest.mark.skipif(sys.version_info < (3, 12), reason="PEP 695 `type` needs Python 3.12"),
-        ),
+        pytest.param("type Vec = list[int]\n", id="with_type_alias"),
     ],
 )
 def test_annassign_and_type_alias_edit_invalidation(nb_runner, prefix):

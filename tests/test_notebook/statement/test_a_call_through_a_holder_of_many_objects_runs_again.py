@@ -46,7 +46,7 @@ def test_a_holder_past_the_limit_refuses_the_statement(cash_magics, monkeypatch)
 
 def test_a_reader_below_code_swapped_in_place_gets_the_new_value(cash_magics, monkeypatch):
     if shadow.SHADOW is None:
-        pytest.skip("traces are recorded on Python 3.12+ only")
+        pytest.skip("no trace with CASH_TRACE=0")
     monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
     cells = ["def inner(x):\n    return x * 2", "v = inner(3)", "w = [v, 'read']"]
     ns = cash_magics.shell.user_ns

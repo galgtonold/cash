@@ -1,8 +1,7 @@
 """Traces: record which code a unit ran, and verify that trace before the
 unit's entry is served again.
 
-On by default on Python 3.12 or newer (``sys.monitoring``); ``CASH_TRACE=0``
-turns it off. Off, nothing here is loaded beyond this module, and the hooks
+On by default (``sys.monitoring``); ``CASH_TRACE=0`` turns it off. Off, nothing here is loaded beyond this module, and the hooks
 in the statement processor and the call unit cost one attribute read each.
 
 No key changes, and an entry whose trace says something it ran changed is
@@ -1294,9 +1293,6 @@ def enable() -> Shadow | None:
     global SHADOW, _REASON
     if SHADOW is not None:
         return SHADOW
-    if sys.version_info < (3, 12):
-        _REASON = "shadow mode needs Python 3.12 or newer (sys.monitoring)"
-        return None
     shadow = Shadow()
     if not shadow.ok:
         _REASON = shadow.reason

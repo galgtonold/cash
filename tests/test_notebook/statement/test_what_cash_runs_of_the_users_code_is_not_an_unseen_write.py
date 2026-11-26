@@ -14,16 +14,12 @@ cannot tell about is still refused.
 
 from __future__ import annotations
 
-import sys
-
 import pytest
 
 from cash.backends.persistence_policy import PersistencePolicy
 from cash.notebook import shadow
 from cash.notebook.cache_status import CacheStatus
 from tests._cell_driver import run_cash_cell
-
-pytestmark = pytest.mark.skipif(sys.version_info < (3, 12), reason="what runs is recorded on 3.12+")
 
 PICKLED: list[int] = []
 

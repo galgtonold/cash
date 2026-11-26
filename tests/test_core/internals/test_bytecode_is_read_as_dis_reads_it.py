@@ -115,10 +115,7 @@ def _all_codes() -> list[types.CodeType]:
         except (OSError, TypeError):
             continue
         codes.extend(_codes(compile(source, module.__file__ or name, "exec")))
-    try:
-        codes.extend(_codes(compile(_SYNTHETIC, "<synthetic>", "exec")))
-    except SyntaxError:  # 3.10: no except*
-        codes.extend(_codes(compile(_SYNTHETIC.replace("except*", "except"), "<synthetic>", "exec")))
+    codes.extend(_codes(compile(_SYNTHETIC, "<synthetic>", "exec")))
     return codes
 
 

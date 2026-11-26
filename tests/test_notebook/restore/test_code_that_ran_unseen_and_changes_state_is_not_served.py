@@ -1,6 +1,6 @@
 """A function of the user's that ran in a statement on a path cash does not
 read from its text, and changes something the statement does not name, keeps
-the statement from being stored (on Python 3.12+ from the trace of the run;
+the statement from being stored (from the trace of the run;
 without one, from what its objects could run).
 
 ``Vec.__add__`` appends to ``calls``. Run by ``s + 1`` on an object-dtype
@@ -23,9 +23,9 @@ from cash.notebook.statement import processor
 from tests._cell_driver import run_cash_cell
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S as F
 
-#: Without a trace (Python 3.10 and 3.11, ``CASH_TRACE=0``) the objects are
+#: Without a trace (``CASH_TRACE=0``) the objects are
 #: read instead (`writers_without_a_trace`): the same tests hold.
-NEEDS_THE_TRACE = pytest.mark.skipif(not code_trace.on(), reason="reads the trace of the run (3.12+)")
+NEEDS_THE_TRACE = pytest.mark.skipif(not code_trace.on(), reason="reads the trace of the run")
 
 SLEEP = f"(time.sleep({F}), 0)[1]"
 
@@ -426,7 +426,7 @@ def test_a_function_given_code_whose_text_cannot_be_read_runs_each_time(cash_mag
         monkeypatch.setenv("CASH_TRACE", "0")
         monkeypatch.setattr(shadow, "SHADOW", None)
     elif not code_trace.on():
-        pytest.skip("reads the trace of the run (3.12+)")
+        pytest.skip("reads the trace of the run")
     setup, body, name = SWAPPED[case]
     definition, target, params, call = REACHED[reached]
     swap = f"{target}.__code__ = eval(compile({(f'lambda {params}: ' + body)!r}, '<variant>', 'eval')).__code__"

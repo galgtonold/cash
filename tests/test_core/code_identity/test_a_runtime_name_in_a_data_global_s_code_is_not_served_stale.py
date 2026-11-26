@@ -4,11 +4,11 @@ served stale.
 A cached function reads ``HANDLERS["a"].run(y)``, and ``run`` -- a method of
 an object or class a module global holds -- calls ``getattr(MOD, name)()``.
 The key cannot name the function the name picks (KEY-DYNAMIC-DEPENDENCY), so
-the call is served only on a trace of what it ran (Python 3.12+, where a
+the call is served only on a trace of what it ran (where a
 lookup by name is recorded even with ``CASH_TRACE=0``) or runs uncached.
 
-The lookup was noted while the global's code was folded into the key. On
-3.12+ a fold of the same helper is remembered and replayed on the next call
+The lookup was noted while the global's code was folded into the key. A
+fold of the same helper is remembered and replayed on the next call
 (`helper_fold_memo`), and the replay left the lookup out: a later call
 was stored with no trace, and served after an edit to the function picked.
 

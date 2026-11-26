@@ -8,17 +8,9 @@ the reader was served 10.0 where plain Python gives 7.
 
 from __future__ import annotations
 
-import sys
-
 import pytest
 
 from tests._cell_driver import run_cash_cell
-
-pytestmark = pytest.mark.skipif(
-    sys.version_info < (3, 12),
-    reason="sys.monitoring needs Python 3.12: below it what a statement finds by a lookup is not watched "
-    "(NOTEBOOK-LOOKUPS-UNSEEN)",
-)
 
 SETUP = "import matplotlib\nimport matplotlib.pyplot as plt\ndef size_now():\n    return plt.rcParams['font.size']"
 

@@ -12,7 +12,6 @@ loads from the module's namespace; over the corpus of `tests/_scope_oracle.py`
 from __future__ import annotations
 
 import ast
-import sys
 
 import pytest
 
@@ -198,7 +197,6 @@ def test_hints_are_inputs_under_the_future_import_too():
     assert "Kind" in inputs
 
 
-@pytest.mark.skipif(sys.version_info < (3, 12), reason="type parameters are Python 3.12 syntax")
 def test_the_bound_of_a_type_parameter_is_an_input_and_the_parameter_is_not():
     inputs, outputs = CodeAnalyzer.analyze_code_block("def ident[T: Kind](x: T) -> T:\n    return x")
     assert inputs == {"Kind"}

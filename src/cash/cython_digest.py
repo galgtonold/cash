@@ -296,10 +296,7 @@ def canonical_build_config(path: str, data: bytes) -> bytes:
 
 
 def _canonical_pyproject(data: bytes) -> bytes:
-    if sys.version_info >= (3, 11):
-        import tomllib
-    else:  # cash depends on tomli there
-        import tomli as tomllib
+    import tomllib
 
     doc = tomllib.loads(data.decode("utf-8"))
     project = doc.get("project")

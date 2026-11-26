@@ -13,7 +13,6 @@ reads like one but reaches something other than a logger is still checked.
 
 from __future__ import annotations
 
-import sys
 import textwrap
 
 import pytest
@@ -23,7 +22,6 @@ from tests._scripts import run_python
 pytestmark = [
     pytest.mark.core,
     pytest.mark.timeout(300),
-    pytest.mark.skipif(sys.version_info < (3, 12), reason="a trace of what a call ran needs sys.monitoring"),
 ]
 
 CONF = textwrap.dedent("""

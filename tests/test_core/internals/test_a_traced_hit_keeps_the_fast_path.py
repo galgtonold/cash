@@ -1,7 +1,7 @@
 """A hit whose entry carries a trace is still served from the fast path,
 and only while what the trace names is unchanged.
 
-On 3.12+ every stored entry carries a trace of the user code its call ran
+Every stored entry carries a trace of the user code its call ran
 (`cash.decorator.code_trace`), checked on each ordinary hit. The fast path
 (`cash.decorator.hit_memo`) skips that check, so it watches what the trace
 names instead (`hit_memo.scan_trace`): a function held in a table, run by the
@@ -11,7 +11,6 @@ that function is a miss.
 
 from __future__ import annotations
 
-import sys
 import time
 
 import pytest
@@ -21,7 +20,6 @@ from cash.decorator import hit_memo
 
 pytestmark = [
     pytest.mark.skipif(not hit_memo.ENABLED, reason="the fast hit path needs the C extension"),
-    pytest.mark.skipif(sys.version_info < (3, 12), reason="traces are recorded on Python 3.12+"),
     pytest.mark.filterwarnings("ignore::cash.exceptions.CashImpurityWarning"),
 ]
 

@@ -2,14 +2,11 @@
 
 E16's ``benchmarks(...)`` calls ``run(tsp, cities, plot=False)``, whose
 ``plot_tour`` is behind ``if plot:``. Its code can reach pyplot, so it ran
-every time: ~200 s on each restart. Where what runs is recorded (Python
-3.12+), whether pyplot's code ran decides; a run that draws still runs
+every time: ~200 s on each restart. Where what runs is recorded, whether pyplot's code ran decides; a run that draws still runs
 every time.
 """
 
 from __future__ import annotations
-
-import sys
 
 import pytest
 
@@ -20,8 +17,6 @@ from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 matplotlib = pytest.importorskip("matplotlib")
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-
-pytestmark = pytest.mark.skipif(sys.version_info < (3, 12), reason="what runs is recorded on Python 3.12+")
 
 HELPERS = (
     "import time\nimport matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\n"

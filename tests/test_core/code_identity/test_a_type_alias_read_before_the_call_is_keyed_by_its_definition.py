@@ -10,7 +10,6 @@ compares what it prints with the same script run uncached (plain Python).
 
 from __future__ import annotations
 
-import sys
 import textwrap
 
 import pytest
@@ -20,7 +19,6 @@ from tests._scripts import run_python
 pytestmark = [
     pytest.mark.core,
     pytest.mark.timeout(300),
-    pytest.mark.skipif(sys.version_info < (3, 12), reason="a `type` statement needs 3.12"),
 ]
 
 #: Module source per case, before and after the edit.

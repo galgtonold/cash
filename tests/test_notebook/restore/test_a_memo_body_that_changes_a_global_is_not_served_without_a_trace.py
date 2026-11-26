@@ -4,7 +4,7 @@ helper's body. A body that also changes something the statement's outputs
 leave out (``next(_ctr)`` advancing a module-level counter) would leave that
 change undone on a hit, so the statement is not stored.
 
-With a trace (Python 3.12+) the body is seen running. Without one (Python
+With a trace the body is seen running. Without one (Python
 3.10 and 3.11, ``CASH_TRACE=0``) the memo's miss count says the body ran, and
 its text is read the same way: after a restart and Run All, the counter below
 it reads what plain Python gives.

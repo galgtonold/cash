@@ -9,7 +9,7 @@ imbalanced-learn checked out as the user's code: ``ret[col] = ...`` in
 ``transform``, on branches a NumPy input never takes, refused every cached
 ``resample(sampler, X, y)``.
 
-On Python 3.12+ the lines of code holding such a finding are watched on a
+The lines of code holding such a finding are watched on a
 miss (``sys.monitoring`` LINE events, each line disabled after its first
 callback), and a finding counts only when its line ran. Arguments, or a
 global the trace checks, that take the branch run it and are refused. Below
@@ -24,9 +24,6 @@ import textwrap
 import time
 
 import pytest
-
-TRACED = sys.version_info >= (3, 12)
-needs_monitoring = pytest.mark.skipif(not TRACED, reason="sys.monitoring is Python 3.12+")
 
 _PLUGINS = """
 LOG = []
@@ -120,7 +117,6 @@ def load(tmp_path, request):
         sys.modules.pop(name, None)
 
 
-@needs_monitoring
 def test_a_side_effect_in_a_branch_the_call_did_not_take_is_stored_and_hits(load):
     m = load()
     assert m.pick("maybe_log", 5, False) == 10
@@ -129,7 +125,6 @@ def test_a_side_effect_in_a_branch_the_call_did_not_take_is_stored_and_hits(load
     assert m.plugins.LOG == []
 
 
-@needs_monitoring
 def test_arguments_that_take_the_branch_run_it_every_time(load):
     m = load()
     assert m.pick("maybe_log", 5, False) == 10
@@ -142,7 +137,6 @@ def test_arguments_that_take_the_branch_run_it_every_time(load):
     assert m.RUNS == ["maybe_log"] * 4
 
 
-@needs_monitoring
 def test_the_lines_are_watched_again_on_the_next_miss_of_the_same_function(load):
     """Each line's event is disabled after its first callback: a later miss
     arms them again, so a branch taken only then is seen."""
@@ -155,7 +149,6 @@ def test_the_lines_are_watched_again_on_the_next_miss_of_the_same_function(load)
     assert m.RUNS == ["maybe_log"] * 4
 
 
-@needs_monitoring
 def test_a_global_the_trace_checks_that_takes_the_branch_runs_it_and_is_refused(load):
     """Same arguments, same key: the trace's item for ``FLAG`` moves, the
     call runs, takes the branch and is not stored, so it does not serve the
@@ -174,7 +167,6 @@ def test_a_global_the_trace_checks_that_takes_the_branch_runs_it_and_is_refused(
     assert m.RUNS == ["by_global"] * 4
 
 
-@needs_monitoring
 def test_a_statement_over_several_lines_is_judged_by_the_line_of_its_effect(load):
     m = load()
     assert m.pick("spanning", 2, False) == 6
@@ -185,7 +177,6 @@ def test_a_statement_over_several_lines_is_judged_by_the_line_of_its_effect(load
     assert m.plugins.LOG == [2, 2]
 
 
-@needs_monitoring
 def test_a_nested_function_that_never_ran_does_not_refuse(load):
     m = load()
     assert m.pick("nested_unused", 1) == 5
@@ -199,7 +190,6 @@ def _miss_seconds(m, name: str, n: int) -> float:
     return time.perf_counter() - t0
 
 
-@needs_monitoring
 def test_a_million_passes_over_a_branchy_function_cost_one_callback_per_line(load):
     """Watching lines costs a callback per line once per miss, not per pass:
     counted, which CI noise cannot move, with a loose bound on time beside
@@ -219,12 +209,3 @@ def test_a_million_passes_over_a_branchy_function_cost_one_callback_per_line(loa
     unwatched = min(_miss_seconds(m, "plain", n + k) for k in range(2))
     assert m.RUNS.count("branchy") == 3
     assert watched < unwatched * 1.5 + 0.25, f"watched {watched:.3f}s, unwatched {unwatched:.3f}s"
-
-
-@pytest.mark.skipif(TRACED, reason="the fallback below Python 3.12, where sys.monitoring is missing")
-def test_below_python_3_12_such_a_call_runs_every_time(load):
-    m = load()
-    with pytest.warns(Warning):
-        assert m.pick("maybe_log", 5, False) == 10
-    assert m.pick("maybe_log", 5, False) == 10
-    assert m.RUNS == ["maybe_log", "maybe_log"]

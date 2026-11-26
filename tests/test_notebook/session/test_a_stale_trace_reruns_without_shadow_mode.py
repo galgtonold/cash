@@ -1,12 +1,11 @@
-"""With the trace on by default (3.12+, ``CASH_SHADOW`` unset), a stored
+"""With the trace on by default (``CASH_SHADOW`` unset), a stored
 statement or cached call whose trace says code it ran changed runs again,
 even when its key did not move.
 
 The edit here is one the key cannot see: a function gets new code outside
 any statement (as a callback, a thread or a debugger could do it), so no
 statement rebinds it and its lineage stays. The trace recorded that the
-function ran, and its code now differs. Before 3.12 nothing is recorded, and
-the key decides alone, as before.
+function ran, and its code now differs.
 """
 
 from __future__ import annotations
@@ -19,8 +18,6 @@ import pytest
 from cash.analysis.annotations import CacheAnnotation
 from cash.notebook import shadow
 from cash.notebook.cache_status import CacheStatus
-
-TRACED = sys.version_info >= (3, 12)
 
 _PERSIST = CacheAnnotation(persist=True)
 
@@ -69,22 +66,17 @@ def _run(processor, code):
 
 def test_a_statement_reruns_when_a_function_it_ran_is_edited(trace_default, statement_processor, mock_shell):
     on, _ = trace_default
-    assert (on is not None) == TRACED
-    if on is not None:
-        assert not on.diagnose
+    assert on is not None
+    assert not on.diagnose
     _run(statement_processor, "def inner(x):\n    return x * 2")
     assert _run(statement_processor, "t = inner(3)")["status"] == CacheStatus.COMPUTED
     assert _run(statement_processor, "t = inner(3)")["status"] == CacheStatus.RESTORED
     mock_shell.user_ns["inner"].__code__ = (lambda x: x * 10).__code__
 
     again = _run(statement_processor, "t = inner(3)")
-    if TRACED:
-        assert again["status"] == CacheStatus.COMPUTED
-        assert mock_shell.user_ns["t"] == 30
-        assert on.counts["stmt:miss:rerun"] == 1, dict(on.counts)
-    else:
-        # The key alone, as before 3.12.
-        assert again["status"] == CacheStatus.RESTORED
+    assert again["status"] == CacheStatus.COMPUTED
+    assert mock_shell.user_ns["t"] == 30
+    assert on.counts["stmt:miss:rerun"] == 1, dict(on.counts)
 
 
 def test_a_cached_call_reruns_when_a_function_it_ran_is_edited(trace_default, statement_processor, mock_shell):
@@ -93,14 +85,9 @@ def test_a_cached_call_reruns_when_a_function_it_ran_is_edited(trace_default, st
     for _ in range(2):
         statement_processor.process_statement("x = slow_inner(2) + 0")
     assert mock_shell.user_ns["x"] == 4
-    if TRACED:
-        assert on.counts["call:traces"] >= 1
+    assert on.counts["call:traces"] >= 1
     _rebind(mod)
 
     statement_processor.process_statement("x = slow_inner(2) + 1")
-    if TRACED:
-        assert mock_shell.user_ns["x"] == 21
-        assert on.counts["call:miss:rerun"] >= 1, (mock_shell.user_ns["x"], dict(on.counts))
-    else:
-        # The key alone, as before 3.12: the call is served.
-        assert mock_shell.user_ns["x"] == 5
+    assert mock_shell.user_ns["x"] == 21
+    assert on.counts["call:miss:rerun"] >= 1, (mock_shell.user_ns["x"], dict(on.counts))

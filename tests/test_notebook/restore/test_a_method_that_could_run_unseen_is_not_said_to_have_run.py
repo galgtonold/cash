@@ -1,6 +1,6 @@
 """Without a record of what ran, the reason names a method that could run.
 
-With no trace (Python 3.10 and 3.11, ``CASH_TRACE=0``, a debugger holding
+With no trace (``CASH_TRACE=0``, a debugger holding
 ``sys.monitoring``) the objects a statement reads are looked through for a
 special method that writes outside them, and a value too big to look
 through counts every class alive with one. The reason said such a method
@@ -139,7 +139,7 @@ def test_a_method_set_on_a_class_later_is_named_by_it(cash_magics, statement_pro
     from cash.decorator import code_trace
 
     if not code_trace.on():
-        pytest.skip("reads the trace of the run (3.12+)")
+        pytest.skip("reads the trace of the run")
     run_cash_cell(
         cash_magics,
         "import time\ncalls = []\ndef _add(self, o):\n    calls.append(1)\n    return 1\n"

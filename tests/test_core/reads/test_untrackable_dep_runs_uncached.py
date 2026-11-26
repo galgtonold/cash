@@ -8,7 +8,7 @@ function runs uncached and KEY-UNTRACKABLE-DEP says why; ``strict=True``
 raises, ``assume_safe=True`` (or ``# @cash:assume-safe`` on the line) caches
 anyway.
 
-On Python 3.12+ a lookup by name (``getattr``, ``import_module``) is cached on
+A lookup by name (``getattr``, ``import_module``) is cached on
 a trace of what the call ran instead
 (``test_a_lookup_by_name_is_cached_on_a_trace.py``); ``eval`` still runs
 uncached.
@@ -28,7 +28,6 @@ from cash import Cash, CashCacheIneffectiveWarning, CashImpureFunctionError
 from cash.backends import InMemoryBackend
 
 #: A lookup by name is cached on a trace of what it ran (`cash.decorator.code_trace`).
-TRACED = sys.version_info >= (3, 12)
 
 
 def _runs(tmp_path) -> int:
@@ -99,7 +98,7 @@ def test_untrackable_pattern_runs_uncached_with_a_warning(tmp_path, name, line):
         assert f(10) == 11
     texts = [str(w.message) for w in caught if issubclass(w.category, CashCacheIneffectiveWarning)]
     untrackable = [t for t in texts if "KEY-UNTRACKABLE-DEP" in t]
-    if TRACED and name != "by_eval":
+    if name != "by_eval":
         assert _runs(tmp_path) == 1  # the second call was served, its trace unchanged
         assert not untrackable, texts
         return
@@ -138,7 +137,7 @@ def test_a_waived_line_caches(tmp_path):
 
 def test_a_cached_caller_of_an_untrackable_function_runs_uncached_too(tmp_path):
     """The caller's result contains what the lookup returned, so caching it
-    would serve the stale answer the callee itself does not. On 3.12+ both
+    would serve the stale answer the callee itself does not. Both
     are cached on the trace of what they ran."""
     mod = _load(
         tmp_path,
@@ -151,7 +150,7 @@ def test_a_cached_caller_of_an_untrackable_function_runs_uncached_too(tmp_path):
         warnings.simplefilter("ignore")
         assert mod.outer(10) == 22
         assert mod.outer(10) == 22
-    assert _runs(tmp_path) == (1 if TRACED else 2)
+    assert _runs(tmp_path) == 1
 
 
 def test_assume_safe_opts_in(tmp_path):

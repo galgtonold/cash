@@ -14,13 +14,11 @@ unseeded draw: not served.
 
 from __future__ import annotations
 
-import sys
 import textwrap
 import types
 from functools import wraps
 
 import numpy as np
-import pytest
 
 from cash.decorator.user_code import is_user_code_object
 from tests._scripts import run_python
@@ -97,7 +95,6 @@ def _expected(seed: int, scale: float = 1.0) -> str:
     return " ".join(f"{v:.6f}" for v in values)
 
 
-@pytest.mark.skipif(sys.version_info < (3, 12), reason="the delegates' run-time lookup is served on a trace (3.12+)")
 def test_a_seeded_wrapper_hits_and_moves_the_callers_stream_on(tmp_path):
     _write(tmp_path)
     assert _run(tmp_path, 0) == ("no_entry", _expected(0))
@@ -108,7 +105,6 @@ def test_a_seeded_wrapper_hits_and_moves_the_callers_stream_on(tmp_path):
     assert _run(tmp_path, 1) == ("no_entry", _expected(1))
 
 
-@pytest.mark.skipif(sys.version_info < (3, 12), reason="the delegates' run-time lookup is served on a trace (3.12+)")
 def test_an_edit_to_the_delegates_is_not_served_the_old_result(tmp_path):
     _write(tmp_path)
     assert _run(tmp_path, 0)[0] == "no_entry"

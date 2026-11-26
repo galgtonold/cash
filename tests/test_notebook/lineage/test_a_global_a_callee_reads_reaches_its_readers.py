@@ -41,7 +41,7 @@ def test_an_unchanged_global_keeps_the_lineage(cash_magics):
 
 
 def test_a_global_read_in_a_generator_expression_is_in_the_key(cash_magics):
-    """A generator expression, a lambda or (before Python 3.12) a
+    """A generator expression, a lambda or a
     comprehension is code of its own inside the function; the globals it
     reads were left out of the key, and ``y`` was served from before the
     change."""

@@ -26,7 +26,7 @@ SHAPES = {
 @pytest.mark.parametrize("shape", SHAPES)
 def test_the_second_call_pops_again(cash_magics, monkeypatch, shape, trace):
     if trace and not code_trace.on():
-        pytest.skip("no trace before 3.12")
+        pytest.skip("no trace with CASH_TRACE=0")
     if not trace:
         monkeypatch.setenv("CASH_TRACE", "0")
         monkeypatch.setattr(shadow, "SHADOW", None)

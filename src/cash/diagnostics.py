@@ -339,7 +339,7 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # ContextVar holding a value cash cannot compare between calls; it
         # runs uncached
         "KEY-LIBRARY-STATE-UNSEEN",  # a call, or a notebook statement reading
-        # a library's object, was stored below 3.12, with CASH_TRACE=0, as a
+        # a library's object, was stored with CASH_TRACE=0, as a
         # coroutine or returning an iterator, where library settings it read
         # are not checked; said once per process
         "KEY-LIBRARY-VALUE-UNREAD",  # a value the notebook set on a library's
@@ -371,8 +371,6 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "KEY-UNHASHABLE-DEFAULT",  # a parameter default could not be hashed
         "KEY-UNHASHABLE-GLOBAL",  # a global the function reads could not be
         # hashed, so changing it invalidates nothing
-        "KEY-UNRESOLVED-CALL",  # a call goes through a property or __getattr__
-        # cash does not run, so the function it reaches is not in the key
         "KEY-UNTRACKABLE-DEP",  # the body picks code by a run-time name
         # (getattr(m, name)(), import_module, eval); the function runs uncached
         # -- NOTEBOOK: notebook-wide machinery, not one statement ---------------

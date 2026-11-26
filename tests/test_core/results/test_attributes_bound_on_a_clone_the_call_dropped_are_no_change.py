@@ -16,14 +16,11 @@ reference can reach keeps the refusal, and each run matches plain Python.
 from __future__ import annotations
 
 import json
-import sys
 import textwrap
 
 import pytest
 
 from tests._scripts import run_python
-
-TRACED = sys.version_info >= (3, 12)
 
 _SAMPLERS = """
 import copy
@@ -180,17 +177,14 @@ def walk(tmp_path):
     return _run
 
 
-needs_trace = pytest.mark.skipif(not TRACED, reason="a call that picks code by name is traced on Python 3.12+")
 REFUSED = "est.sampling_strategy_ = ... - attribute mutation that changes the argument 'est'"
 
 
-@needs_trace
 @pytest.mark.parametrize("how", ["dropped", "pipeline"])
 def test_a_clone_made_and_dropped_inside_the_call_hits_on_repeat(walk, how):
     assert walk(how) == {"runs": 1, "hits": 2, "why": None}
 
 
-@needs_trace
 @pytest.mark.parametrize("how", ["returned", "global", "argument"])
 def test_a_clone_that_outlives_the_call_still_runs_every_time(walk, how):
     got = walk(how)
@@ -198,27 +192,18 @@ def test_a_clone_that_outlives_the_call_still_runs_every_time(walk, how):
     assert REFUSED in got["why"]
 
 
-@needs_trace
 def test_a_clone_a_cycle_keeps_alive_still_runs_every_time(walk):
     got = walk("cycle")
     assert (got["runs"], got["hits"]) == (3, 0)
     assert REFUSED in got["why"]
 
 
-@needs_trace
 def test_a_dropped_clone_no_weak_reference_reaches_still_runs_every_time(walk):
     got = walk("dropped", "SlotSampler")
     assert (got["runs"], got["hits"]) == (3, 0)
     assert REFUSED in got["why"]
 
 
-@needs_trace
 def test_a_sklearn_clone_made_and_dropped_inside_the_call_hits_on_repeat(walk):
     pytest.importorskip("sklearn")
     assert walk("dropped", "SkSampler") == {"runs": 1, "hits": 2, "why": None}
-
-
-@pytest.mark.skipif(TRACED, reason="below Python 3.12 there is no trace to serve the call on")
-def test_below_3_12_the_driver_runs_every_time(walk):
-    got = walk("dropped")
-    assert (got["runs"], got["hits"]) == (3, 0)

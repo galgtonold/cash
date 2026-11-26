@@ -10,16 +10,15 @@ and the lookups by name were not served either: what the trace saw run
 (a ``@dataclass`` ``__init__``, ``getattr(x, "name", None)``, a base class's
 ``__init__`` setting up an instance the call made) left it unusable.
 
-On Python 3.12 and newer the call is served on a trace of what it ran, and
+The call is served on a trace of what it ran, and
 an edit to a lazily imported module that ran, or to the function the name
-picks, recomputes. With no trace (``CASH_TRACE=0``, Python before 3.12) an
+picks, recomputes. With no trace (``CASH_TRACE=0``) an
 edit to a module imported lazily cannot be seen, so such a call runs every
 time.
 """
 
 from __future__ import annotations
 
-import sys
 import textwrap
 
 import pytest
@@ -28,7 +27,6 @@ from tests._scripts import run_python
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
-TRACED = sys.version_info >= (3, 12)
 
 OPS = textwrap.dedent("""
     def double(xs):
@@ -136,7 +134,6 @@ def _run(tmp_path, trace="1"):
     return proc.stdout.strip().splitlines()[0], proc.stderr
 
 
-@pytest.mark.skipif(not TRACED, reason="a trace of what a call ran needs sys.monitoring (Python 3.12+)")
 def test_a_second_process_hits_on_the_trace(tmp_path):
     _write(tmp_path)
     out, err = _run(tmp_path)
@@ -176,7 +173,7 @@ def test_without_a_trace_a_lazy_import_runs_uncached(tmp_path):
     out, err = _run(tmp_path, "0")
     assert out == "[6, 12]"
     assert "[RUN]" in err, "a call no trace checks must not be served"
-    label = "imports a module cash cannot read before it is loaded" if TRACED else "code picked by a run-time name"
+    label = "imports a module cash cannot read before it is loaded"
     assert f"missed: 1 {label}" in err, err
 
 
@@ -267,7 +264,6 @@ PIPELINE_MAIN = textwrap.dedent("""
 """)
 
 
-@pytest.mark.skipif(not TRACED, reason="a trace of what a call ran needs sys.monitoring (Python 3.12+)")
 def test_a_method_behind_a_descriptor_and_a_c_slot_lookup_hit_on_the_trace(tmp_path):
     _write(tmp_path)
     (tmp_path / "imbpkg" / "_available.py").write_text(AVAILABLE, encoding="utf-8")

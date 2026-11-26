@@ -9,7 +9,6 @@ module. Editing the constant then served the result computed with the old one.
 
 from __future__ import annotations
 
-import sys
 import textwrap
 
 import pytest
@@ -79,11 +78,7 @@ PLAIN_READ = """
 CASES = [
     pytest.param(IN_THE_CACHED_FUNCTION, id="class body in the cached function"),
     pytest.param(IN_A_HELPER, id="class body in a helper"),
-    pytest.param(
-        IN_A_GENERIC_CLASS,
-        id="body of a generic class",
-        marks=pytest.mark.skipif(sys.version_info < (3, 12), reason="class Box[T] is Python 3.12 syntax"),
-    ),
+    pytest.param(IN_A_GENERIC_CLASS, id="body of a generic class"),
     pytest.param(PLAIN_READ, id="outside a class body"),
 ]
 

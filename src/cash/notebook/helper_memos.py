@@ -411,7 +411,7 @@ def bodies_run(
     """After a statement ran: the code of the function under each memo of
     *before* (`watched`) whose body ran in it, as a trace records what ran
     (code -> its globals and module), for `unseen_writers` where there is no
-    trace (Python 3.10 and 3.11). A body ran when the memo's miss count
+    trace (``CASH_TRACE=0``). A body ran when the memo's miss count
     moved, or may have when the run cleared the memo (*cleared*), which
     resets the count. A memo whose counters raise is taken to have run."""
     fired = cleared.fired if cleared is not None else ()
@@ -517,9 +517,9 @@ def _items(memo: Any) -> list[tuple[Any, Any]] | None:
     collector's view of it reaches, or None when its layout is not the one
     this expects.
 
-    The wrapper visits its own type first (3.12 on). Unbounded, the answers
+    The wrapper visits its own type first. Unbounded, the answers
     dict comes next. Bounded (``maxsize=N``), it first visits each node of
-    its list in order -- the node's key, its answer, its type (3.12 on) --
+    its list in order -- the node's key, its answer, its type --
     then the dict mapping each key to its node, which is taken only when it
     holds exactly the keys visited.
     """
@@ -684,7 +684,7 @@ def _calls_only_pure(memo: Any) -> bool:
     code a run did not run there. `_pure` already refuses attributes
     (``o.method()``) and globals that are not builtins.
 
-    Read from the bytecode (3.11 on): a call of a global loads it with the
+    Read from the bytecode: a call of a global loads it with the
     marker ``NULL``, and every other callee pushes ``PUSH_NULL``; the calls
     must be exactly those of such globals, plus the generator expressions
     the body makes and calls in place. A builtin that calls what it is
@@ -693,7 +693,7 @@ def _calls_only_pure(memo: Any) -> bool:
 
     from cash.decorator.closure_fold import iter_code_scopes
 
-    if sys.version_info < (3, 11) or not _pure(memo):
+    if not _pure(memo):
         return False
     fn = attribute_or(memo, "__wrapped__", None)
     code = attribute_or(fn, "__code__", None)

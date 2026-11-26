@@ -6,7 +6,7 @@ logger the process had ever been seen holding, before and after it ran: 200
 loggers made ``q = 1 + 1`` take 83 ms. Every call a statement made paid for
 a Python callback, a loop of a million calls 0.11 s more. A monitoring tool
 id freed by another tool made every later cell raise. Where nothing can be
-watched (before Python 3.12), nothing said so. And a state digest taken on a
+watched, nothing said so. And a state digest taken on a
 thread that never keyed raised.
 """
 
@@ -30,8 +30,6 @@ from tests._cell_driver import run_cash_cell
 
 NAME = "cash_test_lookups_watched"
 
-needs_monitoring = pytest.mark.skipif(sys.version_info < (3, 12), reason="sys.monitoring needs Python 3.12")
-
 
 @pytest.fixture(autouse=True)
 def keep_everything(cash_instance, monkeypatch):
@@ -42,7 +40,6 @@ def keep_everything(cash_instance, monkeypatch):
     logging.getLogger(NAME).setLevel(logging.NOTSET)
 
 
-@needs_monitoring
 def test_a_statement_reading_no_logger_reads_none(cash_magics, monkeypatch):
     """Loggers the notebook made are not read for a statement that reads
     none of them."""
@@ -70,7 +67,6 @@ LOOPS = {
 }
 
 
-@needs_monitoring
 @pytest.mark.parametrize("loop", list(LOOPS))
 def test_a_loop_pays_for_one_event_per_call_site(cash_magics, loop):
     """A call site is switched off once its callable is seen to: the loop's
@@ -105,7 +101,6 @@ def test_a_loop_pays_for_one_event_per_call_site(cash_magics, loop):
     assert len(events) < 20
 
 
-@needs_monitoring
 def test_a_generator_made_on_each_turn_of_a_loop_is_seen_once_per_call(cash_magics):
     """``mst``'s loop (the E16 notebook) makes a generator expression on
     each turn, closing over a dict too big to read through: each is the
@@ -151,7 +146,6 @@ SWAP = (
 )
 
 
-@needs_monitoring
 def test_a_call_site_whose_callee_a_function_rebinds_is_watched_again():
     """``getter`` is a fake on the first call and ``logging.getLogger`` on
     the second, rebound by ``swap``: the site switched off after the first
@@ -170,7 +164,6 @@ def test_a_call_site_whose_callee_a_function_rebinds_is_watched_again():
     assert NAME.encode() in base64.b64decode(recipes[0])
 
 
-@needs_monitoring
 @pytest.mark.parametrize(
     "reader",
     [
@@ -201,7 +194,6 @@ def test_a_call_site_switched_off_still_sees_a_library_function_it_calls_next(re
     assert NAME.encode() in base64.b64decode(recipes[0])
 
 
-@needs_monitoring
 def test_a_function_made_again_holding_another_callable_is_watched(monkeypatch):
     """A lambda made on each turn of the loop closes over the function it
     calls: the third, holding ``logging.getLogger`` where the first two held
@@ -220,7 +212,6 @@ def test_a_function_made_again_holding_another_callable_is_watched(monkeypatch):
     assert NAME.encode() in base64.b64decode(recipes[0])
 
 
-@needs_monitoring
 def test_a_monitoring_id_freed_by_another_tool_breaks_no_cell(cash_magics):
     """Another tool frees the id cash took: the next cells run, and a
     reader of a logger it then finds is still not served stale."""
@@ -243,7 +234,7 @@ def test_lookups_that_cannot_be_watched_are_named_once(cash_magics, monkeypatch)
     is not checked, once: from the first statement that calls or reads an
     attribute."""
     monkeypatch.setattr(lookups_seen, "_install", lambda: False)
-    monkeypatch.setattr(lookups_seen, "_REASON", "sys.monitoring needs Python 3.12 or newer")
+    monkeypatch.setattr(lookups_seen, "_REASON", "the monitoring tool ids 5 and 2 are taken by other tools")
     monkeypatch.setattr(lookups_seen, "_warned_unseen", False)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
@@ -255,7 +246,7 @@ def test_lookups_that_cannot_be_watched_are_named_once(cash_magics, monkeypatch)
     codes = [getattr(w.message, "code", None) for w in caught]
     assert codes.count("NOTEBOOK-LOOKUPS-UNSEEN") == 1
     (message,) = [str(w.message) for w in caught if getattr(w.message, "code", None) == "NOTEBOOK-LOOKUPS-UNSEEN"]
-    assert "Python 3.12" in message
+    assert "tool ids 5 and 2 are taken" in message
     assert "getLogger" in message
 
 
@@ -267,7 +258,6 @@ def test_a_state_digest_on_a_thread_that_never_keyed():
     assert len(found) == 1
 
 
-@needs_monitoring
 def test_a_library_function_returning_a_logger_is_watched_from_any_call_site(cash_magics):
     """The call site calls a function of the notebook's first, and is
     switched off; ``logging.getLogger``, called there next, was seen
@@ -298,7 +288,6 @@ class Obj:
         return (Obj, (self.i,))
 
 
-@needs_monitoring
 def test_reading_a_module_s_list_runs_no_reduce_of_the_user_s():
     """``len(mod.OBJS)`` reads a list of objects of a class of the user's
     through a module: none of them is reduced to see whether it stands by
@@ -330,7 +319,6 @@ def _walk(namespace, source, monkeypatch):
     return len(reduced)
 
 
-@needs_monitoring
 def test_a_module_s_list_is_looked_through_once_while_it_holds_the_same_objects(monkeypatch):
     """Each object a module's list holds is reduced once while it stays
     there; one put in its place is reduced in turn, and a logger there is
@@ -349,7 +337,6 @@ def test_a_module_s_list_is_looked_through_once_while_it_holds_the_same_objects(
     assert gone() is None
 
 
-@needs_monitoring
 def test_a_timestamp_is_never_reduced_to_look_for_a_name():
     """A pandas Timestamp's reduce rebuilds it from numbers, whatever it
     holds: none in a module's list of them is reduced on a statement."""
@@ -370,7 +357,6 @@ def test_a_timestamp_is_not_taken_for_a_lookup():
     assert kept_state.looks_up(logging.getLogger().__reduce_ex__(4))
 
 
-@needs_monitoring
 def test_monitoring_ids_freed_by_other_tools_are_taken_again(monkeypatch):
     """Both ids held by other tools: nothing can be watched. Once one is
     freed, it is taken."""

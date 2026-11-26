@@ -45,7 +45,7 @@ def unread_module(issue: Any) -> str | None:
 LIBRARY_MODULE_LOOKUP = "a library's lookup of an imported module:"
 #: How an ``untrackable_dep`` finding that is a lookup by a run-time name
 #: (``getattr(obj, name)``, ``importlib.import_module(name)``,
-#: ``__import__(name)``) begins: on Python 3.12+ such a call is cached on a
+#: ``__import__(name)``) begins: such a call is cached on a
 #: trace of what it ran (`cash.decorator.code_trace`). eval/exec, namespace
 #: subscripts and the rest keep running uncached.
 NAME_LOOKUP_DESCRIPTIONS = (

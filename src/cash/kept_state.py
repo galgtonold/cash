@@ -1036,7 +1036,7 @@ def set_walk_order(walked: list, ordered: tuple | list) -> bytes | None:
     extension, at C speed (``cwalk.c``)."""
     kernel = getattr(_native.kernels, "set_walk_order", None)
     if kernel is not None:
-        return kernel(walked if type(walked) is list else list(walked), ordered, _NONE_ALIKE)
+        return kernel(walked if type(walked) is list else list(walked), ordered, True)
     alike = [item for item in walked if _hashed_alike(item)]
     if len(alike) < 2:
         return None
@@ -1049,20 +1049,15 @@ def set_walk_order(walked: list, ordered: tuple | list) -> bytes | None:
     return order.tobytes()
 
 
-#: Whether ``None`` hashes the same in every process: from Python 3.12 on
-#: (before, its hash is its address).
-_NONE_ALIKE = sys.version_info >= (3, 12)
-
-
 def _hashed_alike(item: Any) -> bool:
     """Does *item* hash the same in every process? An int or bool, a float
-    or complex number other than NaN (whose hash is its address), ``None``
-    (3.12+), or a tuple or frozenset of those."""
+    or complex number other than NaN (whose hash is its address), ``None``,
+    or a tuple or frozenset of those."""
     kind = type(item)
     if kind is int or kind is bool:
         return True
     if item is None:
-        return _NONE_ALIKE
+        return True
     if kind is float or kind is complex:
         return item == item
     if kind is tuple or kind is frozenset:

@@ -22,12 +22,6 @@ import pytest
 
 from tests._cell_driver import run_cash_cell
 
-needs_monitoring = pytest.mark.skipif(
-    sys.version_info < (3, 12),
-    reason="sys.monitoring needs Python 3.12: below it what a statement finds by a lookup is not watched "
-    "(NOTEBOOK-LOOKUPS-UNSEEN)",
-)
-
 NAME = "cash_test_logger_deep"
 LOGGER = logging.getLogger(NAME)
 
@@ -124,7 +118,6 @@ def _run(cash_magics, cash_instance, reader):
     return [getattr(w.message, "code", None) for w in caught]
 
 
-@needs_monitoring
 @pytest.mark.parametrize(
     "reader",
     [
@@ -164,7 +157,6 @@ def fresh_kernel(monkeypatch):
     monkeypatch.setattr(lookups_seen, "_RETURNERS", _weak.WeakSet())
 
 
-@needs_monitoring
 @pytest.mark.usefixtures("fresh_kernel")
 @pytest.mark.parametrize(
     "reader",
@@ -185,7 +177,6 @@ def test_a_logger_in_what_a_library_returns_is_checked(cash_magics, cash_instanc
     assert cash_magics.shell.user_ns["below"] == 31
 
 
-@needs_monitoring
 @pytest.mark.usefixtures("fresh_kernel")
 @pytest.mark.parametrize(
     "reader",
@@ -200,7 +191,6 @@ def test_more_than_is_looked_through_runs_every_time_and_says_so(cash_magics, ca
     assert "NOTEBOOK-ITEMS-UNREAD" in codes
 
 
-@needs_monitoring
 @pytest.mark.parametrize(
     "reader",
     [

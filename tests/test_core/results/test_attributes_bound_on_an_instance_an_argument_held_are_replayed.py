@@ -386,7 +386,7 @@ def test_a_held_instance_with_slots_runs_every_time(disk_cash):
 
 
 def test_without_the_c_watcher_held_attributes_are_compared(disk_cash, monkeypatch):
-    """Below Python 3.12, or without the C extension, each held instance's
+    """Without the C extension, each held instance's
     ``__dict__`` is copied before the body and compared after it."""
     monkeypatch.setattr(rewrite_in_place, "cwatch", None)
     for method in (fit_like_nimare, fit_held_delete, fit_held_alias):

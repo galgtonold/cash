@@ -37,7 +37,6 @@ from cash.tracking import trace_recorder
 
 pytestmark = [
     pytest.mark.core,
-    pytest.mark.skipif(sys.version_info < (3, 12), reason="the recorder runs on sys.monitoring, Python 3.12 or newer"),
     pytest.mark.filterwarnings("ignore::cash.exceptions.CashImpurityWarning"),
 ]
 

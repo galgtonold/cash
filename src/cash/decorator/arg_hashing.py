@@ -934,7 +934,7 @@ def _stateful_of(items: list) -> list:
 
 #: What is set on an object: None when nothing is. ``object.__getstate__``
 #: reads it without making the dict reading ``__dict__`` makes.
-_OWN_STATE = plain_getattr(object, "__getstate__", None) or (lambda obj: plain_getattr(obj, "__dict__", None) or None)
+_OWN_STATE = object.__getstate__
 
 
 @functools.cache

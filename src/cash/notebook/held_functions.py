@@ -460,8 +460,8 @@ def notebook_functions_exist(namespace: Mapping[str, Any]) -> bool:
     seconds of ``gc.get_referrers`` in a plain IPython shell, more than the
     walk it would spare.
 
-    The statement cash is running is not one (`_running_statement`): since
-    Python 3.11 ``exec`` makes a function of the code it runs, which no
+    The statement cash is running is not one (`_running_statement`):
+    ``exec`` makes a function of the code it runs, which no
     value can hold. Counted, it said yes to every call keyed inside a
     statement, and each walked a whole networkx graph to its end (1.1 s).
 
@@ -549,7 +549,7 @@ def module_class_objects_exist() -> bool:
     memos. Annotations, registries and library machinery still count, so
     most notebooks using their own modules walk big values to the end
     (~0.2 s per 400k objects with the C extension, ~0.5 s without). The
-    what-ran trace (3.12+) is not leaned on to stop sooner: it checks only
+    what-ran trace is not leaned on to stop sooner: it checks only
     its own statement's hit, not a cell built from that statement, a call
     cached inside one, or a restore after a restart, and a trace that was
     dropped or cannot be used checks nothing. Still not seen: a class
@@ -820,7 +820,7 @@ _NEW_CODE_EVENTS = frozenset(("exec", "function.__new__"))
 def _may_make_functions(args: tuple) -> bool:
     """Can the code an ``exec`` event runs make a function? Only by making
     one of a code object among its own constants (a ``def``, a ``lambda``,
-    a class body, a comprehension before 3.12): what it runs further down
+    a class body): what it runs further down
     is made by one of those first, or starts from an ``exec`` or a
     ``types.FunctionType`` of its own, events counted in turn. The same
     test as ``caudit.c``'s."""

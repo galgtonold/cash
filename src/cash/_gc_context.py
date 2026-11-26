@@ -39,7 +39,7 @@ earlier work left, which kept the statement out of the cache whenever a
 collection fell inside it. A statement refused only for such code runs
 next after a collection of its own (`StatementProcessor._collect_first`).
 
-With the C extension (3.12 on) the callback is ``gc_own_context`` in C, which
+With the C extension the callback is ``gc_own_context`` in C, which
 a collection can call at any depth; without it, a Python function that gives
 itself frames past the recursion limit for its own calls.
 """

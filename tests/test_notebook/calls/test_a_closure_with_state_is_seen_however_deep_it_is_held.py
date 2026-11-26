@@ -546,7 +546,7 @@ class _Tagged:
 
 
 def test_records_with_lists_of_plain_values_are_not_counted(monkeypatch):
-    # On 3.12+ an instance hands over its attributes themselves, not a dict:
+    # An instance hands over its attributes themselves, not a dict:
     # a record with a list was counted as a holder, and 200k of them were
     # not stored.
     from cash.notebook import call_key

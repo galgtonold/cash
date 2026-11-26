@@ -201,8 +201,7 @@ def is_user_code_object(obj: Any) -> bool:
         if (
             isinstance(code, types.CodeType)
             and type(obj) is types.FunctionType
-            # No ``co_qualname`` before 3.11: its ``co_name`` then.
-            and (code.co_qualname != obj.__qualname__ if hasattr(code, "co_qualname") else code.co_name != obj.__name__)
+            and code.co_qualname != obj.__qualname__
         ):
             # Names copied from what it wraps (``functools.wraps``): a
             # library's delegate for each method of numpy's ``Generator``
@@ -303,8 +302,7 @@ def unregistered_namespace_code(obj: Any) -> bool:
         return False
     if type(fn) is types.FunctionType:
         code = fn.__code__
-        # No ``co_qualname`` before 3.11: its ``co_name`` then.
-        if code.co_qualname != fn.__qualname__ if hasattr(code, "co_qualname") else code.co_name != fn.__name__:
+        if code.co_qualname != fn.__qualname__:
             # Named after what it stands for by the code that made it (a
             # namedtuple's ``__new__``, a lambda ``collections`` built):
             # a library's, judged as before.

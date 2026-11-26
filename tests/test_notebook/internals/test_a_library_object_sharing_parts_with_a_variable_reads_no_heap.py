@@ -16,8 +16,6 @@ expect this to fail.
 
 from __future__ import annotations
 
-import sys
-
 import pytest
 
 import cash.notebook.shared_objects as shared_objects
@@ -77,7 +75,7 @@ def test_the_climb_does_not_go_back_up_the_library_objects_parts(heap_reads, mon
     assert shared == set()
     # Python 3.10 holds an object's attributes in a ``__dict__`` of its own,
     # one more step on the way up from the layer to the model.
-    assert len(heap_reads) <= (3 if sys.version_info >= (3, 11) else 4)
+    assert len(heap_reads) <= 3
 
 
 def test_a_holder_the_guess_cannot_reach_is_still_climbed_to(heap_reads):

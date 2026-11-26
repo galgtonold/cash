@@ -24,7 +24,6 @@ from cash.decorator import code_trace
 
 pytestmark = [
     pytest.mark.core,
-    pytest.mark.skipif(sys.version_info < (3, 12), reason="sys.monitoring is Python 3.12+"),
 ]
 
 _MODULE = """

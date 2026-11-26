@@ -8,15 +8,12 @@ still says the code changed."""
 
 from __future__ import annotations
 
-import sys
-
 import pytest
 
 from cash.analysis.annotations import CacheAnnotation
 from cash.notebook import shadow
 from cash.notebook.call_entries import CallEntries
 
-pytestmark = pytest.mark.skipif(sys.version_info < (3, 12), reason="the trace runs on 3.12+")
 _PERSIST = CacheAnnotation(persist=True)
 N = 300_000
 

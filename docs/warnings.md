@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @981a2f73 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @f7796412 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -187,8 +187,7 @@ That state is stored with the result, and a hit writes it into the argument
 you hand in, so the call is cached like any other:
 `clip_in_place changed 'a' in place; cash stores the state it leaves 'a' in, and a hit writes it back.`
 [Which arguments](decorator-limitations.md#results-cash-refuses-to-store)
-can be written back; before Python 3.12 none is, and such a call runs every
-time.
+can be written back.
 
 **Why it matters.** Nothing is lost: after a hit the argument holds what the
 call would have left in it. The note is there so the write-back does not
@@ -943,7 +942,7 @@ before passing it.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/config/resolve.py:_validated_layer @ea2b7c73, cash/config/sources.py:_warn_toml_malformed @7aa948bd, cash/config/sources.py:load_toml_layer @b8dfea05, cash/config/resolve.py:_build_tiers @d17e1cb5, cash/config/schema.py:TierConfig.__post_init__ @0ed9c588 -->
+<!-- claim: cash/config/resolve.py:_validated_layer @ea2b7c73, cash/config/sources.py:_warn_toml_malformed @7aa948bd, cash/config/sources.py:load_toml_layer @35b9f6ac, cash/config/resolve.py:_build_tiers @d17e1cb5, cash/config/schema.py:TierConfig.__post_init__ @0ed9c588 -->
 **What happened.** cash could not use part of its configuration:
 
 * a value of the wrong type in a config file or `CASH_*` variable (that
@@ -1261,7 +1260,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-INSTANCE-STATE](#key-instance-state) | decorator | a bound method's instance cannot be hashed |
 | [KEY-ITERATOR-CONSUMED](#key-iterator-consumed) | decorator | a registered hasher read an iterator argument; the call ran uncached |
 | [KEY-LIBRARY-STATE-UNREAD](#key-library-state-unread) | decorator | the body read a library setting or a `ContextVar` whose value cannot be compared; not cached |
-| [KEY-LIBRARY-STATE-UNSEEN](#key-library-state-unseen) | both | below Python 3.12, with `CASH_TRACE=0`, for a coroutine or a returned iterator, a changed library setting is not detected; said once per process |
+| [KEY-LIBRARY-STATE-UNSEEN](#key-library-state-unseen) | both | with `CASH_TRACE=0`, for a coroutine or a returned iterator, a changed library setting is not detected; said once per process |
 | [KEY-LIBRARY-VALUE-UNREAD](#key-library-value-unread) | both | a value set on a library's module is too big to look through for an iterator; code reading it runs every time |
 | [KEY-MEMO-BEFORE-IMPORT](#key-memo-before-import) | both | a `functools` memo already held results when cash was imported |
 | [KEY-LOOP-VAR-CHANGED](#key-loop-var-changed) | notebook | a loop body changes its loop variable before work cached for each pass |
@@ -1276,7 +1275,6 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-UNHASHABLE-CAPTURE](#key-unhashable-capture) | decorator | a value a closure reads cannot be hashed; not cached |
 | [KEY-UNHASHABLE-DEFAULT](#key-unhashable-default) | decorator | a parameter default cannot be hashed; not cached |
 | [KEY-UNHASHABLE-GLOBAL](#key-unhashable-global) | decorator | a global the function reads cannot be hashed |
-| [KEY-UNRESOLVED-CALL](#key-unresolved-call) | decorator | before 3.12: a call goes through a property or `__getattr__` to code the key cannot name; not cached |
 | [KEY-UNTRACKABLE-DEP](#key-untrackable-dep) | decorator | the body picks code by a run-time name in a way cash cannot check; not cached |
 
 ### KEY-AMBIENT-READ {#key-ambient-read}
@@ -1449,7 +1447,7 @@ no longer changes, remove `dynamic_depends_on=`.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/code_args.py:CodeArgs._warn_untrackable_in_carrier_once @85d43471 -->
+<!-- claim: cash/decorator/code_args.py:CodeArgs._warn_untrackable_in_carrier_once @03164528 -->
 **What happened.** An object you passed to a cached function carries code, and
 that code picks what it calls at run time: `getattr(module, name)()` with
 `name` in a variable, `eval`, a dynamic import. The message names the method,
@@ -1457,10 +1455,10 @@ line and argument.
 
 **Why it matters.** The key cannot name the function the call lands on, so
 the call is treated as the same line in the cached function's own body is
-([KEY-UNTRACKABLE-DEP](#key-untrackable-dep)): on Python 3.12 and newer a
+([KEY-UNTRACKABLE-DEP](#key-untrackable-dep)): a
 lookup by name (`getattr`, `import_module`) is served only while a trace of
-what the call ran still holds; anything else, or any lookup on an older
-Python or with `CASH_TRACE=0`, runs uncached. `getattr(self, name)()` in a
+what the call ran still holds; anything else, or any lookup
+with `CASH_TRACE=0`, runs uncached. `getattr(self, name)()` in a
 method of the argument's own class is not reported: every method of that
 class is in the key already. Nor, on a traced call, is an `import` in a
 method of a module not loaded yet: an import that runs is in the trace, and
@@ -1490,7 +1488,7 @@ could be served results computed for the unmodified object. From the check on,
 it is keyed by content, so later calls are correct. Where cash can, the check
 runs at every use as an argument, so the call right after the change is
 keyed correctly: a copy-on-write pandas frame, and a dict, list, set or plain
-instance (by the C extension's watchers, on Python 3.12+; under 64 KiB by
+instance (by the C extension's watchers; under 64 KiB by
 hashing it). For anything else checks run at the 8th use and every 64th after
 that, or every use under `CASH_DEBUG=1`
 ([which results](decorator.md#frozen-and-large-arguments)). A hit of the
@@ -1649,7 +1647,7 @@ the result of that call came from an emptied iterator.
 
 **What happened.** While the body ran, it (or a library it called) read a
 setting kept outside its arguments: a `ContextVar`, or a library's settings
-object. On Python 3.12 and newer cash records such reads as the body runs
+object. cash records such reads as the body runs
 and checks each again before it serves the entry: `sc.settings.n_jobs`,
 `sklearn.set_config(...)`, `pd.set_option(...)`, NumPy's print options and
 error handling, `decimal`'s context, a `ContextVar` of yours. This one holds
@@ -1670,12 +1668,12 @@ for the object), or pass the value in as an argument.
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 **What happened.** A cached call was stored, and its body ran unrecorded:
-on Python below 3.12, with `CASH_TRACE=0`, as a coroutine, or returning an
+with `CASH_TRACE=0`, as a coroutine, or returning an
 iterator whose code runs after the call. Only a recorded body has the
 library settings it read checked before a hit is served (see
 [KEY-LIBRARY-STATE-UNREAD](#key-library-state-unread)). In a notebook, the
 same for a statement that reads a library's object (an imported class, a
-DataFrame) and was stored below Python 3.12 or with `CASH_TRACE=0`. Cash
+DataFrame) and was stored with `CASH_TRACE=0`. Cash
 says this once per process, the first time such a call or statement is
 stored, whatever the function calls: a library is often reached through an
 argument (`df.to_string()`, `model.fit(X)`), which the function's own code
@@ -1693,7 +1691,7 @@ statement names (`sklearn.preprocessing.StandardScaler()` after
 
 **What to do.** Pass the setting in as an argument, or clear the cache
 after changing a setting. The message also names the way out for its case:
-below Python 3.12, run on 3.12 or newer; with `CASH_TRACE=0`, unset it; for
+with `CASH_TRACE=0`, unset it; for
 an `async def`, move the part that reads the setting into a sync function
 and cache that one instead; for a returned iterator, return a finished
 value such as a list. In a notebook, `# @cash:no-cache` runs a statement
@@ -1857,7 +1855,7 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/code_args.py:is_user_code_carrier @937e4653, cash/install_paths.py:is_user_module @c8e57159, cash/decorator/user_code.py:is_user_code_object @c26e37e9 -->
+<!-- claim: cash/decorator/code_args.py:is_user_code_carrier @937e4653, cash/install_paths.py:is_user_module @c8e57159, cash/decorator/user_code.py:is_user_code_object @5b5cb232 -->
 **What happened.** A function, class or object from your own code reached a
 cached call (as an argument or a default), and cash could not hash its code.
 The typical case is a class of yours whose behaviour comes from a compiled
@@ -2129,43 +2127,11 @@ global. Per block: `with cash.assume_safe():` around that line.
 `assume_safe=True` on the decorator does not silence this code; filter it by
 code if you must. See [Silencing one code](#silencing-one-code).
 
-### KEY-UNRESOLVED-CALL {#key-unresolved-call}
-
-<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
-
-<!-- claim: cash/analysis/code_analyzer.py:CodeAnalyzer.find_called_functions_and_gaps @52cca09b -->
-<!-- claim: cash/decorator/registry.py:FunctionRegistry.unresolved_gaps @02dff8c9 -->
-**What happened.** The function calls something through an object of your own
-code whose attribute is a property, or whose class answers missing names with
-`__getattr__`: `api.inner(x)`. cash never runs that code to find what it
-returns. It reads the getter's body instead, and keys every cached function the
-getter names, or failing that every cached function called `inner`. Here it
-found none, or only a plain function, so the function the call reaches is not
-in the key. Calls of the function run uncached.
-
-On Python 3.12 and newer this code is not shown: the call is cached, its body
-is recorded as it runs, and a later call is served only while every function
-it ran is unchanged, the one the property handed out included (see
-[KEY-UNTRACKABLE-DEP](#key-untrackable-dep)).
-
-**Why it matters.** Caching the call would serve an old result after that
-function is edited, so it is not cached.
-
-**What to do.** Call the function by its own name (`impl.inner(x)`), or name
-it on the decorator: `@cash.cache(depends_on=[impl.inner])`.
-
-**When it is safe to ignore.** When the property hands out library code, or
-code you do not edit while results are cached.
-
-**Silencing it.** No waiver silences this code: not `# @cash:assume-safe`,
-not `with cash.assume_safe():`, not `assume_safe=True`. Filter it by code if
-you must. See [Silencing one code](#silencing-one-code).
-
 ### KEY-UNTRACKABLE-DEP {#key-untrackable-dep}
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks._warn_untrackable @54508976, cash/decorator/registry.py:FunctionRegistry.refresh_helper_bindings @efc802ec -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks._warn_untrackable @f9cd7b17, cash/decorator/registry.py:FunctionRegistry.refresh_helper_bindings @00da10db -->
 **What happened.** The function, or a helper it calls, picks the code it runs
 by a name known only at run time: `getattr(module, name)()`,
 `globals()[name]()`, `vars(module)[name]()`,
@@ -2175,7 +2141,7 @@ the line. The function runs uncached, and so does every cached function that
 calls it.
 
 <!-- claim: cash/decorator/code_trace.py:build @d088b4aa, cash/decorator/code_trace.py:verify @c38eb0d3 -->
-On Python 3.12 and newer, a lookup by name (`getattr(module, name)`,
+A lookup by name (`getattr(module, name)`,
 `importlib.import_module(name)`, `__import__(name)`) is cached instead: cash
 records the code the call ran and what each lookup found, and serves a later
 call only while all of it is unchanged. This warning then comes only when that
@@ -2184,12 +2150,12 @@ side effects or reads the clock, changed a global that code reads in place
 (`heapq.heappush(HEAP, x)`: a hit would not change it again), a function no
 name finds, a value too big to digest, or it left a thread running.
 
-<!-- claim: cash/analysis/helper_walk.py:HelperWalk._note_decided_at_run_time @0878d720 -->
-Before Python 3.12 (or with `CASH_TRACE=0`) the same warning names an
+<!-- claim: cash/analysis/helper_walk.py:HelperWalk._note_decided_at_run_time @33512d71 -->
+With `CASH_TRACE=0` the same warning names an
 `isinstance(x, Kind)` or `issubclass(c, Kind)` that Kind's own metaclass
 answers with an `__instancecheck__` or `__subclasscheck__` of yours: what it
 reads, such as a set its `register()` fills, is state the class keeps, and no
-key holds it. On 3.12 and newer the record of what the call ran covers it.
+key holds it. With tracing on, the record of what the call ran covers it.
 
 <!-- claim: cash/notebook/statement/processor.py:StatementProcessor._tell_looked_up_by_string @ed87cf4c -->
 In a notebook, a statement whose function looks names up this way, and whose
@@ -2705,31 +2671,20 @@ not matter to any cell: put `# @cash:assume-safe` on the statement.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/tracking/lookups_seen.py:arm @621f5c02, cash/tracking/lookups_seen.py:_warn_unseen_once @71cd55a2, cash/tracking/lookups_seen.py:_install @3ab782b0 -->
+<!-- claim: cash/tracking/lookups_seen.py:arm @621f5c02, cash/tracking/lookups_seen.py:_warn_unseen_once @9e53c78b, cash/tracking/lookups_seen.py:_install @4d05da47 -->
 **What happened.** cash cannot watch what a statement finds as it runs:
-`sys.monitoring` needs Python 3.12 or newer, or other tools hold the
-monitoring tool ids cash asks for (5 and 2). Below Python 3.12 the code a
-statement runs is not recorded either, and the warning names that too.
+other tools hold the monitoring tool ids cash asks for (5 and 2).
 
 **Why it matters.** An object that pickles by its name, such as a logger,
 can be found without a variable holding it:
 `seen = logging.getLogger("app").level`. Such an object is not checked. After
 another cell changes it (`logging.getLogger("app").setLevel(10)`), the
-statement is served the value it read before. Below Python 3.12 two more
-things are not seen, and the statement is served without them:
-
-- a finalizer the statement's own garbage runs (a `__del__`, a
-  `weakref.finalize`) that changes a global the statement's text does not
-  name;
-- a library routine a loop swaps into a module attribute and calls on its
-  next pass (`m.get = logging.getLogger` inside the function a
-  comprehension calls): the next call is served the routine swapped out.
+statement is served the value it read before.
 
 **What to do.** Bind the object to a variable in a cell of its own
 (`log = logging.getLogger("app")`) and read it through that variable: a
-variable's objects are checked on every Python. Or run on Python 3.12 or
-newer, without another tool holding both ids. For a finalizer or a
-swapped-in routine, run on Python 3.12 or newer.
+variable's objects are always checked. Or run
+without another tool holding both ids.
 
 **When it is safe to ignore.** When no statement reads a logger, or another
 object found by its name, that a later cell changes. It is shown once per
@@ -3057,7 +3012,7 @@ such as a progress display or a server you query from outside the notebook.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._refuse_unseen_writes @ac167d12, cash/notebook/statement/unseen_writes.py:unseen_writers @2c9a3e07, cash/notebook/statement/unseen_writes.py:own_writes @6e4e16cd, cash/notebook/statement/unseen_writes.py:writers_without_a_trace @25806177 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._refuse_unseen_writes @ac167d12, cash/notebook/statement/unseen_writes.py:unseen_writers @2c9a3e07, cash/notebook/statement/unseen_writes.py:own_writes @6e4e16cd, cash/notebook/statement/unseen_writes.py:writers_without_a_trace @72423468 -->
 **What happened.** A function of yours ran while a statement ran, on a path
 cash does not read from the statement's text, and it changes something the
 statement does not name: `Vec.__add__` appending to a global list, run by
@@ -3065,9 +3020,9 @@ statement does not name: `Vec.__add__` appending to a global list, run by
 the function it was made in. The message names the function and what it
 changes.
 
-On Python 3.12 or newer, cash reads which functions ran from the run itself,
+cash reads which functions ran from the run itself,
 and the warning is shown once for each function. Without that record
-(Python 3.10 and 3.11, `CASH_TRACE=0`, or a debugger holding
+(`CASH_TRACE=0`, or a debugger holding
 `sys.monitoring`), cash reads the special methods of your classes whose
 objects the statement reaches, and the functions of yours it reaches whose
 text cannot be read (`f.__code__` swapped for code compiled from a string),

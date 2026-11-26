@@ -1,5 +1,5 @@
-"""A library's own lookup of an imported module by a run-time name caches
-on Python 3.12+; the same lookup in the user's code still runs uncached.
+"""A library's own lookup of an imported module by a run-time name caches;
+the same lookup in the user's code still runs uncached.
 
 Array-API dispatch (scikit-learn's and SciPy's vendored
 ``array_api_compat``) tests an input's type against a module only when it
@@ -13,7 +13,6 @@ library is keyed by its version, and the call is traced as theirs are.
 from __future__ import annotations
 
 import os
-import sys
 import textwrap
 
 import pytest
@@ -80,7 +79,6 @@ def _hits(proj, site) -> tuple[str, str]:
     return p.stdout.strip(), p.stderr
 
 
-@pytest.mark.skipif(sys.version_info < (3, 12), reason="a lookup by name is cached on a trace, which needs 3.12+")
 def test_a_library_s_lookup_is_served_in_the_next_process(tmp_path):
     proj, site = _project(tmp_path, "library")
     out, _ = _hits(proj, site)
@@ -97,12 +95,3 @@ def test_the_user_s_own_lookup_still_runs_uncached(tmp_path):
     assert out == "3"
     assert "1 hit" not in err, err
     assert "run-time name" in err, err
-
-
-@pytest.mark.skipif(sys.version_info >= (3, 12), reason="checks the run without a trace")
-def test_without_a_trace_a_library_s_lookup_runs_uncached(tmp_path):
-    proj, site = _project(tmp_path, "library")
-    _hits(proj, site)
-    out, err = _hits(proj, site)
-    assert out == "3"
-    assert "1 hit" not in err, err

@@ -33,10 +33,6 @@ pytestmark = [
     pytest.mark.filterwarnings("ignore::cash.exceptions.CashImpurityWarning"),
 ]
 
-needs_recording = pytest.mark.skipif(
-    sys.version_info < (3, 12), reason="a body's reads are recorded with sys.monitoring, Python 3.12 or newer"
-)
-
 
 def _run(script, *args, env=None):
     out = subprocess.run(
@@ -89,7 +85,6 @@ print(first(10), second(10), first.cache_info()["hits"], second.cache_info()["hi
 """
 
 
-@needs_recording
 def test_a_counter_numba_names_ir_variables_by_is_no_setting(tmp_path):
     pytest.importorskip("numba")
     script = tmp_path / "jit.py"
@@ -154,7 +149,6 @@ print(f(), f.cache_info()["hits"])
 """
 
 
-@needs_recording
 def test_a_dict_reached_under_two_names_is_kept_as_first_read_under_either(tmp_path):
     site = tmp_path / "venv" / "lib" / "site-packages"
     pkg = site / "cash_ut_twonames"
@@ -209,7 +203,6 @@ print(f(1), f.cache_info()["hits"])
 """
 
 
-@needs_recording
 def test_a_list_a_package_fills_as_the_body_imports_it_is_read_once_loaded(tmp_path):
     site = tmp_path / "venv" / "lib" / "site-packages"
     pkg = site / "cash_ut_lazy"
@@ -239,7 +232,6 @@ print(f(), f.cache_info()["hits"])
 """
 
 
-@needs_recording
 def test_a_list_made_from_a_set_in_each_process_s_order_is_no_setting(tmp_path):
     pytest.importorskip("threadpoolctl")
     import os

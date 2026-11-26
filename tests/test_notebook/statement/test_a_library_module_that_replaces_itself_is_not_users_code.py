@@ -14,16 +14,11 @@ by its own file first (`code_trace._discover`, `Recorder._classify`).
 from __future__ import annotations
 
 import importlib
-import sys
-
-import pytest
 
 from cash.notebook.cache_status import CacheStatus
 from tests._cell_driver import run_cash_cell
 from tests._modules import forget_module
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
-
-pytestmark = pytest.mark.skipif(sys.version_info < (3, 12), reason="the trace check needs sys.monitoring")
 
 REPLACES_ITSELF = """import sys
 import types

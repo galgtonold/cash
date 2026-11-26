@@ -53,9 +53,7 @@ JOB = """
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         print(solar(3, how), outer(3), solar.cache_info()["hits"], outer.cache_info()["hits"])
-    # Below Python 3.12 the first call a process stores says this once.
-    unseen = "KEY-LIBRARY-STATE-UNSEEN" if sys.version_info < (3, 12) else ""
-    print(sorted({str(w.message).split("]")[0].lstrip("[") for w in caught if "KEY-" in str(w.message)} - {unseen}))
+    print(sorted({str(w.message).split("]")[0].lstrip("[") for w in caught if "KEY-" in str(w.message)}))
 """
 
 

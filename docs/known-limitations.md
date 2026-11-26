@@ -675,8 +675,8 @@ statement does it itself, and when a function of yours it calls does, at any
 depth, in a cell or in a module of your own. `getattr(obj, name)` on an
 object, `vars(self)` and a library's own lookups (`namedtuple`) do not count.
 
-<!-- claim: cash/notebook/cache_key.py:lookups_followed @f277d3b1, cash/string_lookups.py:tree_lookups_traceable @ac8f00df -->
-On Python 3.12 and newer, a lookup whose value is called at once
+<!-- claim: cash/notebook/cache_key.py:lookups_followed @77823e24, cash/string_lookups.py:tree_lookups_traceable @ac8f00df -->
+A lookup whose value is called at once
 (`globals()[name](3)`, `NS[name](3)` with `NS = globals()`,
 `getattr(__main__, name)(3)`) is cached all the same: what it ran is
 recorded, the function the string found and the name holding it included,
@@ -690,8 +690,8 @@ a name bound through the namespace, `eval`, `exec` of a computed string and
 
 <!-- claim: cash/tracking/lookups_seen.py:_note_object @417935ea, cash/tracking/lookups_seen.py:collecting @9163f1c2, cash/tracking/lookups_seen.py:_may_note @d506a15c, cash/tracking/lookups_seen.py:_note_globals @77198b83, cash/tracking/lookups_seen.py:_note_value @9465af19, cash/tracking/lookups_seen.py:_on_call @c61001a7, cash/tracking/lookups_seen.py:_on_start @182191e3, cash/tracking/lookups_seen.py:_on_return @42581e94, cash/tracking/lookups_seen.py:arm @621f5c02 -->
 A logger pickles by its name, so a statement can find it without any
-variable holding it: `seen = logging.getLogger("app").level`. On Python 3.12
-and newer, cash checks such an object when a call written in Python returns
+variable holding it: `seen = logging.getLogger("app").level`. cash
+checks such an object when a call written in Python returns
 it, or when the statement's code, or a function of yours it calls, reads it
 through a module (an attribute, of the module or of a class or object it
 holds, or an item of a dict, list or tuple held there).
@@ -753,44 +753,40 @@ uncached, and
 [NOTEBOOK-ITEMS-UNREAD](warnings.md#notebook-items-unread) says so; so does
 one whose checking of such objects takes longer than its analysis budget
 ([NOTEBOOK-ANALYSIS-BUDGET](warnings.md#notebook-analysis-budget)), and so
-does a call cash keeps that starts after that. Before Python 3.12, or when
+does a call cash keeps that starts after that. When
 other tools hold the monitoring tool ids cash asks for (5 and 2), none of these lookups is
 checked, and [NOTEBOOK-LOOKUPS-UNSEEN](warnings.md#notebook-lookups-unseen)
 says so once, at the first statement that calls something or reads an
-attribute. Before Python 3.12 the same warning also names a finalizer a
-statement's own garbage runs and a library routine a loop swaps into a
-module attribute: neither is seen there, so a statement may be served
-without the finalizer's change or with the routine swapped out; run on
-Python 3.12 or newer for those.
+attribute.
 **Fix:** bind the object to a variable in a cell of its own
 (`log = logging.getLogger("app")`) and read it through that variable.
 
-### A library setting before Python 3.12
+### A library setting with tracing off
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_settings_unseen @140d15ce -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_settings_unseen @103e9501 -->
 A library setting changed in a cell (`sklearn.set_config(...)`,
 `pd.set_option(...)`, `np.seterr(...)`) moves no lineage of a name a statement
 reads when the statement reaches the library through a name it imported or a
-method: `Y = StandardScaler().fit_transform(X)`, `s = df.to_string()`. On
-Python 3.12 and newer cash records the settings the statement's run read and
-runs it again when one changed. Before Python 3.12, or with `CASH_TRACE=0`,
+method: `Y = StandardScaler().fit_transform(X)`, `s = df.to_string()`. cash
+records the settings the statement's run read and
+runs it again when one changed. With `CASH_TRACE=0`
 nothing records them, and the statement is restored with the result made under
 the old setting; [KEY-LIBRARY-STATE-UNSEEN](warnings.md#key-library-state-unseen)
 says so once, the first time such a statement is stored. A statement naming the
 module the setting was made on (`sklearn.preprocessing.StandardScaler()`) runs
 again either way.
-**Fix:** run on Python 3.12 or newer with tracing on, or put
+**Fix:** run with tracing on (the default), or put
 `# @cash:no-cache` on the statement.
 
 ### A special method that changes state outside its object
 
-<!-- claim: cash/notebook/statement/unseen_writes.py:writers_without_a_trace @25806177, cash/notebook/statement/unseen_writes.py:own_writes @6e4e16cd -->
+<!-- claim: cash/notebook/statement/unseen_writes.py:writers_without_a_trace @72423468, cash/notebook/statement/unseen_writes.py:own_writes @6e4e16cd -->
 `s + 1` on objects of yours runs their `__add__`, which the statement's text
 does not name. When such a method changes something outside its object
 (appends to a global list), cash runs the statement every time and says so:
-[NOTEBOOK-UNSEEN-WRITES](warnings.md#notebook-unseen-writes). On Python 3.12
-and newer cash reads what ran from the run itself. Without that record
-(Python 3.10 and 3.11, `CASH_TRACE=0`) it reads the special methods' own
+[NOTEBOOK-UNSEEN-WRITES](warnings.md#notebook-unseen-writes). cash
+reads what ran from the run itself. Without that record
+(`CASH_TRACE=0`) it reads the special methods' own
 text instead, and misses a change made:
 
 - by a function the method calls (`note(1)`, `self.log()`, a lambda held in
@@ -1260,7 +1256,7 @@ default argument or base class does. **Fix:** move the binding above this cell.
   out afresh, so a `for` loop can meet them in another order than in the run
   that made it. cash notes where each item sat when it stores a value and puts
   the items back there on a hit, so a restored set iterates as the stored one
-  did. That needs Python 3.12 to 3.14 with cash's C extension, and a value of
+  did. That needs cash's C extension on Python 3.14 or older, and a value of
   at most 5 million objects. Elsewhere, and for a set of strings read in
   another process (strings hash differently in each one), the restored set
   keeps the order the rebuild gave it. Results are equal; only code that

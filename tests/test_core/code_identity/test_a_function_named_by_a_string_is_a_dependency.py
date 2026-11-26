@@ -223,7 +223,7 @@ def test_code_of_an_object_the_argument_holds_is_a_dependency(tmp_path, edit, wa
 # served, so editing ``fun1`` -- the function the run-time name picks --
 # kept the old result. A lookup the key cannot name is served only on a
 # trace of what the call ran, or the call runs uncached; with no trace
-# (``CASH_TRACE=0``, or Python before 3.12) it runs every time.
+# (``CASH_TRACE=0``) it runs every time.
 @pytest.mark.parametrize("trace", ["1", "0"])
 def test_editing_what_a_runtime_name_in_an_argument_method_picks_recomputes(tmp_path, trace):
     script = RUNTIME_NAME.replace("{WAIVER}", "")
