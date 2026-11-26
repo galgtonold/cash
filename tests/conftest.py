@@ -284,6 +284,7 @@ from cash import Cash
 from cash.backends import FileBackend, InMemoryBackend
 from cash.notebook.ipython.magics import CashMagics
 from tests import _between_tests
+from tests._moto import stop_fsspec_io_thread
 
 _between_tests.track_cash_exit_work()
 
@@ -551,16 +552,24 @@ def _io_watch_held_no_longer_than_the_test():
 def _no_library_thread_kept_after_the_test():
     """Stop the threads a library keeps for the process once a test
     started them: tqdm's monitor (``TMonitor``), started with the first
-    progress bar, and joblib's reusable loky executor (its manager and
-    queue feeder threads), started by the first ``Parallel(n_jobs=...)``.
+    progress bar, joblib's reusable loky executor (its manager and queue
+    feeder threads), started by the first ``Parallel(n_jobs=...)``, and
+    fsspec's IO loop, started by the first s3fs call (cash's own, asking a
+    remote object's token before a read, among them).
 
     cash counts such a thread as one that may do the program's work, and
     only on Linux can it read that it sat idle, so on Windows and macOS
     every later test of the worker had a change to a process setting or a
     random stream left undecided (STORE-STATE-CHANGED) instead of blamed
-    on the call. The next bar or ``Parallel`` starts them again.
+    on the call. The next bar, ``Parallel`` or s3fs call starts them again.
+    A loop a module's fixture started before the test is left to it.
     """
+    asyn = sys.modules.get("fsspec.asyn")
+    fsspec_loop = asyn.loop[0] if asyn is not None else None
     yield
+    asyn = sys.modules.get("fsspec.asyn")
+    if asyn is not None and fsspec_loop is None and asyn.loop[0] is not None:
+        stop_fsspec_io_thread()
     if "tqdm" in sys.modules:
         for thread in threading.enumerate():
             if type(thread).__module__ == "tqdm._monitor" and type(thread).__name__ == "TMonitor":
