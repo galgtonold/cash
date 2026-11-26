@@ -12,6 +12,7 @@ import re
 import shutil
 import sys
 import tempfile
+import threading
 import time
 import types
 from pathlib import Path
@@ -544,6 +545,28 @@ def _io_watch_held_no_longer_than_the_test():
     yield
     for left in releasers() - before:
         left()
+
+
+@pytest.fixture(autouse=True)
+def _no_tqdm_monitor_after_the_test():
+    """Stop the monitor thread a test's progress bar started.
+
+    tqdm starts its monitor (``tqdm._monitor.TMonitor``) with the first bar
+    and keeps it for the process. cash counts it as a thread that may do
+    the program's work, and only on Linux can it read that it sat idle, so
+    on Windows and macOS every later test of the worker had a change to a
+    process setting or a random stream left undecided (STORE-STATE-CHANGED)
+    instead of blamed on the call. A later bar starts a new monitor.
+    """
+    yield
+    if "tqdm" not in sys.modules:
+        return
+    for thread in threading.enumerate():
+        if type(thread).__module__ == "tqdm._monitor" and type(thread).__name__ == "TMonitor":
+            thread.exit()
+            owner = getattr(thread, "tqdm_cls", None)
+            if owner is not None and getattr(owner, "monitor", None) is thread:
+                owner.monitor = None
 
 
 #: The process's own ``__main__``, as pytest started it.
