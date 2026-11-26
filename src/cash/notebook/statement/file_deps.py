@@ -53,8 +53,16 @@ def compute_file_hash_component(
     probes: Mapping[str, str] | None = None,
     stats: Mapping[str, os.stat_result] | None = None,
     lstats: Mapping[str, os.stat_result] | None = None,
+    remote_as_read: Mapping[str, str] | None = None,
 ) -> str:
     """Compute a hash component from accessed file paths and their stats.
+
+    *remote_as_read* maps a URL of *accessed_remote* to the token its store
+    gave before the statement read it (`FileAccessTracker.remote_as_read`),
+    for the component of a statement that just ran: that token joins the
+    component, and the store is not asked again.
+    Without it (the component of a statement as it would run now) the store
+    is asked.
 
     *stats* maps a resolved path to a stat taken of it since the statement
     ran (the check that no input moved, `FileAccessTracker.checked_stats`):
@@ -162,7 +170,10 @@ def compute_file_hash_component(
         # object rather than about this machine, so unlike the local component
         # this one is identical on every machine -- a statement reading object
         # storage keys the same for a teammate.
-        file_components.append(f"{url}:{RemoteFileDataSource(url).state_token()}")
+        token = remote_as_read.get(url) if remote_as_read else None
+        if token is None:
+            token = RemoteFileDataSource(url).state_token()
+        file_components.append(f"{url}:{token}")
 
     if probes:
         file_components.extend(probe_state_parts(probes))

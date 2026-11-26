@@ -1468,6 +1468,8 @@ class CallUnit:
             elapsed,
             file_deps=frozenset(call_tracker.get_accessed_files()),
             remote_deps=frozenset(call_tracker.get_accessed_remote_urls()),
+            # Each under the token taken before the call read it.
+            remote_as_read=dict(call_tracker.remote_as_read),
             probes=probe_answers(call_tracker),
             stdout=stdout_text,
             stderr=stderr_text,

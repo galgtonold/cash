@@ -89,11 +89,13 @@ def _record_file_reads(
     accessed_remote: set[str] | None,
     probes: dict[str, str] | None = None,
     file_stats: Mapping[str, os.stat_result] | None = None,
+    remote_as_read: Mapping[str, str] | None = None,
 ) -> str:
     """Record the files and remote objects a statement read, and the paths it
     only checked for (*probes*), under its *cache_key*; returns their lineage
     component (empty when it read none). *file_stats* are stats taken since
-    the statement ran (`compute_file_hash_component`)."""
+    the statement ran, *remote_as_read* the tokens taken before it read each
+    remote object (`compute_file_hash_component`)."""
     file_hash_component = ""
     if accessed_files or accessed_remote or probes:
         file_hash_component = compute_file_hash_component(
@@ -101,6 +103,7 @@ def _record_file_reads(
             accessed_remote,
             probes,
             stats=file_stats,
+            remote_as_read=remote_as_read,
         )
     if cache_key:
         # It ran: its own reads say what it gives now, not a restore of it.
@@ -117,6 +120,10 @@ def _record_file_reads(
             tracking_state.statement_probes[cache_key] = dict(probes)
         else:
             tracking_state.statement_probes.pop(cache_key, None)
+        if remote_as_read:
+            tracking_state.statement_remote_as_read[cache_key] = dict(remote_as_read)
+        else:
+            tracking_state.statement_remote_as_read.pop(cache_key, None)
     return file_hash_component
 
 
@@ -272,8 +279,13 @@ class StatementLineageBuilder:
         probes: dict[str, str] | None = None,
         settled: Mapping[int, tuple[Any, str]] | None = None,
         file_stats: Mapping[str, os.stat_result] | None = None,
+        remote_as_read: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         """Capture output variables, compute their lineage, and update tracking state.
+
+        *remote_as_read* maps each remote object it read to the token taken
+        before the read: its file lineage takes that token rather than ask
+        the store again.
 
         *file_stats* are stats of the files it read, taken since it ran (the
         check that no input moved): its file lineage takes them rather than
@@ -317,7 +329,7 @@ class StatementLineageBuilder:
         captured_vars: dict[str, Any] = {}
         user_ns = self.shell.user_ns
         file_hash_component = _record_file_reads(
-            tracking_state, cache_key, accessed_files, accessed_remote, probes, file_stats
+            tracking_state, cache_key, accessed_files, accessed_remote, probes, file_stats, remote_as_read
         )
 
         # A draw READS its module's hidden RNG variable: fold that

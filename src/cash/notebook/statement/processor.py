@@ -132,6 +132,7 @@ from cash.notebook.statement.run import (
     LOOP_ITERABLE_NAME,
     MEMO_ANSWERS_NAME,
     NO_LOOP_ITERABLE,
+    NO_REMOTE_READS,
     CodeRunner,
     StatementExecution,
     StatementRun,
@@ -1484,7 +1485,7 @@ class StatementProcessor:
         loop_iterable: Any = NO_LOOP_ITERABLE,
         walked: frozenset[str] = frozenset(),
         header_files: frozenset[str] = frozenset(),
-        header_remote: frozenset[str] = frozenset(),
+        header_remote: Mapping[str, str | None] = NO_REMOTE_READS,
         follows_statement: bool = False,
     ) -> ProcessResult:
         """
@@ -1534,7 +1535,8 @@ class StatementProcessor:
                 different value). Never affects the cache key: ``code`` keeps
                 the header as written.
             header_files / header_remote: What evaluating that header read,
-                recorded as the statement's own reads.
+                recorded as the statement's own reads; each remote URL with
+                the token taken before it was read.
             follows_statement: The cell executor ran the statement before
                 this one of the same cell as a statement of its own, and
                 nothing of the cell's ran between: this one may take the
@@ -3292,7 +3294,12 @@ class StatementProcessor:
                 execution.children_running = children_left_running(written_paths)
                 execution.waived_paths = written_paths.waived
                 execution.file_tracker = file_tracker
-                execution.accessed_remote = file_tracker.get_accessed_remote_urls() | run.header_remote
+                execution.accessed_remote = file_tracker.get_accessed_remote_urls() | run.header_remote.keys()
+                # The header was read first: its token is the one from before.
+                execution.remote_as_read = {
+                    **file_tracker.remote_as_read,
+                    **{url: token for url, token in run.header_remote.items() if token is not None},
+                }
                 execution.probes = probe_answers(file_tracker)
                 # The keyed form (`run.code`), not what ran: a call routed
                 # through the call cache rewrites the text, and the key and
@@ -4184,6 +4191,7 @@ class StatementProcessor:
                     accessed_files=execution.accessed_files,
                     tree=run.tree,
                     accessed_remote=execution.accessed_remote,
+                    remote_as_read=execution.remote_as_read,
                     probes=execution.probes,
                     no_cache=no_cache,
                     value_keyed=value_keyed,

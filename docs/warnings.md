@@ -3617,14 +3617,13 @@ multiple of 8 inside the memory the process uses.
 <!-- claim: cash/notebook/statement/store.py:StatementStore.inputs_moved @e60eaaeb, cash/notebook/statement/processor.py:StatementProcessor._post_execute @a8c3dc59 -->
 === "Decorator"
 
-    **What happened.** A file the function read changed before it returned,
-    or a remote object it read (`s3://`, `https://`) was replaced. The result
-    was returned but not stored.
+    **What happened.** A file the function read changed before it returned.
+    The result was returned but not stored.
 
 === "Notebook"
 
-    **What happened.** A file or a remote object the statement read changed
-    before it finished, another process replacing it, say. The statement's value is kept for this
+    **What happened.** A file the statement read changed before it
+    finished, another process replacing it, say. The statement's value is kept for this
     run but not stored, and the statements below it that use the value are
     not served from what they stored for it; the next run reads the settled
     file. The warning comes once per statement.
@@ -3632,12 +3631,11 @@ multiple of 8 inside the memory the process uses.
 **Why it matters.** Nobody can say which version of the file the result came
 from, so storing it could serve a stale result later.
 
-<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker.add_tracked_remote @611599fe, cash/tracking/file_tracker.py:FileAccessTracker._remote_changed_since_read @005b2b15, cash/tracking/file_dep_snapshot.py:remote_moved @4e5eda40 -->
-For a remote object cash asks the store for its validator before the read and
-again when the result is stored, and compares the two: a miss costs two
-metadata requests per object. Inside a revalidation window
-(`remote_revalidate_max_age_seconds`) the store is asked once, before the
-read, and the entry keeps that answer.
+<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker.add_tracked_remote @cb846d56, cash/tracking/file_dep_snapshot.py:remote_token_as_read @88b2cc72 -->
+A remote object (`s3://`, `https://`) replaced while the call runs does not
+give this warning. Its entry holds the validator the store gave before the
+read, so the next call finds another one and recomputes
+([Remote objects](tutorials/feature-guides/custom-file-sources.md#remote-objects-tracked-by-the-stores-own-validator)).
 
 <!-- claim: cash/tracking/file_tracker.py:FileAccessTracker.created_by_block @edb2ba0e, cash/tracking/file_tracker.py:FileAccessTracker.get_accessed_files @5c8d904e, cash/tracking/read_events.py:_on_mkdir @309b5321 -->
 A file the function creates itself (opened for writing, in a directory it made

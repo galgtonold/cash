@@ -511,6 +511,7 @@ class CallEntries:
         *,
         file_deps: frozenset[str] = frozenset(),
         remote_deps: frozenset[str] = frozenset(),
+        remote_as_read: Mapping[str, str] | None = None,
         probes: dict[str, str] | None = None,
         stdout: str = "",
         stderr: str = "",
@@ -596,7 +597,10 @@ class CallEntries:
                 # A file beside the callee's own code is checked in each
                 # install's own copy, as the decorator records it.
                 snap = attach_code_relative(
-                    snapshot_dependencies(file_deps, remote_deps, absent, present=present), code_module
+                    snapshot_dependencies(
+                        file_deps, remote_deps, absent, present=present, remote_as_read=remote_as_read
+                    ),
+                    code_module,
                 )
             except Exception:  # noqa: BLE001 - never let dep snapshotting break the store
                 snap = None

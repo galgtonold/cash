@@ -2,10 +2,12 @@
 next time.
 
 Another job published a new version of ``https://.../data.csv`` while a slow
-loader was running. The statement was stored with the NEW object's token next
-to the value computed from the old one, so every later Run All served the old
-data as fresh. As for a local file, it now runs uncached with a
-``STORE-INPUT-CHANGED`` warning, and the next Run All reads the settled object.
+loader was running. Stored with the NEW object's token next to the value
+computed from the old one, the statement would be served as fresh by every
+later Run All. Its entry holds the token the store gave before the read, so
+the next Run All finds another token, reads the settled object and rebuilds
+what was computed from it. Nothing warns: the store is asked once, before
+the read.
 """
 
 from __future__ import annotations
@@ -64,29 +66,61 @@ def origin():
     server.state = _Origin()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    server.state.url = f"http://127.0.0.1:{server.server_address[1]}/data.csv"
     try:
-        yield f"http://127.0.0.1:{server.server_address[1]}/data.csv"
+        yield server.state
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
 
 
-def test_the_next_run_all_reads_the_settled_object(nb_runner, origin):
+def test_the_cells_below_and_the_next_run_all_read_the_settled_object(nb_runner, origin):
     pytest.importorskip("pandas")
     nb_runner.create_notebook(
         [
             "import time\nimport pandas as pd",
             "def load(u):\n    d = pd.read_csv(u)\n    time.sleep(0.5)\n    return d",
-            f"df = load({origin!r})",
+            f"df = load({origin.url!r})",
             "t = int(df.x.sum())",
             "print(t)",
         ]
     )
     nb_runner.start_kernel()
-    nb_runner.run_all()
-    assert nb_runner.get_output(5).strip() == "1", "the cell must read the object before it is replaced"
-    assert "STORE-INPUT-CHANGED" in nb_runner.get_raw_output(3)
+    nb_runner.run_cells([1, 2, 3])
+    assert origin.gets == 1
+    assert nb_runner.peek("int(df.x.sum())") == "1", "the cell must read the object before it is replaced"
+    assert "STORE-INPUT-CHANGED" not in nb_runner.get_raw_output(3)
+
+    # The cell below asks the store as it checks what it is built on, finds
+    # another object than the frame was read from, and has it read again.
+    nb_runner.run_cells([4, 5])
+    assert nb_runner.get_output(5).strip() == "2"
+    assert origin.gets == 2
 
     nb_runner.run_all()
     assert nb_runner.get_output(5).strip() == "2"
+    assert origin.gets == 2, "the settled object is cached as any other"
+
+
+@pytest.mark.fresh_kernel
+def test_after_a_restart_the_entry_is_not_served_for_the_new_object(nb_runner, origin):
+    """The entry written while the object was replaced names the old object:
+    a new kernel, which has only the entries, reads the object again."""
+    pytest.importorskip("pandas")
+    nb_runner.create_notebook(
+        [
+            "import time\nimport pandas as pd",
+            "def load(u):\n    d = pd.read_csv(u)\n    time.sleep(0.5)\n    return d",
+            f"df = load({origin.url!r})",
+            "t = int(df.x.sum())",
+            "print(t)",
+        ]
+    )
+    nb_runner.start_kernel()
+    nb_runner.run_cells([1, 2, 3])
+    assert nb_runner.peek("int(df.x.sum())") == "1"
+    nb_runner.restart()
+    nb_runner.run_all()
+    assert nb_runner.get_output(5).strip() == "2"
+    assert origin.gets == 2

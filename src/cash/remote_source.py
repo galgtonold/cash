@@ -321,11 +321,18 @@ def warn_validation_cost_once(label: str, count: int, seconds: float, saved_seco
     )
 
 
+def unresolved_token(url: str) -> str:
+    """A token for *url* that says its state could not be read, and that no
+    entry was stored under (`RemoteFileDataSource._unresolved_token`)."""
+    return f"unresolved:{url}:{next(_failure_serial)}"
+
+
 def token_before_read(url: str, storage_options: dict[str, Any] | None = None) -> str:
     """The state token of *url* now, for cash's own record of what a read is
-    about to find. A state that cannot be read does not warn
-    (``REMOTE-STATE-UNREADABLE``) here: the read itself reports an object it
-    cannot reach, and the entry's own token, taken as it is stored, warns."""
+    about to find: the token the entry of the call making the read records.
+    A state that cannot be read does not warn (``REMOTE-STATE-UNREADABLE``)
+    here: the read itself reports an object it cannot reach, and the record
+    made of the read as the entry is stored warns."""
     source = RemoteFileDataSource(url, storage_options=storage_options)
     source._warn_unreadable = False
     return source.state_token()
@@ -640,7 +647,7 @@ class RemoteFileDataSource(DataSource):
         each failed check leaves behind an entry no future call can reach; a
         store that is down long enough for that to matter has a bigger problem.
         """
-        return f"unresolved:{self.url}:{next(_failure_serial)}"
+        return unresolved_token(self.url)
 
     def _warn_failure(self, exc: BaseException) -> None:
         """Warn once per URL and failure kind that freshness went unverified."""
