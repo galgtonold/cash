@@ -96,6 +96,16 @@ def chain_end(value: Any, chain: tuple[str, ...]) -> tuple[int, Any]:
     return len(chain), value
 
 
+def carried_part(value: Any) -> str:
+    """What a callable carries besides its code, in the words of a warning."""
+    if isinstance(value, functools.partial):
+        return "arguments (functools.partial)"
+    owner = plain_getattr(value, "__self__", None)
+    if owner is not None and issubclass(type(value), (types.MethodType, types.BuiltinMethodType)):
+        return f"object ({class_qualname(type(owner))}, which the method is bound to)"
+    return f"attributes ({class_qualname(type(value))})"
+
+
 class GlobalValues:
     """Digests of the values module data holds, with the memos that keep an
     unchanged value from being hashed again."""
@@ -107,7 +117,7 @@ class GlobalValues:
         # The same live re-resolution the state hasher does, for functions
         # found inside data globals (`data_callable_identity`).
         self._data_helper_resolver = SysModulesHelperResolver(helpers.identity)
-        self._carrier_verdicts: LruMemo[int, tuple[Any, bool | str]] = LruMemo(CODE_OBJECTS)
+        self._carrier_verdicts: LruMemo[int, tuple[Any, bool | str | None]] = LruMemo(CODE_OBJECTS)
         # id(value) -> (value, digest) for immutable plain data globals; see
         # `global_value_digest`. The value is held, so its id is not reused.
         self._immutable_digests: LruMemo[int, tuple[Any, str]] = LruMemo(CODE_OBJECTS)
@@ -414,12 +424,18 @@ class GlobalValues:
             )
             return None
 
-    def carried_state_digest(self, value: Any) -> str | None:
+    def carried_state_digest(
+        self, value: Any, func_name: str | None = None, label: str | None = None, name: str | None = None
+    ) -> str | None:
         """Digest of the data a callable carries besides its code, or None.
 
-        See `carried_payload`. Silent on failure: the code is still keyed,
-        and a warning here would fire on every class-based decorator whose
-        state is just the function it wraps.
+        See `carried_payload`. Data that cannot be hashed is left out: the
+        code is still keyed, the call is still cached, and the function
+        *func_name* reading it as *label* is told once
+        (KEY-UNHASHABLE-GLOBAL) -- once per global *name* it hangs off, so a
+        global already reported as unhashable data is not reported again
+        for each of its methods. The drift guard, which only compares,
+        names neither and stays quiet.
         """
         payload = carried_payload(value)
         if payload is None:
@@ -442,15 +458,35 @@ class GlobalValues:
             digest = self._args.hash_payload((stabilized,), {})
         except KeyBuildFailed:
             raise  # a function it holds cannot be keyed: the call runs uncached
-        except Exception:  # noqa: BLE001 - fails open: state that cannot be hashed is left out of the key
+        except Exception:  # noqa: BLE001 - fails open: state that cannot be hashed is left out of the key, with a KEY-UNHASHABLE-GLOBAL warning
             digest = None
         finally:
             record = walk_scope.leave(scope)
         if build is not None and record is not None:
             build[item] = (anchor, digest, record)
+        if digest is None:
+            self._warn_carried_left_out(value, func_name, label, name)
         return digest
 
-    def carried_global_hash(self, value: Any, root_module: str | None) -> str | None:
+    def _warn_carried_left_out(
+        self, value: Any, func_name: str | None, label: str | None, name: str | None = None
+    ) -> None:
+        """Say once that what the callable *label* carries is in no key."""
+        if func_name is None or label is None:
+            return
+        self._notices.warn_once(
+            CashImpurityWarning,
+            func_name,
+            name or label,
+            f"@cash.cache on {func_name}: reads '{label}', a callable whose {carried_part(value)} "
+            f"could not be hashed and was left out of the key, so changes to it will NOT invalidate the cache.",
+            code="KEY-UNHASHABLE-GLOBAL",
+            fix=UNHASHABLE_GLOBAL_FIX,
+        )
+
+    def carried_global_hash(
+        self, value: Any, root_module: str | None, func_name: str | None = None, label: str | None = None
+    ) -> str | None:
         """Hash of the data a LIBRARY-made callable carries, or None.
 
         ``SMOOTH = partial(ndimage.gaussian_filter, sigma=SIGMA)``, ``POLY =
@@ -471,6 +507,11 @@ class GlobalValues:
         watched by `PurityChecks.learn_mutating_captures`, which stops folding it after
         the first call that moved it (one extra miss, no warning: the user
         did not write the mutation).
+
+        Data that cannot be hashed (``GET = s3.get_object``, whose client
+        holds locks and sockets) is left out, the callable is keyed by name
+        alone, and the function *func_name* reading it as *label* is told
+        once (KEY-UNHASHABLE-GLOBAL).
         """
         if issubclass(type(value), (type, types.ModuleType, types.FunctionType)) or is_mock(value):
             return None
@@ -484,6 +525,8 @@ class GlobalValues:
         # microseconds without this).
         verdict = self._carrier_verdicts.get(id(value))
         if verdict is not None and verdict[0] is value and not verdict[1]:
+            if verdict[1] is None:
+                self._warn_carried_left_out(value, func_name, label)
             return None
         try:
             if is_cash_wrapper(value):
@@ -496,10 +539,16 @@ class GlobalValues:
                     return None
                 method = plain_getattr(value, "__name__", "")
 
-                if method in REPORTED_METHODS or method in LOG_METHOD_NAMES:
-                    # `record = RESULTS.append`, `log = logger.info`: what the
-                    # owner holds is the call's OUTPUT, not an input.
+                if method in REPORTED_METHODS or method in LOG_METHOD_NAMES or method == "flush":
+                    # `record = RESULTS.append`, `log = logger.info`,
+                    # `flush = sys.stdout.flush`: what the owner holds is
+                    # the call's OUTPUT, not an input.
                     return None
+                if isinstance(owner, SYNC_TYPES):
+                    # `acquire = LOCK.acquire`: no result is computed from a
+                    # lock, so it is keyed by its kind (`safe_global_hash`).
+                    owner_cls = type(owner)
+                    return f"sync:{class_module(owner_cls)}.{class_qualname(owner_cls)}.{method}"
                 payload = ("method", method, owner)
             else:
                 state = plain_getattr(value, "__dict__", None)
@@ -537,11 +586,13 @@ class GlobalValues:
             return self._args.hash_payload((stabilized,), {})
         except KeyBuildFailed:
             raise  # a function it holds cannot be keyed: the call runs uncached
-        except Exception:  # noqa: BLE001 - fails open: what the callable carries is left out; it is keyed by name alone
-            self._note_carrier_verdict(value, False)
+        except Exception:  # noqa: BLE001 - fails open: what the callable carries is left out and it is keyed by name alone, with a KEY-UNHASHABLE-GLOBAL warning
+            self._note_carrier_verdict(value, None)
+            self._warn_carried_left_out(value, func_name, label)
             return None
 
-    def _note_carrier_verdict(self, value: Any, keyable: bool | str) -> None:
+    def _note_carrier_verdict(self, value: Any, keyable: bool | str | None) -> None:
+        # None: what it carries could not be hashed (each reader is told once).
         # Holds the object, so its id cannot be reused while the entry stands.
         self._carrier_verdicts[id(value)] = (value, keyable)
 

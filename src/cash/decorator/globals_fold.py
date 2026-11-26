@@ -418,7 +418,9 @@ class GlobalsFold:
             fold.parts.extend(module_ref_part(name, v))
             return
         if callable(v) and not isinstance(v, (dict, list, tuple, set)):
-            carried = self._values.carried_global_hash(v, plain_getattr(fold.func, "__module__", None))
+            carried = self._values.carried_global_hash(
+                v, plain_getattr(fold.func, "__module__", None), fold.func_name, name
+            )
             if carried is not None:
                 fold.parts.append((f"{name}#carried", carried))
                 fold.watch[name] = (carried, "carrier", (g, name), None)
@@ -857,7 +859,7 @@ class GlobalsFold:
         """
         with reach_pass():
             state_hash = self._fold_named_helpers(report, func, func_name, state_hash, owner_code, seen)
-            state_hash = self._fold_binding_data(report, func, state_hash, owner_code)
+            state_hash = self._fold_binding_data(report, func, func_name, state_hash, owner_code)
             return self._fold_held_helpers(report, func, func_name, state_hash, owner_code, seen)
 
     def _fold_named_helpers(
@@ -891,7 +893,9 @@ class GlobalsFold:
             state_hash = self._fold_helper(target, func, func_name, state_hash, owner_code, seen)
         return state_hash
 
-    def _fold_binding_data(self, report: PurityReport, func: Callable, state_hash: str, owner_code: Any) -> str:
+    def _fold_binding_data(
+        self, report: PurityReport, func: Callable, func_name: str, state_hash: str, owner_code: Any
+    ) -> str:
         """Fold the data the callables bound at *report*'s call sites carry.
 
         A callable bound at a call site carries DATA besides its code: a
@@ -914,7 +918,7 @@ class GlobalsFold:
             live = resolve_binding(module_name, chain)
             if live is func:
                 continue
-            digest = self._values.carried_state_digest(live)
+            digest = self._values.carried_state_digest(live, func_name, label, chain[0])
             if digest is not None:
                 carried.append(f"{label}={digest}")
                 watch[label] = (digest, "binding", (module_name, chain), None)

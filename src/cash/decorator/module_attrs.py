@@ -558,7 +558,9 @@ class ModuleAttrFold:
         callable carries, when the drift guard watches (*reader.watch*),
         or else the data globals the helper itself reads."""
         if reader.watch is not None and label not in reader.learned:
-            carried = self._values.carried_global_hash(value, plain_getattr(reader.func, "__module__", None))
+            carried = self._values.carried_global_hash(
+                value, plain_getattr(reader.func, "__module__", None), reader.func_name, label
+            )
             if carried is not None:
                 reader.watch[label] = (carried, "carrier", (vars(module), attr), None)
                 return [(f"{label}#carried", carried)]

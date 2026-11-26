@@ -36,6 +36,31 @@ cash.register_hasher(Store, hash_store)
 Never hash by `id()`: ids repeat across processes, so a later run could get
 another object's entry. See [Custom hashers](tutorials/feature-guides/custom-hashers.md).
 
+## A global cash cannot hash
+
+<!-- claim: cash/decorator/global_values.py:GlobalValues.carried_global_hash @7c01ff48, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @cb57665a -->
+A module global the function reads that cannot be pickled (a client, a
+connection, a thread pool, an object holding a lock) is left out of the key.
+The call is still cached and warns
+[`KEY-UNHASHABLE-GLOBAL`](warnings.md#key-unhashable-global). The same goes
+for a method of such an object kept under a name:
+
+<!-- test:skip reason="illustrative: needs boto3 and an S3 bucket" -->
+```python
+s3 = boto3.client("s3", region_name="eu-central-1")
+get_object = s3.get_object   # the client cannot be hashed
+
+@cash.cache
+def load(key):
+    return get_object(Bucket="reports", Key=key)["Body"].read()
+```
+
+`load` is keyed by its code, `key` and the name `get_object`. A client for
+another region or account gets the same entries. If the result depends on
+such a setting, pass it as an argument or read it from a plain global
+(`REGION = "eu-central-1"`), or register a hasher for the client's type
+that returns it.
+
 ## A table changed past pandas
 
 <!-- claim: cash/decorator/arg_hashing.py:watch_array_handles @afda31f6, cash/decorator/arg_hashing.py:_watch_callback_handouts @90a4d06c -->

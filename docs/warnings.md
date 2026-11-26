@@ -2115,7 +2115,24 @@ connection, a lock, a logger), leave it out of the key with `ignore=` or
 **What happened.** The function (or a helper) reads a module global that
 could not be hashed, so it was left out of the key.
 
-**Why it matters.** Changing that global will not invalidate the entry.
+<!-- claim: cash/decorator/global_values.py:GlobalValues.carried_global_hash @7c01ff48, cash/decorator/global_values.py:GlobalValues.carried_state_digest @c837fc0f -->
+The global can also be a callable that carries something cash cannot hash:
+a library object's method kept under a name (`GET_OBJECT = s3.get_object`,
+`PLOT = ax.plot`, `SUBMIT = pool.submit`), a `functools.partial` over a
+generator, a `joblib.Parallel`, an object of your class holding a lock or a
+session. The callable's code or name is still keyed and the call is still
+cached. The message says which part was left out: the object a method is
+bound to, a partial's arguments, or the callable's attributes. You see it
+once per function and global.
+
+<!-- claim: cash/decorator/key_values.py:SYNC_TYPES @fe64ee04 -->
+A method of a lock or an event (`ACQUIRE = LOCK.acquire`), a logger's
+methods, a stream's `write` and `flush`, and a list's `append` do not give
+this warning: no result is computed from what those objects hold.
+
+**Why it matters.** Changing that global will not invalidate the entry. For
+a client method this means a client built with another region, endpoint or
+account is served the entries of the first one.
 
 **What to do.** Have the function read what the result depends on (a
 connection string, not a connection), pass the value as an argument, or
@@ -2128,6 +2145,9 @@ changed: a client, a logger, a compiled pattern.
 global. Per block: `with cash.assume_safe():` around that line.
 `assume_safe=True` on the decorator does not silence this code; filter it by
 code if you must. See [Silencing one code](#silencing-one-code).
+
+A waiver on the line does not reach a callable called by its bare name
+(`SUBMIT(job)`, `PAR(tasks)`): for those, filter the code.
 
 ### KEY-UNTRACKABLE-DEP {#key-untrackable-dep}
 
