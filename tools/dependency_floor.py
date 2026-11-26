@@ -5,9 +5,10 @@
 Run in an environment where cash was installed from wheels, on the oldest
 Python cash supports (the nightly workflow does). pip installs the newest
 version of a dependency that still supports the running Python, without a
-word when that is no longer the newest there is: ``blake3`` stopped building
-wheels for Python 3.10 while cash still supported 3.10, and cash's oldest
-Python then hung on an old release of a dependency with nobody told.
+word when that is no longer the newest there is: a dependency with compiled
+code can stop building wheels for a Python cash still supports (``blake3``
+once did), and cash's oldest Python then hangs on an old release of it with
+nobody told.
 
 For each dependency of the distribution (default ``cash-lib``) that applies
 to this interpreter, the installed version is compared with the newest on

@@ -358,18 +358,15 @@ def check_import(report: Report, info: dict, target: Path) -> bool:
         return False
 
 
-def extension_expected(version: str) -> str | None:
-    """Why no C extension is expected for Python *version*, or None when one is."""
+def extension_expected() -> str | None:
+    """Why no C extension is expected, or None when one is."""
     if os.environ.get("CASH_PURE_PYTHON", "").strip().lower() in ("1", "true", "yes", "on"):
         return "CASH_PURE_PYTHON is set"
-    major, minor = (int(x) for x in version.split(".")[:2])
-    if (major, minor) < (3, 12):
-        return f"Python {version} is older than 3.12"
     return None
 
 
 def check_extension(report: Report, info: dict, target: Path) -> None:
-    skip = extension_expected(info["version"])
+    skip = extension_expected()
     sources = sorted((target / "src" / "cash" / "_c").glob("*.[ch]"))
     if skip or not sources:
         report.ok("c-ext", f"not expected ({skip or 'no C sources'}); {info['native_status']}")
@@ -525,10 +522,7 @@ def _rmtree(path: Path) -> None:
         os.chmod(p, stat.S_IWRITE)
         func(p)
 
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(path, onexc=_retry_writable)
-    else:
-        shutil.rmtree(path, onerror=_retry_writable)
+    shutil.rmtree(path, onexc=_retry_writable)
 
 
 def do_clean(args: argparse.Namespace) -> int:

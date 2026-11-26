@@ -9,7 +9,7 @@ It is missing or switched off when:
 
 * this is the pure-Python wheel (``py3-none-any``), or cash was built from
   source without a working C compiler;
-* Python is older than 3.12, or not CPython;
+* this is not CPython;
 * ``CASH_PURE_PYTHON=1`` is set in the environment;
 * the compiled module does not load here (an old system library, say), was
   built for another version of cash, or reports itself unusable on this
@@ -26,7 +26,6 @@ import importlib
 import logging
 import os
 import platform
-import sys
 from types import ModuleType
 
 from . import _weak
@@ -55,8 +54,6 @@ def _load() -> tuple[ModuleType | None, str | None]:
     implementation = platform.python_implementation()
     if implementation != "CPython":
         return None, f"no C extension for {implementation}"
-    if sys.version_info < (3, 12):
-        return None, f"it needs Python 3.12 or newer, this is {sys.version_info.major}.{sys.version_info.minor}"
     try:
         module = importlib.import_module(MODULE)
     except ModuleNotFoundError as exc:

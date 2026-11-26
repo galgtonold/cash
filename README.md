@@ -12,7 +12,7 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/cash-lib.svg)](https://pypi.org/project/cash-lib/)
 [![Downloads](https://img.shields.io/pepy/dt/cash-lib.svg)](https://pepy.tech/project/cash-lib)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://pypi.org/project/cash-lib/)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://pypi.org/project/cash-lib/)
 [![CI](https://github.com/galgtonold/cash/actions/workflows/ci.yml/badge.svg)](https://github.com/galgtonold/cash/actions/workflows/ci.yml)
 [![Docs](https://readthedocs.org/projects/cash-lib/badge/?version=latest)](https://cash-lib.readthedocs.io/en/latest/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -134,7 +134,7 @@ Or try it in your browser with no install:
 
 **Beta.** This is a `0.x` release: a minor release can change the API. cash clears a cache folder written in an older format by itself. See [versioning](https://cash-lib.readthedocs.io/en/latest/versioning/) and the [known limitations](https://cash-lib.readthedocs.io/en/latest/known-limitations/).
 
-[How cash is tested](https://cash-lib.readthedocs.io/en/latest/how-it-works/testing/): <!-- docnum:tests_total -->~33,200<!-- /docnum --> tests across <!-- docnum:platforms -->15<!-- /docnum --> platform combinations, documentation whose code is executed and whose prose is pinned to the source, and what that still misses.
+[How cash is tested](https://cash-lib.readthedocs.io/en/latest/how-it-works/testing/): <!-- docnum:tests_total -->~33,200<!-- /docnum --> tests across <!-- docnum:platforms -->9<!-- /docnum --> platform combinations, documentation whose code is executed and whose prose is pinned to the source, and what that still misses.
 
 Bug reports are welcome: use the badge's "Report a bug" button, the links at the end of `%cash_help`, or open an [issue](https://github.com/galgtonold/cash/issues).
 

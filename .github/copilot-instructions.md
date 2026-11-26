@@ -117,7 +117,7 @@ before touching it.
 
 ### C extension (`src/cash/_c/`)
 
-Optional: `hatch_build.py` compiles it into `cash._cwatch` on CPython 3.12+,
+Optional: `hatch_build.py` compiles it into `cash._cwatch` on CPython,
 and a failed compile builds a pure-Python wheel instead. Import it only
 through `cash._native` (`cwatch` is the module or None, `REASON` says why
 not; `cash info` and `%cash_status` show it). `CASH_PURE_PYTHON=1` leaves it
@@ -297,8 +297,8 @@ format is cleared on first open.
   its own rate, or deletes the variable to measure.
 - `perf` marks wall-clock threshold tests; CI's unit job skips them.
 - CI (`ci.yml`) has two tiers: pushes to the merge branch (`claude/batch` and a number)
-  run a smaller, sharded matrix that fits the free runner limits (no Windows
-  3.10); `main`, pull requests and runs by hand run every OS and Python.
+  run a smaller, sharded matrix that fits the free runner limits (Windows on
+  the newest Python only); `main`, pull requests and runs by hand run every OS and Python.
   Other branches run CI only by hand (workflow_dispatch). Run the full tier
   by hand on the merge branch before moving main.
   `benchmarks/tests/` tests the benchmark tooling and runs separately.
@@ -350,7 +350,7 @@ pytest @tools/test_selection/core_set.txt
 The core set is the few hundred integration tests that together cover every
 line, feature, feature pair and step sequence the whole suite covers, plus at
 least 5% of each feature folder's tests. The whole suite runs nightly in
-shards on Python 3.10, 3.12 and 3.14 (`.github/workflows/nightly.yml`), on the
+shards on Python 3.12, 3.13 and 3.14 (`.github/workflows/nightly.yml`), on the
 merge branch when it is scheduled and on the chosen branch when started by
 hand; to run one shard locally, add `-p tools.test_selection.shard --shard=2/6` to
 `python -m pytest tests/test_notebook_integration`.
@@ -557,7 +557,7 @@ ls dist/                # exactly two files, both X.Y.Z: the py3-none-any wheel 
 
 These are what `publish.yml` builds itself. The platform wheels with the C
 extension (`hatch_build.py` compiles it; plain `python -m build` on
-CPython 3.12+ gives one for this machine only) come from
+CPython gives one for this machine only) come from
 `.github/workflows/wheels.yml`, which `publish.yml` runs: cibuildwheel on
 Linux, macOS and Windows runners, each wheel running the C extension's
 tests on its own platform (`tests/_wheel_selftest.py`). Run that

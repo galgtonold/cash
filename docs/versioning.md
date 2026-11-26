@@ -52,6 +52,13 @@ There is no tool to migrate a cache between versions. The cache is a
 performance layer, not a store of record: write anything you cannot afford to
 recompute to a file or a database yourself.
 
+## Python versions
+
+cash supports Python 3.12 and newer, and is tested on 3.12, 3.13 and 3.14.
+A minor release can raise the oldest supported Python. pip then keeps
+installing the last release that supports the Python you run, which gets no
+further fixes.
+
 ## Pinning
 
 Pin cash like any dependency you rely on, for example

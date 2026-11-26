@@ -88,12 +88,11 @@ def test_a_source_edited_after_the_build_is_stale(tmp_path):
     assert dev_env.stale_sources(built, [older, newer]) == [newer]
 
 
-def test_no_extension_is_expected_before_python_3_12_or_when_switched_off(monkeypatch):
+def test_an_extension_is_expected_unless_it_is_switched_off(monkeypatch):
     monkeypatch.delenv("CASH_PURE_PYTHON", raising=False)
-    assert dev_env.extension_expected("3.11.9") is not None
-    assert dev_env.extension_expected("3.13.1") is None
+    assert dev_env.extension_expected() is None
     monkeypatch.setenv("CASH_PURE_PYTHON", "1")
-    assert dev_env.extension_expected("3.13.1") == "CASH_PURE_PYTHON is set"
+    assert dev_env.extension_expected() == "CASH_PURE_PYTHON is set"
 
 
 # -- network mounts -----------------------------------------------------------

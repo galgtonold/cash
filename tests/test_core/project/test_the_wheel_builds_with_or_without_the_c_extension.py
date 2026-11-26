@@ -1,7 +1,7 @@
 """The wheel carries the C extension where it can, and builds without it
 everywhere else.
 
-``hatch_build.py`` compiles ``cash._cwatch`` on CPython 3.12+. These tests
+``hatch_build.py`` compiles ``cash._cwatch`` on CPython. These tests
 build real wheels from the checkout and look inside:
 
 * a normal build there is a platform wheel holding the compiled module and
@@ -64,15 +64,15 @@ def test_a_failed_compile_builds_a_pure_wheel_instead_of_failing(tmp_path):
     wheel, log = _build_wheel(tmp_path, CC="false")
     assert wheel.name.endswith("-py3-none-any.whl"), wheel.name
     assert not _extension_members(wheel)
-    if sys.version_info >= (3, 12) and sys.implementation.name == "cpython":
+    if sys.implementation.name == "cpython":
         assert "could not compile the C extension" in log, log[-3000:]
 
 
-def test_a_normal_build_carries_the_extension_where_python_has_watchers(tmp_path):
+def test_a_normal_build_carries_the_extension_on_cpython(tmp_path):
     wheel, _ = _build_wheel(tmp_path)
     members = _members(wheel)
     assert not [n for n in members if n.startswith("cash/_c/")], "the C sources belong in the sdist only"
-    if sys.version_info < (3, 12) or sys.implementation.name != "cpython":
+    if sys.implementation.name != "cpython":
         assert wheel.name.endswith("-py3-none-any.whl"), wheel.name
         assert not _extension_members(wheel)
         return

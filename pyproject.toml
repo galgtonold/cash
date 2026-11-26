@@ -13,7 +13,7 @@ packages = ["src/cash"]
 # the compiled module, the sdist the sources.
 exclude = ["/src/cash/labextension", "/src/cash/_c"]
 
-# hatch_build.py compiles the optional C extension cash._cwatch (CPython 3.12+).
+# hatch_build.py compiles the optional C extension cash._cwatch (CPython only).
 # A failed compile leaves it out and the wheel is pure Python;
 # CASH_PURE_PYTHON=1 leaves it out on purpose (the py3-none-any wheel).
 [tool.hatch.build.targets.wheel.hooks.custom]
@@ -51,9 +51,9 @@ include = [
 path = "src/cash/__init__.py"
 
 # The platform wheels with the C extension, built by .github/workflows/wheels.yml.
-# Only CPython 3.12+ has the watchers the extension uses; 3.10 and 3.11 install
-# the universal pure-Python wheel. Each runner builds its own architecture, so
-# no wheel is cross-compiled or emulated.
+# One wheel per supported CPython; an interpreter or platform without one
+# installs the universal pure-Python wheel. Each runner builds its own
+# architecture, so no wheel is cross-compiled or emulated.
 [tool.cibuildwheel]
 build = ["cp312-*", "cp313-*", "cp314-*", "cp314t-*"]
 archs = ["native"]
@@ -72,7 +72,7 @@ name = "cash-lib"
 dynamic = ["version"]
 description = "A Python cache that re-runs only what changed."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = {file = "LICENSE"}
 authors = [
   {name = "Cash Contributors"},
@@ -96,8 +96,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
@@ -115,8 +113,6 @@ classifiers = [
 dependencies = [
     # Sizes the RAM tier from the machine's memory and watches memory pressure.
     "psutil>=5.0,<8",
-    # Reads [tool.cash]; the standard library has a TOML parser only from 3.11.
-    "tomli>=1.1; python_version < '3.11'",
     # Hashes big arrays, columns and files, ten times faster than SHA-256 on
     # a CPU without SHA instructions. Where it cannot load, cash falls back
     # to hashlib's SHA-256. Asked for on CPython only, where it has wheels:
@@ -183,7 +179,7 @@ dev = [
     # extension with build_ext, which finds the compiler on every OS. 70.1
     # builds wheels itself: the editable installs of
     # test_an_edited_numba_helper_invalidates_every_way_it_is_reached.py
-    # need bdist_wheel, which the 65.5 python.org's 3.10 ships lacks.
+    # need bdist_wheel, which older setuptools lack.
     "setuptools>=70.1",
     # Integration tests import it inside a real kernel, where no stub reaches.
     "scikit-learn",
