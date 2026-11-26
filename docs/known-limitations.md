@@ -763,7 +763,7 @@ attribute.
 
 ### A library setting with tracing off
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_settings_unseen @103e9501 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_settings_unseen @db9663de -->
 A library setting changed in a cell (`sklearn.set_config(...)`,
 `pd.set_option(...)`, `np.seterr(...)`) moves no lineage of a name a statement
 reads when the statement reaches the library through a name it imported or a
