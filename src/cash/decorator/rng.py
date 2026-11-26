@@ -384,8 +384,10 @@ class RngWatch:
         self._self_seeded_fixed: dict[str, set[str]] = {}
         #: Functions whose source carries ``# @cash:allow-random``.
         self._source_allows_random: set[str] = set()
-        #: Functions whose own source shows a draw from a global stream: a
-        #: stream that moved under one is its own doing, whoever else ran.
+        #: Functions whose own source shows a draw from a global stream,
+        #: spelled out or by a library call left without ``random_state``
+        #: (`_warn_unseeded_library_calls`): a stream that moved under one
+        #: is its own doing, whoever else ran.
         self._source_draws: set[str] = set()
         #: func_name -> the global streams that moved under its last
         #: computed call while other threads ran (`maybe_another_threads`).
@@ -812,6 +814,14 @@ class RngWatch:
             return
         if not calls:
             return
+        if any(condition is None for _, _, condition in calls):
+            # Known to draw: the decoration-time warning already says the
+            # first call is frozen, so a stream that moves under a call is
+            # taken as its own even with another thread alive beside it
+            # (`maybe_another_threads`). Left out, any thread left running
+            # had the first fit refused and the second one, a different
+            # draw, frozen instead.
+            self._source_draws.add(func_name)
         # A call known to draw first: it is the one worth naming.
         calls = sorted(calls, key=lambda c: c[2] is not None)
         call, line, condition = calls[0]

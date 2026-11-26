@@ -19,6 +19,7 @@ from tests._nbharness.kernels import (
     _force_kill_kernel,
     _get_warm_kernel,
     _make_async_runner,
+    _the_test_runs_own,
     _WarmKernel,
 )
 
@@ -406,6 +407,7 @@ class NotebookTestRunner:
                     self.client.start_new_kernel(cwd=str(self.work_dir))
                     self.client.kc = km.client()
                     self.client.kc.start_channels()
+                    _the_test_runs_own(self.client.kc.hb_channel)
 
                     async def _wait_ready():
                         await self.client.kc._async_wait_for_ready(timeout=30)

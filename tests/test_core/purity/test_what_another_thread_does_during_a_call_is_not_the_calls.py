@@ -321,6 +321,40 @@ def test_a_function_that_draws_beside_another_thread_is_found_on_its_next_call(i
     assert ran == [1, 1]
 
 
+def test_an_estimator_left_without_random_state_is_frozen_from_its_first_fit_beside_another_thread(inst):
+    """The source already says the fit draws: RANDOM-UNSEEDED at decoration
+    names ``RandomForestClassifier()`` and promises the first call is frozen.
+    A thread working beside that first fit leaves nothing to tell apart, so
+    it is stored; refused, the second fit (a different draw) was frozen
+    instead, and a test run with a kernel's heartbeat thread still alive
+    saw two different feature importances."""
+    ensemble = pytest.importorskip("sklearn.ensemble")
+    import numpy as np
+
+    beside = _Beside(lambda: None)
+    X = np.random.RandomState(0).rand(60, 4)
+    y = (X[:, 0] > 0.5).astype(int)
+    ran = []
+
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+
+        @inst.cache
+        def fit_model(n):
+            ran.append(n)
+            beside.during()
+            m = ensemble.RandomForestClassifier(n_estimators=n)  # no random_state
+            m.fit(X, y)
+            return m.feature_importances_.tolist()
+
+    try:
+        assert "RANDOM-UNSEEDED" in _codes(record, CashRandomnessWarning)
+        assert fit_model(5) == fit_model(5), "the first fit was not the one frozen"
+    finally:
+        beside.end()
+    assert ran == [5]
+
+
 def test_the_open_question_is_settled_by_the_next_process(tmp_path):
     """A function called once a process: the second run's draw settles it."""
     beside = _Beside(lambda: None)

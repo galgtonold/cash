@@ -270,6 +270,24 @@ def _boot_throttle():
 # ---------------------------------------------------------------------------
 
 
+def _the_test_runs_own(thread: threading.Thread) -> None:
+    """Mark *thread*, which drives a warm kernel from the pytest process,
+    as the test run's own: it changes no value of a test's
+    (`trace_recorder.HOST_THREADS`), like the stall watchdog.
+
+    A warm kernel outlives the test that booted it, so its loop thread and
+    its client's heartbeat channel stay alive through the in-process
+    decorator tests the same worker runs next. Counted, they were threads
+    that may do the program's work, and the heartbeat wakes every few
+    seconds: a call that moved a global random stream while one woke was
+    left undecided and not stored, so a test that calls an unseeded draw
+    twice saw two draws in a mixed run and one alone.
+    """
+    from cash.tracking import trace_recorder
+
+    trace_recorder.HOST_THREADS.add(thread)
+
+
 def _make_async_runner():
     """Create a new background event loop + thread pair.
 
@@ -292,6 +310,7 @@ def _make_async_runner():
 
     thread = threading.Thread(target=_run, args=(loop,), daemon=True)
     thread.start()
+    _the_test_runs_own(thread)
     # Stash the thread on the loop so _close_async_runner() can join it on
     # teardown instead of leaking the thread + loop (and their OS handles).
     loop._cash_thread = thread  # type: ignore[attr-defined]
@@ -441,6 +460,7 @@ class _WarmKernel:
                     km.start_kernel()
                     kc = km.client()
                     kc.start_channels()
+                    _the_test_runs_own(kc.hb_channel)
 
                     async def _wait_ready(kc=kc):
                         await kc._async_wait_for_ready(timeout=30)
