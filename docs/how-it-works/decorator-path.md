@@ -324,7 +324,9 @@ outside any variable, such as NumPy's error handling and print options, a logger
 level, handlers or filters, the warnings filters and how warnings are shown,
 the interpreter's hooks and `sys.setrecursionlimit`, `sys.path`, `atexit`
 and `signal` handlers, `copyreg`, the working directory, the environment,
-matplotlib's `rcParams`, `decimal`'s context. A call that changed one is not
+matplotlib's `rcParams`, `decimal`'s context, the day `calendar` starts a
+week on (`calendar.setfirstweekday`) and the local time zone (`time.tzset`).
+A call that changed one is not
 stored, and the function runs every time from then on, with an
 [`IMPURE-OBSERVED-EFFECTS`](../warnings.md#impure-observed-effects) warning:
 a hit, or a new process, would leave the setting unmade.

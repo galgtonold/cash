@@ -3119,7 +3119,8 @@ its own text or in a function or library it calls: `atexit.register(flush)`,
 `sys.addaudithook(...)`, `warnings.simplefilter(...)`,
 `logging.getLogger("lib").addHandler(h)`, `copyreg.pickle(...)`,
 `codecs.register(...)`, `sys.path.append(...)`, `os.environ[...] = ...`,
-`os.chdir(...)`, `plt.style.use(...)`, `np.seterr(...)` or a change to
+`os.chdir(...)`, `plt.style.use(...)`, `np.seterr(...)`,
+`calendar.setfirstweekday(...)`, `time.tzset()` or a change to
 `decimal`'s context. No variable holds what it changed: a statement served
 from the cache would not register it again, and after a restart it would
 never be registered. A call cash keeps across statements is not kept for

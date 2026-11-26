@@ -2,7 +2,8 @@
 
 ``atexit.register(flush)``, ``signal.signal(SIGUSR1, on_usr1)``,
 ``sys.excepthook = hook``, ``copyreg.pickle(K, reduce_k)``,
-``logging.getLogger("lib").addHandler(h)``: each changes a registry the
+``logging.getLogger("lib").addHandler(h)``, ``calendar.setfirstweekday(6)``,
+``time.tzset()``: each changes a registry the
 process keeps, which no variable holds and no entry stores. A statement
 restored from the cache does not change it again: after a restart the
 handler was never installed, and a re-run that plain Python makes
@@ -473,8 +474,21 @@ def _decimal() -> tuple[Any, ...] | None:
     )
 
 
-#: Each registry: what the warning calls it, how it is read, and how two
-#: reads are told the same (``==`` when None).
+def _calendar() -> Any:
+    """The weekday ``calendar`` starts a week on (``calendar.setfirstweekday``);
+    Monday, its default, while the module is not loaded."""
+    calendar = loaded_module("calendar")
+    if calendar is None or not has_attribute(calendar, "firstweekday"):
+        return 0
+    return calendar.firstweekday()
+
+
+def _time_zone() -> tuple[Any, ...]:
+    """The local time zone as ``time.tzset()`` last left it: ``tzset`` reads
+    the ``TZ`` variable into these four, and nothing else writes them."""
+    return (time.tzname, time.timezone, time.altzone, time.daylight)
+
+
 def _not_cash(item: Any) -> bool:
     # The filter cash puts first while a cached body runs, on any thread
     # (`warning_state.recording`): not the call's.
@@ -509,6 +523,8 @@ _SIGNAL_HANDLERS = "a signal's handler (signal.signal)"
 _NUMPY = "NumPy's error handling or print options (np.seterr, np.set_printoptions)"
 _DECIMAL = "decimal's context"
 
+#: Each registry: what the warning calls it, how it is read, and how two
+#: reads are told the same (``==`` when None).
 _REGISTRIES: tuple[tuple[str, Callable[[], Any], Callable[[Any, Any], bool] | None], ...] = (
     (_ATEXIT, _atexit_callbacks, None),
     (_SIGNAL_HANDLERS, _signals, None),
@@ -534,6 +550,8 @@ _REGISTRIES: tuple[tuple[str, Callable[[], Any], Callable[[Any, Any], bool] | No
     ("matplotlib's rcParams", _matplotlib, None),
     (_NUMPY, _numpy, None),
     (_DECIMAL, _decimal, None),
+    ("the day calendar starts a week on (calendar.setfirstweekday)", _calendar, None),
+    ("the local time zone (time.tzset)", _time_zone, None),
 )
 
 
