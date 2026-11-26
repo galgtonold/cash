@@ -379,6 +379,11 @@ def is_cow_pandas(value: Any) -> bool:
     if class_name(t) not in ("DataFrame", "Series") or not from_family(t, "pandas"):
         return False
     if _COW_PANDAS is None:
+        # The mode first: the verdict below is kept for the process, and a
+        # pandas 2 program met first without copy-on-write may turn it on.
+        if not _pandas_compat.copy_on_write():
+            _COW_PANDAS = False
+            return False
         usable = _pandas_compat.frame_memo_usable(_probe_remember, _probe_vouched)
         if _pandas_compat.frame_memo_state() is None:
             return usable  # this thread is running the start-up check
