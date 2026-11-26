@@ -212,25 +212,20 @@ class Counted:
 """
 
 
-@pytest.mark.parametrize("flat_first", [False, True], ids=["pickled", "walked-first"])
-def test_cash_asks_such_an_object_nothing_but_to_pickle_it(cash_magics, tmp_path, monkeypatch, flat_first):
+def test_cash_asks_such_an_object_nothing_but_to_pickle_it(cash_magics, tmp_path, monkeypatch):
     """Its ``__getattribute__`` is the user's code: cash's own questions
     (``isinstance`` asking for ``__class__``, ``fit``, ``__code__``) read
     its real type and Python's generic lookup instead. Storing it pickles
-    it, and pickle asks. Also where values are walked before they are
-    pickled (`kept_state.FLAT_FIRST`, Python 3.10 on Windows), with numpy
-    loaded, whose array check asked it twice more. Each statement is stored,
+    it, and pickle asks. With numpy loaded, whose array check asked it
+    twice more. Each statement is stored,
     however cheap: sizing it for the store asked the object for ``nbytes``
     where a fast machine never stored it (a statement past the floor on a
     slow or loaded one)."""
     import numpy  # noqa: F401 - `kept_state._flat_array` looks only once numpy is loaded
     import pandas  # noqa: F401 - the RAM tier's copy looks for frames only once pandas is loaded
 
-    from cash import kept_state
-
-    monkeypatch.setattr(kept_state, "FLAT_FIRST", flat_first)
     monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
-    module = f"counted_mod_{flat_first}"  # one per case: an imported module is kept
+    module = "counted_mod"
     (tmp_path / f"{module}.py").write_text(COUNTED, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     cells = [

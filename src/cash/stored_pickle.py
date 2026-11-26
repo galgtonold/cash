@@ -78,10 +78,7 @@ class HashBudgetExceeded(Exception):
     """A hash taken under `value_hash.budgeted_hash` ran past its budget."""
 
 
-#: What a digest past its deadline asks for a later one (`running_on`). A
-#: context variable, not a thread's own: a pickle `kept_state` runs on a
-#: thread with a large stack (`kept_state._on_big_stack`, Python 3.10 on
-#: Windows) runs in a copy of the caller's context, and asks it there too.
+#: What a digest past its deadline asks for a later one (`running_on`).
 _overrun: contextvars.ContextVar[Callable[[float, int], float | None] | None] = contextvars.ContextVar(
     "cash_overrun", default=None
 )
@@ -256,19 +253,6 @@ class _Sink:
             self._deadline = run_on(self._deadline, self.size + self.apart)
         if self._limit is not None and self.size + self.apart > self._limit:
             raise HashBudgetExceeded
-
-    def walked(self, done: int) -> None:
-        """`check` for a walk before the pickle (`kept_state._Walk`), which
-        reduces objects before anything is written: *done* is what it
-        estimates the pickle to hold by then. The deadline, and
-        `stop_unless_keyed`: a Python that walks first (3.10 on Windows)
-        reduces every object before a byte is written, and a stop left to
-        `write` let the walk reduce them all for the keyed pickle to reduce
-        again."""
-        if self.stop_unless_keyed:
-            raise _NotKeyed
-        if self._deadline is not None and perf_counter() > self._deadline:
-            self._deadline = run_on(self._deadline, done)
 
     def stream(self) -> bytes:
         return b"".join(self._parts or ())

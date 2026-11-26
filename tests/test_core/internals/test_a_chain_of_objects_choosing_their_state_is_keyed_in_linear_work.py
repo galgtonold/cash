@@ -64,10 +64,7 @@ class _TooMuchWork(BaseException):
 
 def _counting_tells(monkeypatch, bound: int):
     """Counts each pickle that tells whether a left-out attribute can be
-    pickled (`kept_state._picklable`). Counted there, not in the pickler
-    beneath it: on Python 3.10 on Windows (`kept_state.FLAT_FIRST`) a tell
-    walks its value before it pickles anything, and in a chain the walk
-    reaches the next tell first."""
+    pickled (`kept_state._picklable`)."""
     calls = [0]
     real = kept_state._picklable
 

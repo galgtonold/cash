@@ -1288,12 +1288,11 @@ class InMemoryBackend(CacheBackend):
         if by_deepcopy is not None:
             by_deepcopy.append(True)
         before = dict(memo)
-        if not kept_state.FLAT_FIRST:  # see there: deepcopy too runs out of C stack first
-            try:
-                return InMemoryBackend._deepcopy_with_frames(value, memo, known_cells, record_cells)
-            except (RecursionError, MemoryError) as exc:
-                if not kept_state.too_deep(exc):
-                    raise
+        try:
+            return InMemoryBackend._deepcopy_with_frames(value, memo, known_cells, record_cells)
+        except (RecursionError, MemoryError) as exc:
+            if not kept_state.too_deep(exc):
+                raise
         # What deepcopy left in *memo* is half built: start again from what
         # was there before it.
         memo.clear()

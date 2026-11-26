@@ -27,7 +27,6 @@ import io
 import itertools
 import logging
 import operator
-import os
 import pickle
 import sys
 import threading
@@ -162,33 +161,11 @@ def _dumps_value(
     *sorted_sets* (key bytes only) writes each set and frozenset of two or
     more items with its items sorted (`sorted_set_ids`), as *aliases* bytes
     always do. *after* is called with the pickler once it has pickled
-    *value*; not for a value walked first or pickled flat."""
+    *value*; not for a value pickled flat."""
     if sink is not None and not keyed:
         raise ValueError("dumps: a sink takes keyed bytes only")
     if keyed and sorted_sets and not aliases:
         persistent_id = _sets_first(persistent_id, sorted_set_ids(protocol, extra))
-    if _walked_first(value):
-        done = _on_big_stack(
-            _dumps_value,
-            value,
-            protocol,
-            fast=fast,
-            buffer_callback=buffer_callback,
-            extra=extra,
-            persistent_id=persistent_id,
-            keyed=keyed,
-            on_retry=on_retry,
-            aliases=aliases,
-            sink=sink,
-            reducer_override=reducer_override,
-            sorted_sets=False,  # its persistent id is made above
-            after=after,
-        )
-        if done is not _NO_BIG_STACK:
-            return done
-        return _dumps_walked_first(
-            value, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases, sink, reducer_override
-        )
     try:
         return _dumps(
             value,
@@ -255,33 +232,8 @@ def _dumps_also_keyed(
     called with the pickler once it has pickled *value*, its memo still
     whole; not for a value pickled flat. *watch*, a list, is appended to
     as each such object is met (a *sink* may stop the pickle there)."""
-    walked_first = _walked_first(value)
-    if walked_first:
-        done = _on_big_stack(
-            _dumps_also_keyed,
-            value,
-            protocol,
-            buffer_callback=buffer_callback,
-            extra=extra,
-            on_retry=on_retry,
-            sink=sink,
-            reducer_override=reducer_override,
-            after=after,
-            watch=watch,
-        )
-        if done is not _NO_BIG_STACK:
-            return done
     differs: list[bool] = [] if watch is None else watch
     table = _KeepDict(protocol, extra, watch=differs)
-    if walked_first:
-        walk = _Walk(getattr(sink, "walked", None), reducer_override, differs)
-        if not _at_most_deep(value, _SAFE_DEPTH, table, _flat_leaf(None), walk):
-            if sink is not None:
-                raise RecursionError("pickled flat first on this Python: digested over its keyed bytes")
-            stream = dumps(value, protocol, buffer_callback=buffer_callback, extra=extra, on_retry=on_retry)
-            return stream, False
-        if walk.reduced:
-            reducer_override = walk.override()
     try:
         stream = _dumps(
             value,
@@ -304,218 +256,6 @@ def _dumps_also_keyed(
         on_retry()
     flat = flatten(value, _KeepDict(protocol, extra), None)
     return _dumps(flat, protocol, False, buffer_callback, extra, None, False), False
-
-
-def _dumps_walked_first(
-    value: Any,
-    protocol: int,
-    fast: bool,
-    buffer_callback: Any,
-    extra: dict | None,
-    persistent_id: Any,
-    keyed: bool,
-    aliases: bool | dict = False,
-    sink: Any = None,
-    reducer_override: Any = None,
-) -> bytes:
-    """`dumps` where the pickler would run out of C stack before its
-    recursion limit (`FLAT_FIRST`): the value is walked on the heap first,
-    and handed to the pickler only when it is shallow enough
-    (`_SAFE_DEPTH`). Deeper, it is pickled flat; for a key, as deep as
-    pickle follows elsewhere, and past that it raises RecursionError as the
-    pickler raises on other Pythons."""
-    # The reducers both the walk and the pickler take: one without the memo
-    # writes no state setter, as `_dumps` picks for its own (`_reduce_with_dict`).
-    unshared = fast and persistent_id is None and not aliases
-    reducers = _KeepDict(protocol, extra, keyed, unshared=unshared)
-    leaf = _held_leaf(_flat_leaf(persistent_id), aliases)
-    walk = _Walk(getattr(sink, "walked", None), reducer_override)
-    # A container too may be taken whole: one the copy has made already
-    # (*persistent_id*), or one the rest of a key holds (*aliases*).
-    held = leaf if persistent_id is not None or type(aliases) is dict else None
-    if _at_most_deep(value, _SAFE_DEPTH, reducers, leaf, walk, held):
-        override = walk.override() if walk.reduced else reducer_override
-        return _dumps(
-            value, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases, sink, reducers, override
-        )
-    deepest = _pickler_room() if keyed else None
-    flat = flatten(value, reducers, leaf, deepest)
-    return _dumps(flat, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases, sink)
-
-
-def _pickler_room() -> int:
-    """How many objects deep the pickler would follow a value from here on
-    other Pythons: it counts each against the recursion limit, on top of
-    the frames already running."""
-    depth = 0
-    frame = sys._getframe(1)
-    while frame is not None:
-        depth += 1
-        frame = frame.f_back
-    return max(sys.getrecursionlimit() - depth, 0)
-
-
-def _at_most_deep(
-    value: Any, limit: int, reducers: Any, leaf: Any, walk: _Walk | None = None, held: Any = None
-) -> bool:
-    """Is *value* at most *limit* objects deep, as the pickler follows it?
-
-    `flatten` made a step for every object to learn the same, and on
-    `FLAT_FIRST` Pythons every value not `_surely_shallow` was flattened
-    before it was pickled: seconds for each pickle of a list of 200,000
-    rows, each key of it included, which ran a test keying such a list past
-    its timeout on Windows 3.10. Here the value is taken a level at a time,
-    the builtin containers of a level opened at C speed, and nothing is
-    built. The levels count the longest chain of objects each holding the
-    next, which the pickler, following each object once, never goes deeper
-    than; so this may say deep where `flatten` would not, never the other
-    way. A cycle, or anything else met again level after level, is left to
-    `flatten`, which walks each object once (and refuses an object rebuilt
-    from arguments that hold it, which the pickler would recurse through
-    until the stack ran out).
-
-    With *walk*, each object's reduce is kept for the pickle that follows
-    (`_Walk.override`), so it runs once, and *walk*'s check runs after each.
-
-    *held*, when given, is asked of each builtin container before it is
-    opened, as the pickler asks its persistent id first: one it takes is
-    pickled whole, and nothing below it is followed. Unasked, the walk of a
-    stored entry naming a list the RAM copy had made already opened every
-    record and datetime of it, and asked of each whether it was one: 24,000
-    calls for a log of 3,000 sessions the pickle itself never looked into.
-    """
-    level = _not_atoms([value])
-    seen: set[int] = set()
-    alive: list[list] = []  # the levels, so no id in *seen* is reused by a reduce's parts
-    rewalked = 0
-    for _ in range(limit):
-        if not level:
-            return True
-        before = len(seen)
-        seen.update(map(id, level))
-        added = len(seen) - before
-        if added < len(level):
-            # Each object once in a level: a class every instance's reduce
-            # names is one object, not one per instance.
-            level = list(dict(zip(map(id, level), level)).values())
-            rewalked += len(level) - added  # met at a level above
-            if rewalked > _REWALKED_FREE:
-                # Much of it met again: a cycle, or objects shared all the
-                # way down. `flatten` walks each object once.
-                return False
-        alive.append(level)
-        level = _next_level(level, reducers, leaf, walk, held)
-    return not level
-
-
-#: How many objects `_at_most_deep` walks again before it leaves the value
-#: to `flatten`: a few shared at every level (a class, a dtype) are not a
-#: cycle.
-_REWALKED_FREE = 1024
-
-
-def _next_level(level: list, reducers: Any, leaf: Any, walk: _Walk | None = None, held: Any = None) -> list:
-    """What the objects of *level* hold that is not an atom; not what a
-    builtin container *held* takes holds (`_at_most_deep`)."""
-    kinds = list(map(type, level))
-    opened = list(map(_OPENED_BY_ITEMS.__contains__, kinds))
-    found: list[Any] = []
-    containers = list(itertools.compress(level, opened))
-    if containers and held is not None:
-        containers = list(itertools.filterfalse(held, containers))
-    if containers:
-        found += _not_atoms(list(itertools.chain.from_iterable(containers)))  # a dict's keys too
-        dicts = list(itertools.compress(containers, map(_DICT.__contains__, map(type, containers))))
-        found += _not_atoms(list(itertools.chain.from_iterable(map(dict.values, dicts))))
-    if len(containers) < len(level):
-        for obj in itertools.compress(level, map(operator.not_, opened)):
-            parts = _reduced_parts(obj, reducers, leaf, walk)
-            if parts:
-                found += _not_atoms(parts)
-    return found
-
-
-#: Opened by `_next_level` without a reduce: what iterating them gives is
-#: what the pickler saves in them (a dict's values follow its keys).
-_OPENED_BY_ITEMS: frozenset[type] = frozenset({list, tuple, set, frozenset, dict})
-_DICT: frozenset[type] = frozenset({dict})
-
-
-def _not_atoms(items: list) -> list:
-    """The items of *items* that are not `_FLAT_ATOMS`, picked out without
-    a Python step per item."""
-    return list(itertools.compress(items, map(operator.not_, map(_FLAT_ATOMS.__contains__, map(type, items)))))
-
-
-class _Walk:
-    """What a walk before a pickle (`_at_most_deep`) learned of each object
-    it reduced, for the pickle to take instead of reducing it again
-    (`override`): the user's ``__reduce_ex__`` runs once per pickle, as on
-    other Pythons. *check* runs after each reduce with the bytes of data
-    reduced so far (a digest's deadline, `stored_pickle._Sink.walked`):
-    the time a pickle takes is mostly its reduces, which here run first.
-    *watch* (`dumps_also_keyed`'s) is told of an array a key packs
-    (`flat_array`), which the walk does not reduce, so *check* can stop the
-    pickle there before it reduces what follows."""
-
-    __slots__ = ("check", "data", "first", "reduced", "watch")
-
-    def __init__(self, check: Callable[[int], Any] | None = None, first: Any = None, watch: list | None = None) -> None:
-        self.check = check
-        self.data = 0
-        #: The pickle's own ``reducer_override``, asked before the table as
-        #: the pickler asks it.
-        self.first = first
-        self.watch = watch
-        #: id -> (object, reduce with its item iterators as lists)
-        self.reduced: dict[int, tuple[Any, tuple]] = {}
-
-    def reduce(self, obj: Any, reducers: Any) -> Any:
-        """*obj* reduced as the pickle will reduce it, kept: its iterators
-        made lists."""
-        reduced = NotImplemented if self.first is None else self.first(obj)
-        if reduced is NotImplemented:
-            reduced = reducers[type(obj)](obj)
-        if not isinstance(reduced, str):
-            reduced = tuple(list(part) if i in (3, 4) and part is not None else part for i, part in enumerate(reduced))
-        self.reduced[id(obj)] = (obj, reduced)
-        if self.check is not None:
-            self.data += _data_bytes(reduced)
-            self.check(self.data)
-        return reduced
-
-    def flat_array(self, obj: Any) -> None:
-        """Met *obj*, an array pickled whole: *watch* is told when a key
-        packs its records (`packed_records`), as the store's reduce of it
-        will tell it, and *check* runs."""
-        try:
-            dtype = obj.dtype
-            if (dtype.fields is not None or dtype.subdtype is not None) and _packed_dtype(
-                dtype.type, dtype
-            ) is not None:
-                self.watch.append(True)
-        except Exception:  # noqa: BLE001 - fails closed: left to the store's reduce, as before
-            return
-        if self.check is not None:
-            self.check(self.data)
-
-    def override(self) -> Callable[[Any], Any]:
-        """A ``reducer_override`` giving each object its kept reduce, with
-        fresh iterators (the pickler may save an object twice when it keeps
-        no memo); the pickle's own (`first`), or the table, for the rest."""
-        reduced = self.reduced
-        then = self.first
-
-        def override(obj: Any) -> Any:
-            found = reduced.get(id(obj))
-            if found is None or found[0] is not obj:
-                return NotImplemented if then is None else then(obj)
-            parts = found[1]
-            if isinstance(parts, str):
-                return parts
-            return tuple(iter(part) if i in (3, 4) and part is not None else part for i, part in enumerate(parts))
-
-        return override
 
 
 _DATA = (bytes, bytearray, str)
@@ -541,201 +281,6 @@ def _data_bytes(reduced: Any) -> int:
     return found
 
 
-def _reduced_parts(obj: Any, reducers: Any, leaf: Any, walk: _Walk | None = None) -> list:
-    """What pickling *obj*, not a builtin container, saves inside it, as
-    `flatten` follows it: nothing for an object pickled whole. *walk* keeps
-    the reduce (`_Walk`)."""
-    obj_type = type(obj)
-    if walk is not None and walk.watch is not None and _flat_array(obj):
-        walk.flat_array(obj)  # a library's type, a leaf: told here
-        return []
-    if leaf(obj) or obj_type in _WHOLE or issubclass(obj_type, type) or _flat_array(obj):
-        return []
-    reduced = reducers[obj_type](obj) if walk is None else walk.reduce(obj, reducers)
-    if isinstance(reduced, str):
-        return []  # a global, pickled by name
-    _rebuild, args, *rest = reduced
-    rest += [None] * (4 - len(rest))
-    state, listitems, dictitems = rest[:3]
-    parts = [args]
-    if state is not None:
-        parts.append(state)
-    if listitems is not None:
-        parts += listitems
-    if dictitems is not None:
-        parts += itertools.chain.from_iterable(dictitems)
-    return parts
-
-
-def _walked_first(value: Any) -> bool:
-    """Is *value* walked before the pickler is let follow it (`FLAT_FIRST`):
-    on such a Python, a value not `_surely_shallow`, unless this thread is
-    the large stack `_on_big_stack` pickles on."""
-    return FLAT_FIRST and not _BIG_STACK.on and not _surely_shallow(value)
-
-
-class _BigStack(threading.local):
-    #: True on the thread `_on_big_stack` runs a pickle on.
-    on = False
-
-
-_BIG_STACK = _BigStack()
-
-#: What `_on_big_stack` returns when it cannot start its thread.
-_NO_BIG_STACK = object()
-
-#: The stack of the thread a `FLAT_FIRST` Python pickles on, in bytes: a
-#: reservation the pages of are taken only as the pickle goes deep. Below
-#: 256 MiB: on Windows CPython takes a thread stack size under that only
-#: (``thread_nt.h``'s THREAD_MAX_STACKSIZE), and ``threading.stack_size``
-#: refused 256 MiB itself with ValueError, so every value was walked first.
-BIG_STACK_BYTES = 255 * 1024 * 1024
-
-#: The C stack budgeted for each level of recursion the pickler is let go
-#: (the recursion limit): on Windows 3.10 a 2 MB stack ran out a few hundred
-#: objects deep, near a thousand levels, about 2 KB a level.
-_STACK_PER_LEVEL = 32 * 1024
-
-#: Held while the stack size of new threads is set for `_on_big_stack`'s.
-_STACK_SIZE_LOCK = threading.Lock()
-
-
-def _on_big_stack(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
-    """``fn(*args, **kwargs)`` on a thread with a stack of `BIG_STACK_BYTES`,
-    this thread waiting for it; `_NO_BIG_STACK` when no such thread can be
-    had.
-
-    On `FLAT_FIRST` Pythons a value was walked level by level before each
-    pickle to find it shallow enough for the 2 MB stack (`_at_most_deep`):
-    a Python step for each object, 3.6 s of a 4.1 s store of a trie of
-    250,000 nodes, where its pickle took 0.6 s. On a stack this large the
-    recursion limit stops the pickler long before the stack runs out, as on
-    every other Python, and the value is pickled as there: a value too deep
-    for the recursion limit is pickled flat, or refused for a key.
-
-    The pickle runs on one thread kept for them (`_BigStackWorker`), or on
-    a thread of its own while that one runs another thread's. It runs in a
-    copy of this thread's context, and takes this thread's keying
-    (`one_keying`), `met_by_reference` collector and `reducers_run` depth.
-    With a recursion limit too high for the stack (`_STACK_PER_LEVEL`), or
-    no thread to be had, the value is walked first as before."""
-    if not BIG_STACK_BYTES or sys.getrecursionlimit() * _STACK_PER_LEVEL > BIG_STACK_BYTES:
-        return _NO_BIG_STACK
-    context = contextvars.copy_context()
-    keying, met, cached = _keying(), _MET.found, getattr(_IN_A_CACHED_CALL, "depth", 0)
-    outcome: list = []
-    done = threading.Lock()
-    done.acquire()
-
-    def run() -> None:
-        try:
-            _BIG_STACK.on = True
-            _KEYING.now = keying
-            _MET.found = met
-            _IN_A_CACHED_CALL.depth = cached
-            outcome.append((True, context.run(fn, *args, **kwargs)))
-        except BaseException as exc:  # noqa: BLE001 - fails closed: raised again on the caller's thread
-            outcome.append((False, exc))
-        finally:
-            # The kept thread runs the next pickle: it holds nothing of this one.
-            _KEYING.now = _MET.found = None
-            _IN_A_CACHED_CALL.depth = 0
-            done.release()
-
-    worker = _BIG_STACK_WORKER
-    if worker.busy.acquire(blocking=False):
-        try:
-            if not worker.run(run):
-                return _NO_BIG_STACK
-            done.acquire()
-        finally:
-            worker.busy.release()
-    elif not _start_big_stack_thread(run):
-        return _NO_BIG_STACK
-    else:
-        done.acquire()
-    ok, result = outcome.pop()
-    if ok:
-        return result
-    try:
-        raise result
-    finally:
-        del result
-
-
-def _start_big_stack_thread(target: Callable[[], None]) -> bool:
-    """Start a daemon thread with a stack of `BIG_STACK_BYTES` running
-    *target*; False when none can be had."""
-    with _STACK_SIZE_LOCK:
-        try:
-            before = threading.stack_size(BIG_STACK_BYTES)
-        except (ValueError, RuntimeError):  # a platform that sets no size
-            return False
-        try:
-            # Not counted as the user's: neither its function nor its starter is.
-            threading.Thread(target=target, name="cash-pickle", daemon=True).start()
-        except (RuntimeError, MemoryError):  # no memory for it, or shutting down
-            return False
-        finally:
-            threading.stack_size(before)
-    return True
-
-
-class _BigStackWorker:
-    """The thread `_on_big_stack` hands its pickles to, started once (again
-    in a forked child): a thread started for each pickle of a value not
-    surely shallow was a start or more for every statement of a cell, each
-    through cash's own ``Thread.start`` patch. One caller at a time
-    (*busy*); another meanwhile starts a thread of its own."""
-
-    def __init__(self) -> None:
-        self.busy = threading.Lock()
-        self._ready = threading.Semaphore(0)
-        self._job: Callable[[], None] | None = None
-        self._pid: int | None = None
-
-    def run(self, job: Callable[[], None]) -> bool:
-        """Hand *job* to the thread, starting it first when there is none;
-        False when none can be had. The caller holds *busy*."""
-        if self._pid != os.getpid():
-            if not _start_big_stack_thread(self._serve):
-                return False
-            self._pid = os.getpid()
-        self._job = job
-        self._ready.release()
-        return True
-
-    def _serve(self) -> None:
-        while True:
-            self._ready.acquire()
-            job, self._job = self._job, None
-            if job is not None:
-                job()  # never raises: `_on_big_stack`'s job keeps what it raised
-            # Holds the value it pickled: a statement's share check would
-            # find it held by something else till the next pickle.
-            job = None
-
-
-_BIG_STACK_WORKER = _BigStackWorker()
-
-
-#: How many objects deep the pickler is let follow a value on `FLAT_FIRST`
-#: Pythons. Each costs it two or three levels of C recursion.
-_SAFE_DEPTH = 100
-
-
-#: Python 3.10 on Windows runs out of C stack before the recursion limit
-#: stops the pickler or ``deepcopy``: its threads have a 2 MB stack, and
-#: pickling a chain a few hundred objects long took the process down rather
-#: than raise. There the user's objects and the containers holding them are
-#: always pickled flat, and only a library's objects, whose pickling is a
-#: level or two deep, by the pickler itself. Later Pythons, and 3.10 on the
-#: 8 MB and larger stacks of Linux and macOS, raise RecursionError first.
-#: Where it can, a store or key pickle runs on a thread with a stack large
-#: enough for that instead (`_on_big_stack`), and is pickled as there.
-FLAT_FIRST = sys.version_info < (3, 11) and sys.platform == "win32"
-
-
 def _persistent_leaf(persistent_id: Any) -> Any:
     """What `flatten` pickles whole: what *persistent_id* takes."""
     return None if persistent_id is None else (lambda obj: persistent_id(obj) is not None)
@@ -750,45 +295,6 @@ def _held_leaf(leaf: Any, aliases: bool | dict) -> Any:
     if leaf is None:
         return lambda obj: id(obj) in aliases
     return lambda obj: id(obj) in aliases or leaf(obj)
-
-
-def _flat_leaf(persistent_id: Any) -> Any:
-    """What `flatten` pickles whole on `FLAT_FIRST` Pythons: what
-    *persistent_id* takes, and a library's objects (`_library_type`)."""
-
-    def leaf(obj: Any) -> bool:
-        if persistent_id is not None and persistent_id(obj) is not None:
-            return True
-        return _library_type(type(obj))
-
-    return leaf
-
-
-def _library_type(t: type) -> bool:
-    """Is *t* a library's type (pandas, numpy, the standard library's
-    ``datetime``), not one of the user's nor a builtin container? Remembered
-    per type."""
-    try:
-        return _LIBRARY_TYPES[t]
-    except KeyError:
-        pass
-    except TypeError:  # a class whose metaclass makes it unhashable
-        return False
-    module = class_module(t)
-    if module in _WALKED_MODULES:
-        found = False
-    else:
-        from .install_paths import is_user_code_module
-
-        found = not is_user_code_module(sys.modules.get(module))
-    _LIBRARY_TYPES[t] = found
-    return found
-
-
-#: Their types hold other objects as the user's do: walked by `flatten`.
-_WALKED_MODULES = frozenset({"builtins", "collections", "copyreg", "__main__"})
-
-_LIBRARY_TYPES: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 
 
 def _dumps(
@@ -1155,26 +661,6 @@ def _identityless(t: type) -> bool:
 
 
 _IDENTITYLESS: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
-
-
-def _surely_shallow(value: Any) -> bool:
-    """Is *value* one the pickler walks a level or two of at most: an atom,
-    a plain array, or a short container of atoms? Such a value needs no
-    large stack (`_big_stack`), and most of what is pickled is one."""
-    kind = type(value)
-    if kind in _FLAT_ATOMS or _flat_array(value):
-        return True
-    if kind is dict:
-        return len(value) <= _SHALLOW_ITEMS and all(
-            type(k) in _FLAT_ATOMS and type(v) in _FLAT_ATOMS for k, v in value.items()
-        )
-    if kind in (list, tuple, set, frozenset):
-        return len(value) <= _SHALLOW_ITEMS and all(type(item) in _FLAT_ATOMS for item in value)
-    return False
-
-
-#: The most items `_surely_shallow` looks through before it says no.
-_SHALLOW_ITEMS = 64
 
 
 def too_deep(exc: BaseException) -> bool:
@@ -3902,10 +3388,8 @@ def _picklable(value: Any) -> bool:
         return ("__cash_picklable__", id(obj)) if known is not None and known[0] is obj and known[1] else None
 
     try:
-        if FLAT_FIRST:
-            dumps(value, keyed=True, persistent_id=told)
-        else:  # `dumps` itself, two frames fewer (see `left_out_attrs`)
-            _dumps(value, pickle.DEFAULT_PROTOCOL, False, None, None, told, True)
+        # `dumps` itself, two frames fewer (see `left_out_attrs`)
+        _dumps(value, pickle.DEFAULT_PROTOCOL, False, None, None, told, True)
         ok = True
     except (RecursionError, MemoryError) as exc:
         if not too_deep(exc):

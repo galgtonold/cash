@@ -17,8 +17,6 @@ import datetime
 import pickle
 import sys
 
-import pytest
-
 from cash import kept_state
 from cash.backends.memory_backend import InMemoryBackend
 
@@ -28,15 +26,6 @@ ROWS = 2_000
 def _sessions() -> list:
     start = datetime.datetime(2020, 1, 1)
     return [[uid, [("click", start + datetime.timedelta(seconds=uid + j)) for j in range(5)]] for uid in range(ROWS)]
-
-
-@pytest.fixture(autouse=True)
-def _on_this_thread(monkeypatch):
-    """Pickle on this thread, where the tracers below see it: on Python 3.10
-    under Windows a pickle runs on a thread with a large stack
-    (`kept_state._on_big_stack`), which costs the hook nothing more. These
-    rows are a few levels deep, well within any stack."""
-    monkeypatch.setattr(kept_state, "FLAT_FIRST", False)
 
 
 def _calls_by_name(run) -> dict[str, int]:
