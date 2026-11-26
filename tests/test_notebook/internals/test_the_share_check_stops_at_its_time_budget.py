@@ -8,6 +8,8 @@ the statement is refused (it re-runs each time) rather than cached late.
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from cash.notebook.shared_objects import WalkBudgetExceeded, share_group, walk_budget
@@ -50,3 +52,36 @@ def test_a_cheap_statement_gets_a_short_budget():
     from cash.notebook.statement import processor
 
     assert processor.SHARE_CHECK_FLOOR_S <= 0.1
+
+
+def test_two_threads_budgets_leave_no_budget_behind():
+    """Each thread's walk has its own budget: two threads' walks that begin
+    and end in turn leave none set for a third walk, on either thread."""
+    first_in, second_in, first_out = threading.Event(), threading.Event(), threading.Event()
+    errors = []
+
+    def first():
+        with walk_budget(0.0):
+            first_in.set()
+            second_in.wait(5)
+        first_out.set()
+
+    def second():
+        first_in.wait(5)
+        with walk_budget(60.0):
+            second_in.set()
+            first_out.wait(5)
+
+    threads = [threading.Thread(target=first), threading.Thread(target=second)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    try:
+        ns = _namespace()
+        values = {"session": ns["session"], "actions": ns["actions"]}
+        holders, _shared = share_group(["session", "actions"], values, ns)
+    except WalkBudgetExceeded as exc:
+        errors.append(exc)
+    assert not errors, "a budget of another thread's ended walk stopped this one"
+    assert set(holders) == {"sessions"}

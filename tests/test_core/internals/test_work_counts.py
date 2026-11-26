@@ -20,6 +20,7 @@ import pandas as pd
 import pytest
 
 from cash.backends._writes import all_pending_writes
+from cash.decorator import arg_hashing
 from tests._scripts import CASH_SRC, run_python
 from tests._work_counts import deepcopy_steps, hashed_bytes, pickled_bytes, tree_walks
 
@@ -138,6 +139,19 @@ def column_total(frame):
     return float(frame["a"].sum())
 
 
+@pytest.fixture
+def copy_on_write(monkeypatch, request):
+    """The frame memo needs copy-on-write: the only mode from pandas 3 on,
+    opt-in before it, so turned on here under pandas 2. Without it every
+    frame is read before and after each call, by design."""
+    if int(pd.__version__.split(".", 1)[0]) < 3:
+        before = pd.get_option("mode.copy_on_write")
+        pd.set_option("mode.copy_on_write", True)
+        request.addfinalizer(lambda: pd.set_option("mode.copy_on_write", before))
+        monkeypatch.setattr(arg_hashing, "_COW_PANDAS", None)
+
+
+@pytest.mark.usefixtures("copy_on_write")
 def test_a_frame_argument_is_read_once_on_a_miss_and_not_on_a_hit(disk_cash):
     frame = pd.DataFrame({"a": np.arange(500_000, dtype=np.float64), "b": np.arange(500_000)})
     size = int(frame.memory_usage(index=False).sum())
@@ -226,6 +240,9 @@ import pandas as pd
 
 import cash
 from tests._work_counts import hashed_bytes, pickled_bytes, tree_walks
+
+if int(pd.__version__.split(".", 1)[0]) < 3:
+    pd.set_option("mode.copy_on_write", True)  # the frame memo needs it
 
 
 def _scale(x):

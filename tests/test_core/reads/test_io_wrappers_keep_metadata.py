@@ -16,6 +16,7 @@ import os
 import subprocess
 import sys
 import textwrap
+import types
 
 import pytest
 
@@ -73,7 +74,12 @@ def test_a_wrapped_callable_keeps_its_signature_and_docs(index):
         original = getattr(current, "_original_func", None)
         if original is None:
             pytest.fail(f"{name} is not wrapped while a tracker is open")
-        assert _metadata(current) == _metadata(original)
+        expected = _metadata(original)
+        if not isinstance(original, types.FunctionType):
+            # Written in C, it is named where cash set it, not where it is
+            # kept (``os.path.exists`` is ``nt._path_exists`` on Windows).
+            expected["qualname"] = name
+        assert _metadata(current) == expected
         assert getattr(current, "__wrapped__", None) is original
 
 

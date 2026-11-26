@@ -85,6 +85,14 @@ def _snapshot(tracker):
     )
 
 
+def _without_root(text, root):
+    """*text* with *root* written as ``<root>``: the tracker records a path
+    with forward slashes (on Windows, ``C:/...``), whatever ``str`` gives."""
+    for form in {str(root), root.as_posix()}:
+        text = text.replace(form, "<root>")
+    return text
+
+
 def _scenario_repeat(tmp_path):
     for _ in range(5):
         _read(str(tmp_path / "a.txt"))
@@ -152,7 +160,7 @@ def test_the_block_records_what_it_records_with_every_read_in_full(tmp_path, mon
                 with tracker:
                     scenario(root)
             snapshot = _snapshot(tracker)
-        snapshots.append((str(snapshot).replace(str(root), "<root>"), full.calls))
+        snapshots.append((_without_root(str(snapshot), root), full.calls))
     (fast, fast_calls), (full_, full_calls) = snapshots
     assert fast == full_
     assert "a.txt" in fast or "b.txt" in fast  # positive control: something was recorded

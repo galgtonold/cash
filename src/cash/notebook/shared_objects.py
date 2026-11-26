@@ -47,6 +47,7 @@ import operator
 import pathlib
 import re
 import sys
+import threading
 import types
 import uuid
 import weakref
@@ -2127,7 +2128,16 @@ class ViewBasesCutShort(WalkBudgetExceeded):
         self.names = names
 
 
-_DEADLINE: list[CpuLimit | None] = [None]
+class _Deadline(threading.local):
+    """The limit of the walk in progress on this thread (`walk_budget`).
+    Per thread: one process-wide slot, set and put back by two threads'
+    walks in turn, was left holding the first one's limit after both had
+    ended, and every walk after it in the process gave up."""
+
+    limit: CpuLimit | None = None
+
+
+_DEADLINE = _Deadline()
 
 
 @contextlib.contextmanager
@@ -2142,26 +2152,26 @@ def walk_budget(seconds: float) -> Iterator[None]:
     each time, so the budget costs the cache a store, never a wrong value.
     The seconds are this thread's CPU time (`CpuLimit`).
     """
-    before = _DEADLINE[0]
-    _DEADLINE[0] = CpuLimit(seconds)
+    before = _DEADLINE.limit
+    _DEADLINE.limit = CpuLimit(seconds)
     try:
         yield
     finally:
-        _DEADLINE[0] = before
+        _DEADLINE.limit = before
 
 
 def walk_time_left() -> bool:
     """Is a :func:`walk_budget` in progress with time left? A walk with a
     fixed count of its own (the identity walk's) goes on past it while
     this holds."""
-    limit = _DEADLINE[0]
+    limit = _DEADLINE.limit
     return limit is not None and not limit.passed()
 
 
 def check_walk_budget() -> None:
     """Raise :class:`WalkBudgetExceeded` when the budget of the walk in
     progress is spent; nothing outside :func:`walk_budget`."""
-    limit = _DEADLINE[0]
+    limit = _DEADLINE.limit
     if limit is not None and _perf_counter() > limit.deadline and limit.passed():
         raise WalkBudgetExceeded
 
@@ -4261,7 +4271,7 @@ _CLIMBED_CONTAINERS = (*_CONTAINERS, collections.deque)
 
 def _past_deadline() -> bool:
     """Is the budget of the walk in progress spent (`walk_budget`)?"""
-    limit = _DEADLINE[0]
+    limit = _DEADLINE.limit
     return limit is not None and _perf_counter() > limit.deadline and limit.passed()
 
 

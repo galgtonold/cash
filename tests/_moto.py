@@ -16,8 +16,10 @@ stall on macOS; the server needs no name, so it binds without one.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import socketserver
+import sys
 import threading
 
 import pytest
@@ -67,3 +69,43 @@ def moto_s3_endpoint():
     finally:
         server.shutdown()
         server.server_close()
+        stop_fsspec_io_thread()
+
+
+def stop_fsspec_io_thread() -> None:
+    """Stop the event loop fsspec runs s3fs's calls on, and its thread.
+
+    fsspec keeps that loop for the process, on a daemon thread
+    (``fsspecIO``, with an ``asyncio_0`` executor thread beside it). Left
+    running, every later test of the xdist worker has a library thread
+    that may do the program's work, and outside Linux cash cannot tell
+    that it is idle (it reads other threads' processor time on Linux
+    only), so it does not blame a call for a change to a process setting
+    or a random stream: those tests then fail on Windows and macOS only.
+    The filesystems s3fs cached hold the loop, so they go with it; the
+    next one made starts a loop of its own.
+    """
+    asyn = sys.modules.get("fsspec.asyn")
+    if asyn is None or asyn.loop[0] is None:
+        return
+    with asyn.get_lock():
+        loop, thread = asyn.loop[0], asyn.iothread[0]
+        asyn.loop[0] = asyn.iothread[0] = None
+    if loop is None:
+        return
+    s3fs = sys.modules.get("s3fs")
+    if s3fs is not None:
+        # Closed on the loop while it runs: dropped with it, each one's
+        # HTTP session would be reported unclosed in whatever test the
+        # collector then ran in.
+        for fs in list(s3fs.S3FileSystem._cache.values()):
+            creator = getattr(fs, "_s3creator", None)
+            if creator is not None and getattr(fs, "loop", None) is loop:
+                with contextlib.suppress(Exception):  # closing a session the server dropped
+                    asyncio.run_coroutine_threadsafe(creator.__aexit__(None, None, None), loop).result(timeout=10)
+        s3fs.S3FileSystem.clear_instance_cache()
+    with contextlib.suppress(Exception):  # a loop already stopped has no executor to wait for
+        asyncio.run_coroutine_threadsafe(loop.shutdown_default_executor(), loop).result(timeout=10)
+    loop.call_soon_threadsafe(loop.stop)
+    if thread is not None:
+        thread.join(timeout=10)

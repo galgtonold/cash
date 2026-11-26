@@ -19,6 +19,7 @@ from __future__ import annotations
 import pytest
 
 from cash import value_hash, value_watch
+from cash.backends.persistence_policy import PersistencePolicy
 from tests._cell_driver import run_cash_cell
 
 MAKE = "import argparse\nm = argparse.Namespace(rows=[[i, i * 2.0] for i in range(2000)], n=0)\nmodels = [m]"
@@ -59,6 +60,10 @@ def _after(monkeypatch, cash_magics, reads):
 
 
 def test_the_list_holding_a_changed_object_is_read_once(cash_magics, mock_shell, monkeypatch, unwatched):
+    # Not stored, as on a quiet machine: a stored statement runs the store's
+    # hooks, after which the holder is read again (the test below), and a
+    # loaded runner's clock can put ``m.n += 1`` over the store floor.
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: True)
     mock_shell.user_ns["__name__"] = "__main__"
     run_cash_cell(cash_magics, MAKE)
     reads = _reads_of(monkeypatch, mock_shell, "models")

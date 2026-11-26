@@ -50,6 +50,7 @@ __all__ = [
     "AXIS_PROPERTY",
     "column_block",
     "column_row",
+    "copy_on_write",
     "ARROW_ARRAY_MODULE",
     "reset_frame_memo_state",
     "probe_frames",
@@ -404,6 +405,21 @@ def pandas_version() -> tuple[int, int] | None:
         return None
 
 
+def copy_on_write() -> bool:
+    """Is the loaded pandas under copy-on-write now? The only mode in pandas
+    3, opt-in before (``pd.options.mode.copy_on_write``). Read each time it
+    is asked: unlike the verdict of `frame_memo_usable`, a pandas 2 program
+    can switch it."""
+    pd = loaded_module("pandas")
+    version = pandas_version()
+    if pd is None or version is None:
+        return False
+    try:
+        return version[0] >= 3 or pd.options.mode.copy_on_write is True
+    except Exception:  # noqa: BLE001 - fails closed: unknown mode, no memo
+        return False
+
+
 # ---------------------------------------------------------------------------
 # The start-up self-test
 # ---------------------------------------------------------------------------
@@ -607,11 +623,7 @@ def _decide(remember: Callable[[Any], bool], vouched: Callable[[Any], bool]) -> 
     if pd is None or np is None or version is None:
         _STATE = (False, "")  # no pandas whose frames could reach the memo
         return
-    try:
-        cow = version[0] >= 3 or pd.options.mode.copy_on_write is True
-    except Exception:  # noqa: BLE001 - fails closed: unknown mode, no memo
-        cow = False
-    if not cow:
+    if not copy_on_write():
         _STATE = (False, "")
         return
     shown = ".".join(map(str, version))

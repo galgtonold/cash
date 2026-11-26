@@ -107,7 +107,6 @@ LIFETIMES: dict[str, dict[str, str]] = {
         "_SLOT_MEMBERS": _P,
         "_LIBRARY_KINDS": _P,
         "_REPAIR_SNAPSHOTS": _B,
-        "_DEADLINE": _B,
     },
     "cash.notebook.statement.derivation_edges": {"_EDGE_LOGS": _B},
     "cash.notebook.statement.held_generators": {"_METHOD_CHAINS": _P},
