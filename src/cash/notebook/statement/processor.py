@@ -31,6 +31,7 @@ from cash.diagnostics import log_diagnostic, warn_diagnostic
 from cash.exceptions import (
     CacheKeyComputationError,
     CashCacheIneffectiveWarning,
+    CashImpurityWarning,
     CashWarning,
 )
 from cash.lineage_tag import clear_tags, tags_untrusted
@@ -1660,8 +1661,9 @@ class StatementProcessor:
             where = "CASH_TRACE=0 turns off recording what a statement runs"
         else:
             where = "the monitoring tool that records what a statement runs could not be had"
+        # A result that may be stale, not a cache that does nothing.
         warn_diagnostic(
-            CashCacheIneffectiveWarning,
+            CashImpurityWarning,
             "KEY-LIBRARY-STATE-UNSEEN",
             f"a cached statement reaches library code and {where}, so a library setting changed in another "
             "cell (sklearn.set_config, pd.set_option, np.seterr, a ContextVar, an attribute set on a library's "

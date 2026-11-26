@@ -204,7 +204,9 @@ class CashImpurityWarning(CashCacheIneffectiveWarning):
     For example it writes a file, prints, changes a global, reads the
     environment or the network, or calls ``eval``. On a hit the stored
     result is returned and none of that happens. Log calls are not
-    reported. A subclass of `CashCacheIneffectiveWarning`.
+    reported. Also said where a served result may be out of date because
+    something it read is not checked (``KEY-LIBRARY-STATE-UNSEEN``, in a
+    notebook too). A subclass of `CashCacheIneffectiveWarning`.
 
     Fix: move the side effect out, mark an audited helper with `pure`, wrap
     the audited lines in ``with cash.assume_safe():``, or pass

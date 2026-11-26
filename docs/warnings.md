@@ -1667,7 +1667,7 @@ for the object), or pass the value in as an argument.
 
 ### KEY-LIBRARY-STATE-UNSEEN {#key-library-state-unseen}
 
-<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
 **What happened.** A cached call was stored, and its body ran unrecorded:
 on Python below 3.12, with `CASH_TRACE=0`, as a coroutine, or returning an
@@ -1702,7 +1702,9 @@ whose result a setting changes every time.
 **When it is safe to ignore.** When your cached code does not depend on
 library settings, or you never change them between runs.
 
-**Silencing it.** `warnings.filterwarnings("ignore",
+**Silencing it.** No waiver silences this code: not `# @cash:assume-safe`,
+`with cash.assume_safe():` or `assume_safe=True`. Filter it by its message:
+`warnings.filterwarnings("ignore",
 message=r"\[KEY-LIBRARY-STATE-UNSEEN\]")`. See [Silencing one
 code](#silencing-one-code).
 
