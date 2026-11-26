@@ -458,8 +458,27 @@ def runs_user_code(t: threading.Thread, notebook_ns: Any) -> bool:
 
 
 #: Threads of what hosts the notebook that change none of its values (a test
-#: runner's watchdog), left out by `other_thread_alive`. Held weakly.
+#: runner's watchdog), left out by `other_thread_alive`, and their code by
+#: the recorder of a call's trace (`on_host_thread`). Held weakly.
 HOST_THREADS: weakref.WeakSet[threading.Thread] = _weak.WeakSet()
+
+
+def on_host_thread() -> bool:
+    """Is this thread one of `HOST_THREADS`? By its ident, while that thread
+    is alive (an ended one's ident may be another's now): never through
+    ``threading.current_thread``, which makes a thread `threading` does not
+    list one it does. Asked from the recorder's callbacks, on any thread:
+    a set another thread changes meanwhile is no answer, and a no keeps the
+    code the call's."""
+    if not HOST_THREADS:
+        return False
+    me = threading.get_ident()
+    try:
+        hosts = list(HOST_THREADS)
+    except RuntimeError:
+        return False
+    return any(t.ident == me and t.is_alive() for t in hosts)
+
 
 #: The packages of what hosts the notebook whose threads `threading` does
 #: not list (a test runner's channel threads), left out by

@@ -995,14 +995,16 @@ def _recorder_class() -> type:
             the call's: its code put in the trace and its class attributes
             in the library settings the entry is checked on, which a hit
             then found moved (or code no scan watches), and the call was
-            computed again, or never served from its memo."""
+            computed again, or never served from its memo. So was what a
+            host's own thread (`trace_recorder.HOST_THREADS`, the test
+            runner's stall watchdog) ran when it woke mid-call."""
             me = threading.get_ident()
             for unit in self.active:
                 if unit.thread == me:
                     return False
             if self.stack and self.stack[-1].thread == me:
                 return False
-            return rec.works_for_no_call(frame)
+            return rec.works_for_no_call(frame) or rec.on_host_thread()
 
         def _note_site(self, code: types.CodeType, frame: Any) -> None:
             caller = frame.f_back
