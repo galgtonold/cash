@@ -108,6 +108,7 @@ from ..tracking.process_registries import register_atexit
 from ..tracking.tracker_context import untracked
 
 __all__ = [
+    "NoNameHolds",
     "TraceUnit",
     "active",
     "begin",
@@ -2227,6 +2228,14 @@ class _Unnamed(_Untraceable):
     trace leaves it out unless the call needs its trace (`_Build`)."""
 
 
+class NoNameHolds(str):
+    """Why `build` has no trace, when it is code that ran and that no name
+    holds (`_Unnamed`): no later call running that code can be stored
+    either, so the refusal keeps a verdict (`refusal_verdicts`). Not a
+    trace refused for what it found (a side effect on a line that ran, a
+    global that moved), which the next call may not meet."""
+
+
 _MISSING = object()
 
 
@@ -2814,6 +2823,8 @@ def build(
         if why is not None:
             return None, why
         return items, ""
+    except _Unnamed as e:
+        return None, NoNameHolds(str(e))
     except _Untraceable as e:
         return None, str(e)
     except Exception as e:  # noqa: BLE001 - fails closed: a trace that cannot be built is not stored

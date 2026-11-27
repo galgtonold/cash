@@ -2,7 +2,11 @@
 arguments in a way a hit cannot replay: such a call is never stored
 (`ResultStore.refusal`), so building its key is work thrown away.
 
-A call that was refused for that reason leaves a verdict, kept in the
+A call refused because it picked code by a run-time name and ran code no
+later process can find again (`UntracedRefusal`) leaves one too, kept from
+its first refusal: no later call can be stored with it either.
+
+A call that was refused for either reason leaves a verdict, kept in the
 process and beside the cache (`StoredKeyRecord.note_refused`), under a key
 made of what is known before the cache key is built: the function's own
 code digest, the digests of the helpers holding a finding that can change
@@ -52,7 +56,7 @@ if TYPE_CHECKING:
     from .cached_function import CachedFunction
     from .stored_keys import StoredKeyRecord
 
-__all__ = ["REPROBE_EVERY", "ArgumentRefusal", "RefusalVerdicts"]
+__all__ = ["REPROBE_EVERY", "ArgumentRefusal", "RefusalVerdicts", "UntracedRefusal"]
 
 #: One call in this many with a verdict is keyed and checked again.
 REPROBE_EVERY = 20
@@ -83,6 +87,22 @@ class ArgumentRefusal(str):
         made = super().__new__(cls, text)
         made.unreplayable = unreplayable
         return made
+
+
+class UntracedRefusal(str):
+    """A refusal (`CallRunner._refuse_untraced`) because the call picks
+    code by a run-time name and ran code no later process can find again
+    (a closure no name of its module holds, `code_trace.NoNameHolds`): a
+    verdict is kept for it too. Not one refused for what its trace found
+    (a side effect on a line that ran, a global that moved), which the
+    next call may not meet.
+    It is decided only once the full key is built and the body has run,
+    and that key moves with every global the call reads (a library's
+    ``__version__`` written into the text describing a fit, moved by every
+    commit), so the
+    "not stored last time" note never met it again: each call built its
+    full key to be refused (NiMARE's ``_fit`` through a ``cash.cache``
+    swapped in for nilearn's cache, over a second each)."""
 
 
 def _type_name(value: Any) -> str:

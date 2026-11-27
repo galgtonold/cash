@@ -2173,7 +2173,7 @@ by a name known only at run time: `getattr(module, name)()`,
 the line. The function runs uncached, and so does every cached function that
 calls it.
 
-<!-- claim: cash/decorator/code_trace.py:build @d088b4aa, cash/decorator/code_trace.py:verify @c38eb0d3 -->
+<!-- claim: cash/decorator/code_trace.py:build @26cfad4e, cash/decorator/code_trace.py:verify @c38eb0d3, cash/decorator/refusal_verdicts.py:REPROBE_EVERY == 20 -->
 A lookup by name (`getattr(module, name)`,
 `importlib.import_module(name)`, `__import__(name)`) is cached instead: cash
 records the code the call ran and what each lookup found, and serves a later
@@ -2182,6 +2182,9 @@ record cannot be checked again, and says why: the call ran a function that has
 side effects or reads the clock, changed a global that code reads in place
 (`heapq.heappush(HEAP, x)`: a hit would not change it again), a function no
 name finds, a value too big to digest, or it left a thread running.
+When it is a function no name finds, later calls with the same code and
+argument types run uncached without building their key, in later processes
+too; one in 20 is keyed and checked again.
 
 <!-- claim: cash/decorator/runtime.py:CallRunner._refuse_unrecorded @71216f5f, cash/decorator/runtime.py:KeyBuilder.carried_helpers_digest @644fc4f2 -->
 The same warning comes for a call that was handed code (an object whose

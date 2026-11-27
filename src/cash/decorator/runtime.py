@@ -123,7 +123,7 @@ from .function_identity import func_key, hash_callable_source
 from .global_values import KEY_BUILD_DIGESTS
 from .globals_fold import READS_FOLDED
 from .iterators import ChunkedCachedIterator, StreamingCachedIterator, chunk_prefix, is_one_shot_iterator
-from .refusal_verdicts import ArgumentRefusal, RefusalVerdicts
+from .refusal_verdicts import ArgumentRefusal, RefusalVerdicts, UntracedRefusal
 from .registry import resolve_dynamic_dependencies
 from .rng import capture_rng_pre_state, replay_rng_state
 from .store import StoreRequest
@@ -1887,7 +1887,8 @@ class CallRunner:
 
     def _known_refusal(self, spec: CachedFunction, call: Call, handed: Any) -> bool:
         """Run *call* uncached when an earlier call with the same code and
-        argument types changed an argument in a way a hit cannot replay
+        argument types changed an argument in a way a hit cannot replay, or
+        ran code by a run-time name no later process can find again
         (`refusal_verdicts`): its result would not be stored, and building
         its key and checking it after the body is work thrown away. True
         when *call* ran; else the call is keyed as any other, and keeps or
@@ -1959,6 +1960,15 @@ class CallRunner:
         func_name = spec.name
         warnings = self._notices.recorded_warnings(func_name) or []
         call.refusal_probe = False
+        if isinstance(refusal, UntracedRefusal):
+            # No later call with this code and these argument types can be
+            # stored either: kept from the first refusal, as the key it was
+            # decided after may differ on every call.
+            key = call.refusal_key or self._verdict_key(spec, call)
+            if key is not None:
+                earlier = self._first_refusal_warnings.pop(func_name, [])
+                self._verdicts.refused(func_name, key, refusal, [*earlier, *warnings])
+            return
         if not isinstance(refusal, ArgumentRefusal):
             if call.refusal_key is not None:
                 self._verdicts.drop(func_name, call.refusal_key)
@@ -3336,7 +3346,11 @@ class CallRunner:
             fix="call the function by name, or pass it in as an argument; "
             "`# @cash:assume-safe` on that line caches anyway.",
         )
-        return f"it picks code by a run-time name and {why}"
+        refusal = f"it picks code by a run-time name and {why}"
+        # Code that ran and that no name holds keeps a verdict; a trace
+        # refused for what it found (a side effect on a line that ran) does
+        # not: the next call, with a global moved back, may be served.
+        return UntracedRefusal(refusal) if isinstance(why, code_trace.NoNameHolds) else refusal
 
     def _refuse_unrecorded(self, spec: CachedFunction, why: str) -> str:
         """Say once why a call handed code that reaches helpers is not
