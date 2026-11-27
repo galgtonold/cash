@@ -78,9 +78,11 @@ def made(monkeypatch):
         counted.append("load")
         return load(self)
 
-    def counting_clone(holder, index):
-        counted.append("clone")
-        return clone(holder, index)
+    def counting_clone(*args):
+        copy = clone(*args)
+        if copy is not None:  # refused: nothing made
+            counted.append("clone")
+        return copy
 
     monkeypatch.setattr(memory_backend._Pickled, "load", counting_load)
     if clone is not None:
@@ -188,3 +190,27 @@ def test_a_kept_copy_held_again_is_replaced_again(word_trie, made):
         del again
     assert made == [], "no hit made a new copy"
     assert second_holder[0].words() == PLAIN
+
+
+def test_repeated_hits_while_one_copy_is_held_make_two_copies_in_all(word_trie, made):
+    # The work a run of hits does, pinned: with the first copy held for
+    # good (a tokenizer keeping the trie) and every later caller letting go,
+    # twenty hits make two copies from the held one -- the second kept in
+    # its place -- and read none out of the bytes; the rest hand that one
+    # back.
+    made.clear()
+    for _ in range(20):
+        released_hit(word_trie)
+    assert made == ["clone", "clone"]
+    assert HOLDER[0].words() == PLAIN
+    # One served and changed by its caller, then dropped: the next hit is
+    # one new copy, and none after it shows the change.
+    served = word_trie()
+    served.root.children["a"].end = "changed"
+    served.tags[1].append("changed")
+    del served
+    made.clear()
+    for _ in range(5):
+        released_hit(word_trie)
+    assert made == ["load"], "the changed copy is neither handed out nor copied"
+    assert word_trie().tags == [("trie", 1), ["mutable", "tag"]]
