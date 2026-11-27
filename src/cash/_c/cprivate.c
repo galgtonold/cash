@@ -101,6 +101,13 @@ static int ov_push(ObjVec *v, PyObject *o) {
 /* shared by every copy, or immutable all the way down: not counted */
 static int is_shared(PyObject *o, int depth) {
     PyTypeObject *t = Py_TYPE(o);
+    /* the containers and instances a value is made of, answered first: a
+       class defined in Python is none of the kinds below unless it is a
+       metaclass (a function, a builtin and a module cannot be subclassed
+       into one, and only exact tuples and frozensets are read) */
+    if (t == &PyDict_Type || t == &PyList_Type ||
+        ((t->tp_flags & Py_TPFLAGS_HEAPTYPE) && !(t->tp_flags & Py_TPFLAGS_TYPE_SUBCLASS)))
+        return 0;
     if (o == Py_None || o == Py_Ellipsis || o == Py_NotImplemented) return 1;
     if (t == &PyLong_Type || t == &PyBool_Type || t == &PyFloat_Type || t == &PyComplex_Type ||
         t == &PyUnicode_Type || t == &PyBytes_Type)
@@ -461,11 +468,27 @@ static int is_slot(const PyMemberDef *m) {
     return m->type == Py_T_OBJECT_EX && !(m->flags & Py_READONLY) && m->offset > 0;
 }
 
+#define NCLONE_TYPES 8
+
 typedef struct {
     CloneMemo memo;
     ObjVec todo;   /* pairs: an original, then its new copy still to fill */
     int failed;    /* 1 not clonable, -1 error */
+    /* The classes `clonable_type` passed in this call: asked once per
+       class, not once per instance (a trie's nodes are all one class).
+       No Python code runs while the copy is made, so none can change. */
+    PyTypeObject *clonable[NCLONE_TYPES];
+    int nclonable;
 } Clone;
+
+/* `clonable_type`, remembered for the call. */
+static int clonable_in(PyTypeObject *t, Clone *C) {
+    for (int i = 0; i < C->nclonable; i++)
+        if (C->clonable[i] == t) return 1;
+    if (!clonable_type(t)) return 0;
+    if (C->nclonable < NCLONE_TYPES) C->clonable[C->nclonable++] = t;
+    return 1;
+}
 
 /* The copy of `o`, a new reference: `o` itself when shared, the copy made
    already when `o` was met before, else a new empty copy, filled later
@@ -482,7 +505,7 @@ static PyObject *clone_shell(PyObject *o, Clone *C) {
     if (t == &PyDict_Type) copy = PyDict_New();
     else if (t == &PyList_Type) copy = PyList_New(PyList_GET_SIZE(o));
     else if (t == &PyTuple_Type) copy = PyTuple_New(PyTuple_GET_SIZE(o));
-    else if (clonable_type(t)) copy = t->tp_alloc(t, 0);
+    else if (clonable_in(t, C)) copy = t->tp_alloc(t, 0);
     else { C->failed = 1; return NULL; }
     if (!copy) { C->failed = -1; return NULL; }
     if ((many && cm_put(&C->memo, o, copy) < 0) || ov_push(&C->todo, o) < 0 || ov_push(&C->todo, copy) < 0) {
@@ -572,7 +595,7 @@ static PyObject *py_clone_held(PyObject *self, PyObject *const *args, Py_ssize_t
     if (nargs == 4 && !cwatch_holds_token(root, kind, args[3])) Py_RETURN_NONE;
     if (is_shared(root, 0)) Py_RETURN_NONE;
     int gc_was_on = PyGC_Disable();
-    Clone C = {{0}, {0}, 0};
+    Clone C = {{0}, {0}, 0, {0}, 0};
     PyObject *copy = clone_shell(root, &C);
     /* depth first, as `held_alone` walks */
     while (copy && !C.failed && C.todo.n) {

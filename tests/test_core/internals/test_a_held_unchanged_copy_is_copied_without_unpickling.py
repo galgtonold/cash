@@ -134,3 +134,57 @@ def test_the_copy_holds_new_objects_and_the_shared_ones():
     assert copy["x"][0] is not value["x"][0]
     assert copy["t"] is value["t"], "an immutable tuple of atoms is shared"
     assert copy["n"] is not value["n"] and copy["n"].children is not value["n"].children
+
+
+def _classes(n):
+    """*n* plain classes of slots."""
+    return [type(f"C{i}", (), {"__slots__": ("link", "n")}) for i in range(n)]
+
+
+def test_more_classes_than_the_call_remembers_are_each_copied():
+    # `clone_held` asks whether a class may be copied once per class, for
+    # the first few it meets: the classes past those are asked per object.
+    chain = None
+    for i, cls in enumerate(_classes(12) * 2):
+        obj = cls()
+        obj.link = chain
+        obj.n = i
+        chain = obj
+    value = chain
+    copy = cwatch.clone_held([value], 0)
+    assert copy is not None
+    a, b = value, copy
+    while a is not None:
+        assert type(b) is type(a) and b is not a
+        assert b.n == a.n
+        a, b = a.link, b.link
+    assert b is None
+
+
+def test_a_class_met_after_clonable_ones_is_still_refused():
+    # Remembering the classes that passed lets none through that did not.
+    nodes = [Node() for _ in range(20)]
+    value = pickle.loads(pickle.dumps({"nodes": nodes, "last": WithSetstate()}))
+    assert cwatch.clone_held([value], 0) is None
+
+
+class Meta(type):
+    pass
+
+
+class Shell(metaclass=Meta):
+    pass
+
+
+class TupleKind(tuple):
+    pass
+
+
+def test_a_class_is_shared_and_a_tuple_subclass_is_not_copied():
+    value = pickle.loads(pickle.dumps({"cls": Shell, "meta": Meta, "node": Node()}))
+    copy = cwatch.clone_held([value], 0)
+    assert copy["cls"] is Shell and copy["meta"] is Meta, "a class is shared"
+    assert copy["node"] is not value["node"]
+    # an instance of a class of the user's subclassing a builtin is no kind
+    # the copy makes: the hit reads the bytes instead
+    assert cwatch.clone_held([{"tup": TupleKind(([1],))}], 0) is None
