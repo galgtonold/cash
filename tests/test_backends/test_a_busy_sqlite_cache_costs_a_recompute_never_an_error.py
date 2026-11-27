@@ -207,10 +207,13 @@ def f(n):
     return bytes([n]) * 400_000
 
 rng = random.Random(int(sys.argv[1]))
+# Four seconds, and at least 30 calls each: a process the others keep
+# waiting on the database's lock still makes enough calls to be tested.
 end = time.time() + 4
+give_up = time.time() + 60
 errors = {}
 calls = 0
-while time.time() < end:
+while (time.time() < end or calls < 30) and time.time() < give_up:
     n = rng.randrange(40)
     try:
         assert f(n)[0] == n
