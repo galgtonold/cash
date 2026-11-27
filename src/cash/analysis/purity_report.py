@@ -72,6 +72,10 @@ ISSUE_AMBIENT_READ = "ambient_read"
 # there is a knob made for exactly this: `ttl=` bounds how old a served answer
 # may be, and setting one silences the advisory.
 ISSUE_NETWORK_READ = "network_read"
+#: How the description of an ISSUE_AMBIENT_READ starts when it is about a
+#: function built by ``exec`` whose source cannot show what it reads
+#: (`HelperWalk._reads_unseen`), not about a read the source names.
+UNSEEN_SOURCE_READ = "state cash cannot see"
 #: The kinds of finding about what a body reads, not what it changes.
 READ_ONLY_ISSUE_KINDS = frozenset({ISSUE_AMBIENT_READ, ISSUE_NETWORK_READ, ISSUE_MUTABLE_GLOBAL})
 

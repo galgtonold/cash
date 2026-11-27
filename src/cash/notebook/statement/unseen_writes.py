@@ -40,6 +40,7 @@ from ..._type_memo import class_name
 from ..._user_attrs import attribute_or, from_family, has_attribute, instance_of, own_dict, static_attr
 from ...analysis.ast_util import walk_tree
 from ...analysis.callee_effects import free_vars_mutated_in_function, scope_locals
+from ...analysis.helper_code import library_made, unseen_reads
 from ...analysis.mutations import MUTATING_METHODS
 from ...exceptions import SOURCE_RETRIEVAL_ERRORS
 from ...install_paths import is_user_code_file
@@ -770,27 +771,6 @@ def _live_writing_classes(namespace: Mapping[str, Any], hc: Any) -> list[type]:
     return [c for c in bound + users_module_classes() + hc.live_users_classes() if hc.reaching_special_functions(c)]
 
 
-def library_made(code: types.CodeType, globals_: Mapping[str, Any]) -> bool:
-    """Is *code* a method a library wrote for a class of the user's, from
-    text of its own: what ``@dataclass`` (``__create_fn__``), attrs
-    (``<attrs generated ...>``) or ``namedtuple`` (its ``__new__``) make.
-    They set the object's own fields and change nothing outside it; what
-    they call of the user's (a ``default_factory``, ``__post_init__``) ran
-    as code of its own and is read in turn. Their text has no file, so read
-    as any other function's they would count as changing what their
-    unreadable text changes: every statement making such an object of a
-    class in a module of the user's was refused."""
-    filename = code.co_filename
-    if filename.startswith("<attrs generated"):
-        return True
-    if filename != "<string>":
-        return False
-    if attribute_or(code, "co_qualname", "").startswith("__create_fn__.<locals>."):
-        return True
-    name = globals_.get("__name__") if isinstance(globals_, Mapping) else None
-    return code.co_name == "<lambda>" and isinstance(name, str) and name.startswith("namedtuple_")
-
-
 #: How many functions `unreadable_changers` follows from one statement.
 _CALLEES_FOLLOWED = 200
 
@@ -799,9 +779,11 @@ def unreadable_changers(names: Iterable[str], namespace: Mapping[str, Any]) -> l
     """The functions of the user's, among *names* and the functions they call
     by name, whose text cannot be read (``exec`` of a ``def``, a lambda
     compiled from a string) and whose bytecode does not show that they change
-    nothing (`own_writes` gives ``"?"``). The statement's own analysis reads
-    callees by their text and took such a one for a builtin, so a hit was
-    served while traces were off and what it changes was left unchanged."""
+    nothing (`own_writes` gives ``"?"``) and read nothing a key misses
+    (`unseen_reads`). The statement's own analysis reads callees by their
+    text and took such a one for a builtin, so a hit was served while traces
+    were off and what it changes was left unchanged, and a helper returning
+    ``os.environ["MODE"]`` gave its first value after the variable changed."""
     found: list[str] = []
     seen: set[int] = set()
     pending = [(name, namespace) for name in sorted(names)]
@@ -815,11 +797,17 @@ def unreadable_changers(names: Iterable[str], namespace: Mapping[str, Any]) -> l
         if not is_user_code_file(code.co_filename) and code.co_filename != "<string>":
             continue
         if _function_node(code) is None:
-            if _UNKNOWN in own_writes(code):
+            if _UNKNOWN in own_writes(code) or unseen_reads(fn, _walked_nowhere):
                 found.append(name)
             continue
         pending.extend((callee, fn.__globals__) for callee in code.co_names)
     return found
+
+
+def _walked_nowhere(_value: Any) -> bool:
+    """`unseen_reads`' *followed* here: no callee is followed from code
+    with no text, and one it calls already has `own_writes` give ``"?"``."""
+    return False
 
 
 def _method_named(path: str, scope: Mapping[str, Any]) -> Any:

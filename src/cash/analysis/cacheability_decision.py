@@ -50,6 +50,7 @@ from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.ast_util import called_dotted_names, parse_cached
 from cash.analysis.cacheability import StatementAnalysis
 from cash.analysis.namespace_effects import statement_user_pyplot_call, statement_user_writer_call
+from cash.analysis.purity_report import UNSEEN_SOURCE_READ
 from cash.diagnostics import warn_diagnostic
 from cash.exceptions import CashCacheIneffectiveWarning, CashImpurityWarning
 from cash.value_types import BUILTIN_NAMES, mro_kind
@@ -503,8 +504,16 @@ def _helper_ambient_reasons(code: str, user_ns: Mapping[str, Any]) -> list[str]:
     says so once per function and read."""
     from cash.notebook.lineage_formula import helper_ambient_reads
 
+    found = helper_ambient_reads(code, user_ns)
+    if any(issue.description.startswith(UNSEEN_SOURCE_READ) for _, issue in found) and _unreadable_called(
+        code, user_ns
+    ):
+        # The statement calls a function with no text that may change or
+        # read what no key holds: the check for those refuses it and says
+        # which (NOTEBOOK-UNSEEN-WRITES). Said here too, it would be said twice.
+        found = [(fn, issue) for fn, issue in found if not issue.description.startswith(UNSEEN_SOURCE_READ)]
     reasons = []
-    for fn, issue in helper_ambient_reads(code, user_ns):
+    for fn, issue in found:
         name = plain_getattr(fn, "__qualname__", plain_getattr(fn, "__name__", "a function"))
         read = issue.description.partition(" - ")[0]
         via = f"{name}()"
@@ -527,6 +536,19 @@ def _helper_ambient_reasons(code: str, user_ns: Mapping[str, Any]) -> list[str]:
             ),
         )
     return reasons
+
+
+def _unreadable_called(code: str, user_ns: Mapping[str, Any]) -> bool:
+    """Does *code* call a function whose text cannot be read and that may
+    change or read what no key holds (`unreadable_changers`)? The statement
+    processor refuses such a statement with its own message."""
+    from cash.analysis.ast_util import called_names, handed_names
+    from cash.notebook.statement.unseen_writes import called_methods, unreadable_changers
+
+    tree = parse_cached(code)
+    if tree is None:
+        return False
+    return bool(unreadable_changers(called_names(tree) | handed_names(tree) | called_methods(tree), user_ns))
 
 
 def has_missing_lineage(

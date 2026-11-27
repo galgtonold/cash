@@ -43,6 +43,7 @@ _EXEMPT = {
     ("purity_analyzer", "_code_memo_key"): "a memo key, outside the walk",
     # Whether a pseudo-file (``<string>``) has lines at all: no file.
     ("helper_code", "_function_is_exec_built"): "a pseudo file",
+    ("helper_walk", "_reads_unseen"): "a pseudo file",
     # A module not loaded yet, read to vouch for what importing it binds:
     # all the walk takes from it is whether it can (`source_digest` is not
     # None), which the stored report works out again on every check

@@ -141,7 +141,7 @@ warnings.filterwarnings("ignore", category=cash.CashRandomnessWarning)
 **Symptom:** a statement that calls one of your functions runs on every run,
 with a KEY-AMBIENT-READ warning.
 
-<!-- claim: cash/analysis/cacheability_decision.py:_helper_ambient_reasons @4b025f14, cash/notebook/lineage_formula.py:helper_ambient_reads @63c0d1e5 -->
+<!-- claim: cash/analysis/cacheability_decision.py:_helper_ambient_reasons @bf50cd79, cash/notebook/lineage_formula.py:helper_ambient_reads @63c0d1e5 -->
 A clock read written in the statement itself (`t = datetime.now()`) runs every
 time, and so does a statement that calls a function of yours which reads the
 clock, a fresh UUID or random bytes from the system (`time.time()`,

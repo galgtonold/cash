@@ -1298,6 +1298,16 @@ passed as an argument, and a property or dunder method (`settings.stamp`,
 `settings["KEY"]`, `with settings as mode:`) of an object the function reads
 or is given.
 
+<!-- claim: cash/analysis/helper_walk.py:HelperWalk._reads_unseen @2f850546, cash/analysis/helper_code.py:unseen_reads @5688ee75 -->
+A helper built by `exec` from a string
+(`exec("def stamp(x):\n    return x + time.time()", globals())`) has no
+source to show such a read. When its compiled code reads an attribute,
+imports, or calls something other than its arguments, builtins such as
+`len` and functions of yours cash reads, it is reported as reading state cash
+cannot see: the decorator warns, and a notebook statement calling it runs
+every time. A helper built so that only computes on its arguments is cached
+as before.
+
 <!-- claim: cash/effects.py:environment_input @3b23d3f4, cash/decorator/environment_fold.py:EnvironmentFold.fold_environment @db1c6b07 -->
 <!-- claim: cash/analysis/purity_flow.py:is_log_helper @6bf250bd, cash/analysis/ambient_reads.py:log_helper_names @8960a844 -->
 <!-- claim: cash/analysis/ambient_reads.py:clock_helper_read @a0285688 -->
@@ -1317,7 +1327,7 @@ reading that only goes into a log line is not reported either.
 **Why it matters.** The value is an input the key cannot see. The first call's
 value is stored and returned to every later call, in every later process.
 
-<!-- claim: cash/analysis/cacheability_decision.py:_helper_ambient_reasons @4b025f14 -->
+<!-- claim: cash/analysis/cacheability_decision.py:_helper_ambient_reasons @bf50cd79 -->
 In a notebook, a statement that calls a function of yours making such a read
 (`s = stamp(1)`, where `stamp` returns `time.time()`), there or in a helper it
 calls, is not cached: it runs every time, as it would without cash, and the
@@ -3080,6 +3090,15 @@ the statement runs every time. A function whose text cash cannot read (one
 made by `exec`, or in a `%%time` cell, whose text IPython does not keep) is
 said to change "what its unreadable text changes", and the statement runs
 every time; define it in a cell or a module of its own.
+
+<!-- claim: cash/notebook/statement/unseen_writes.py:unreadable_changers @30f79103, cash/analysis/helper_code.py:unseen_reads @5688ee75 -->
+Such a function is let through only when its compiled code shows it changes
+nothing and reads nothing a key misses: it reads no attribute, imports
+nothing, and calls nothing but its arguments and builtins such as `len`.
+`exec("def helper(x):\n    return x + os.environ['MODE']", ns)` reads an
+attribute, so a statement calling it runs every time, waived or not, and a
+changed `MODE` is not served its old value. The message then says what it
+"reads or changes" cannot be told.
 
 Without that record, a value too big to look through (more than 20,000
 objects to open, two million items of lists, dicts and arrays of objects to
