@@ -49,7 +49,7 @@ from cash.analysis.analysis_budget import (
 )
 from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.cacheability import analyze_statement
-from cash.analysis.cacheability_decision import decide_cacheability
+from cash.analysis.cacheability_decision import decide_cacheability, unreadable_called
 from cash.analysis.handed_callables import hands_a_state_changing_callable
 from cash.analysis.namespace_effects import user_callee_starting_workers, user_callee_using_pyplot
 from cash.backends.persistence_policy import COMPUTE_FLOOR_S, restore_kind
@@ -160,6 +160,15 @@ def call_site_is_cacheable(
     """
     tree = ast.Module(body=[ast.Expr(value=call_node)], type_ignores=[])
     code = ast.unparse(call_node)
+    if unreadable_called(code, user_ns):
+        # A function built by ``exec`` whose bytecode does not rule out a
+        # read of the environment or the clock, or a change to what no key
+        # holds (`unreadable_changers`): the statement path refuses it
+        # whatever the waiver, and the verdict below leaves the read to that
+        # check. Wrapped here, a call of 3ms or more was stored and served
+        # its first ``os.environ['MODE']`` after the variable changed, under
+        # a statement said to run every time.
+        return False, [_UNREADABLE_CALLEE_REASON]
     inputs = names_read(call_node) - local_names if variable_lineage is not None else set()
     return decide_cacheability(
         code=code,
@@ -173,6 +182,13 @@ def call_site_is_cacheable(
         is_stateful_call=is_stateful_call,
         scan_forbidden=scan_forbidden,
     )
+
+
+#: Why `call_site_is_cacheable` refuses a call of a function built by ``exec``.
+_UNREADABLE_CALLEE_REASON = (
+    "Calls a function whose text cannot be read (defined through exec, or compiled from a string): "
+    "what it reads or changes cannot be told, so the call runs every time"
+)
 
 
 #: Below this, a call is not worth a key, a store, or a timer.

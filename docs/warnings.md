@@ -1356,7 +1356,7 @@ reading that only goes into a log line is not reported either.
 **Why it matters.** The value is an input the key cannot see. The first call's
 value is stored and returned to every later call, in every later process.
 
-<!-- claim: cash/analysis/cacheability_decision.py:_helper_ambient_reasons @bf50cd79 -->
+<!-- claim: cash/analysis/cacheability_decision.py:_helper_ambient_reasons @ab587cdc -->
 In a notebook, a statement that calls a function of yours making such a read
 (`s = stamp(1)`, where `stamp` returns `time.time()`), there or in a helper it
 calls, is not cached: it runs every time, as it would without cash, and the

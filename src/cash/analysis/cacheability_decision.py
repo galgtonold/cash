@@ -67,6 +67,7 @@ __all__ = [
     "decide_cacheability",
     "identity_coupled_reason",
     "receiver_is_identity_coupled",
+    "unreadable_called",
 ]
 
 # --- Identity-coupled library objects ---------------------------
@@ -505,12 +506,12 @@ def _helper_ambient_reasons(code: str, user_ns: Mapping[str, Any]) -> list[str]:
     from cash.notebook.lineage_formula import helper_ambient_reads
 
     found = helper_ambient_reads(code, user_ns)
-    if any(issue.description.startswith(UNSEEN_SOURCE_READ) for _, issue in found) and _unreadable_called(
-        code, user_ns
-    ):
+    if any(issue.description.startswith(UNSEEN_SOURCE_READ) for _, issue in found) and unreadable_called(code, user_ns):
         # The statement calls a function with no text that may change or
         # read what no key holds: the check for those refuses it and says
-        # which (NOTEBOOK-UNSEEN-WRITES). Said here too, it would be said twice.
+        # which (NOTEBOOK-UNSEEN-WRITES), and the call cache's gate refuses
+        # such a call on its own (`call_site_is_cacheable`). Said here too,
+        # it would be said twice.
         found = [(fn, issue) for fn, issue in found if not issue.description.startswith(UNSEEN_SOURCE_READ)]
     reasons = []
     for fn, issue in found:
@@ -538,10 +539,12 @@ def _helper_ambient_reasons(code: str, user_ns: Mapping[str, Any]) -> list[str]:
     return reasons
 
 
-def _unreadable_called(code: str, user_ns: Mapping[str, Any]) -> bool:
+def unreadable_called(code: str, user_ns: Mapping[str, Any]) -> bool:
     """Does *code* call a function whose text cannot be read and that may
     change or read what no key holds (`unreadable_changers`)? The statement
-    processor refuses such a statement with its own message."""
+    processor refuses such a statement with its own message, and the call
+    cache's gate such a call (`call_site_is_cacheable`): the verdict here
+    leaves the read out for them."""
     from cash.analysis.ast_util import called_names, handed_names
     from cash.notebook.statement.unseen_writes import called_methods, unreadable_changers
 

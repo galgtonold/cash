@@ -10,6 +10,11 @@ gives the new one. The bytecode shows it may read what the key misses (an
 attribute here), so the statement runs every time, and says so once, as
 for one built by a local module. A helper built so that only computes on
 its argument is still cached.
+
+The call inside the statement is the call cache's to route, and its gate
+left the read to the statement's check: a call of 3ms or more was stored
+and served the old value under a statement that ran every time (once on a
+loaded CI runner). The gate refuses such a call too.
 """
 
 from __future__ import annotations
@@ -67,6 +72,27 @@ def test_a_changed_variable_is_not_served_the_old_value(
     assert mock_shell.user_ns["r"] == "1b", "served the value of the old variable"
     assert again["status"] == CacheStatus.COMPUTED
     assert any("what it reads or changes" in reason for reason in again["uncacheable_reasons"])
+
+
+@pytest.mark.parametrize("annotation", [_PERSIST, _WAIVED], ids=["plain", "waived"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "def helper(x):\n    return x + os.environ['CASH_T_EXEC_MODE']",
+        "helper = lambda x: x + os.environ['CASH_T_EXEC_MODE']",
+    ],
+    ids=["def", "lambda"],
+)
+def test_its_call_is_not_served_from_the_call_cache(
+    cash_magics, cash_instance, mock_shell, statement_processor, monkeypatch, text, annotation
+):
+    # Every call clears the floor, as one of 3ms or more does.
+    monkeypatch.setattr(cash_instance.config, "call_cost_floor_seconds", 0.0)
+    _cell(cash_magics, BUILT.format(text=text))
+    _run(statement_processor, "r = helper('1')", annotation)
+    monkeypatch.setenv("CASH_T_EXEC_MODE", "b")
+    _run(statement_processor, "r = helper('1')", annotation)
+    assert mock_shell.user_ns["r"] == "1b", "the call cache served the value of the old variable"
 
 
 def test_one_built_by_a_local_module_runs_every_time(
