@@ -45,28 +45,66 @@ def local_import_map(func_def: ast.AST, func: Any) -> dict[str, tuple[str, tuple
     if package is None:
         package = (plain_getattr(func, "__module__", "") or "").rpartition(".")[0]
     found: dict[str, tuple[str, tuple[str, ...]]] = {}
+    for local, level, module, name in _import_specs(func_def):
+        if name is None:
+            found[local] = (module, ())
+            continue
+        if level:
+            try:
+                module = importlib.util.resolve_name("." * level + module, package or None)
+            except (ImportError, ValueError):
+                continue
+        if module:
+            found[local] = (module, (name,))
+    return found
+
+
+#: ``(local name, level, module, imported name or None)``, as written.
+_ImportSpec = tuple[str, int, str, str | None]
+
+
+def _import_specs(func_def: ast.AST) -> tuple[_ImportSpec, ...]:
+    """The imports written in *func_def*, in walk order, each as the local
+    name it binds, the level and module it names and the name it takes
+    from it (None for a plain ``import``): of the tree alone, kept with it
+    and on disk (`tree_memo.fact`). A walk again after a commit that left
+    the body as it was walked the whole tree for them, for every body; the
+    package a relative one resolves against is read live."""
+    from . import tree_memo
+
+    return tree_memo.fact(func_def, "import_specs", _specs_of, ("import_specs", _specs_encoded, _specs_decoded))
+
+
+def _specs_of(func_def: ast.AST) -> tuple[_ImportSpec, ...]:
+    specs: list[_ImportSpec] = []
     for node in walk_tree(func_def):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.asname:
-                    found[alias.asname] = (alias.name, ())
+                    specs.append((alias.asname, 0, alias.name, None))
                 else:
                     top = alias.name.split(".")[0]
-                    found[top] = (top, ())
+                    specs.append((top, 0, top, None))
         elif isinstance(node, ast.ImportFrom):
-            if node.level:
-                try:
-                    module = importlib.util.resolve_name("." * node.level + (node.module or ""), package or None)
-                except (ImportError, ValueError):
-                    continue
-            else:
-                module = node.module or ""
-            if not module:
-                continue
             for alias in node.names:
                 if alias.name != "*":
-                    found[alias.asname or alias.name] = (module, (alias.name,))
-    return found
+                    specs.append((alias.asname or alias.name, node.level, node.module or "", alias.name))
+    return tuple(specs)
+
+
+def _specs_encoded(_node: ast.AST, specs: tuple[_ImportSpec, ...]) -> list:
+    return [list(spec) for spec in specs]
+
+
+def _specs_decoded(_node: ast.AST, value: Any) -> tuple[_ImportSpec, ...]:
+    specs = []
+    for local, level, module, name in value:
+        if not (isinstance(local, str) and type(level) is int and isinstance(module, str)):
+            raise ValueError("not an import")
+        if name is not None and not isinstance(name, str):
+            raise ValueError("not an import")
+        specs.append((local, level, module, name))
+    return tuple(specs)
 
 
 def dotted_imports(func_def: ast.AST) -> dict[str, tuple[str, ...]]:

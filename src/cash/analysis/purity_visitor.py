@@ -36,6 +36,7 @@ from ..effects import (
     environment_input,
     reads_argv,
 )
+from . import tree_memo
 from .ambient_reads import ambient_call, clock_helper_of
 from .callee_effects import iterated_sources, scope_locals
 from .file_effects import get_base_name, get_call_module, get_call_name
@@ -47,7 +48,7 @@ from .mutations import (
     writer_aliases,
     written_argument,
 )
-from .purity_flow import is_log_line, receiver_is_fresh
+from .purity_flow import is_log_line, kept_names, receiver_is_fresh
 from .purity_policy import AMBIENT_KINDS, DECORATOR_POLICY
 from .purity_report import (
     ISSUE_AMBIENT_READ,
@@ -266,17 +267,10 @@ class PurityVisitor(ast.NodeVisitor):
                 aliases: dict[str, str | None] = {}
                 if self._namespace:
                     aliases.update(namespace_writer_aliases(tree, self._namespace))
-                aliases.update(writer_aliases(tree))
-                # A module the body imports itself is shared state all the
-                # same: ``import cfg; setattr(cfg, "k", v)``.
-                imported = {
-                    (alias.asname or alias.name).split(".")[0]
-                    for sub in ast.walk(tree)
-                    if isinstance(sub, (ast.Import, ast.ImportFrom))
-                    for alias in sub.names
-                }
-                local_names = (scope_locals(tree) | self._param_names) - imported
-                self._writer_scope = (aliases, local_names, iterated_sources(tree))
+                own_aliases, imported, iterated = _tree_writer_scope(tree)
+                aliases.update(own_aliases)
+                local_names = (kept_names(tree, "scope_locals", scope_locals) | self._param_names) - imported
+                self._writer_scope = (aliases, local_names, iterated)
         return self._writer_scope
 
     def _writer_call(self, node: ast.Call) -> None:
@@ -1073,6 +1067,48 @@ class PurityVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     visit_AsyncFor = visit_For
+
+
+_WriterScope = tuple[dict[str, str], frozenset[str], dict[str, frozenset[str]]]
+
+
+def _tree_writer_scope(tree: ast.AST) -> _WriterScope:
+    """What the writer rule reads of *tree* alone, kept with the tree and on
+    disk (`tree_memo.fact`): the names it binds to a writer
+    (`mutations.writer_aliases`), the names its imports bind, and what each
+    loop target iterates (`iterated_sources`). A walk again after a commit
+    that left the body as it was walked the whole tree once for each, for
+    every body; what the namespace binds is still read live
+    (`namespace_writer_aliases`)."""
+    return tree_memo.fact(tree, "writer_scope", _writer_scope_of, ("writer_scope", _scope_encoded, _scope_decoded))
+
+
+def _writer_scope_of(tree: ast.AST) -> _WriterScope:
+    # A module the body imports itself is shared state all the same:
+    # ``import cfg; setattr(cfg, "k", v)``.
+    imported = frozenset(
+        (alias.asname or alias.name).split(".")[0]
+        for sub in ast.walk(tree)
+        if isinstance(sub, (ast.Import, ast.ImportFrom))
+        for alias in sub.names
+    )
+    return writer_aliases(tree), imported, iterated_sources(tree)
+
+
+def _scope_encoded(_tree: ast.AST, scope: _WriterScope) -> list:
+    aliases, imported, iterated = scope
+    return [list(aliases.items()), sorted(imported), [[k, sorted(v)] for k, v in iterated.items()]]
+
+
+def _scope_decoded(_tree: ast.AST, value: Any) -> _WriterScope:
+    aliases, imported, iterated = value
+    if not all(isinstance(k, str) and isinstance(v, str) for k, v in aliases):
+        raise ValueError("not writer aliases")
+    if not all(isinstance(n, str) for n in imported):
+        raise ValueError("not names")
+    if not all(isinstance(k, str) and all(isinstance(n, str) for n in v) for k, v in iterated):
+        raise ValueError("not iterated sources")
+    return dict(aliases), frozenset(imported), {k: frozenset(v) for k, v in iterated}
 
 
 def _describe_subscript(node: ast.Subscript) -> str:
