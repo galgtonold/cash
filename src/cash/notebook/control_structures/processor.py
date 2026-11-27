@@ -252,6 +252,16 @@ class ControlStructureProcessor:
                     )
                 except Exception:  # never let bookkeeping break the user's loop
                     logger.debug("[CONTROL] generator advance failed", exc_info=True)
+            if rng_before is not None:
+                try:
+                    # What it drew through a function it calls, which its text
+                    # does not say: the structure reads and moves that stream
+                    # as a statement does, in both engines (`observed_rng_reads`).
+                    sp.note_hidden_draws_of_a_structure(
+                        code, rng_modules_changed(rng_before, capture_rng_state()) & set(rng_before)
+                    )
+                except Exception:  # never let bookkeeping break the user's loop
+                    logger.debug("[CONTROL] could not note the loop's draws", exc_info=True)
             try:
                 sp.advance_rng_of_a_structure(code, before)
             except Exception:  # never let bookkeeping break the user's loop

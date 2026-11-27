@@ -1271,13 +1271,27 @@ class StatementProcessor:
             key = "unkeyable:" + secrets.token_hex(16)
         self._advance_carriers(statement_source_hash(code), moved, key, code)
 
+    def note_hidden_draws_of_a_structure(self, code: str, drew: set[str]) -> None:
+        """Record that the top-level loop *code* drew from the streams of the
+        modules in *drew* through functions its text does not show drawing.
+
+        A body statement's draw is recorded under the body statement, so the
+        loop's own key and the lineage it leaves the stream at read no stream:
+        the same loop run twice over equal items in one cell had one key for
+        each pass's draw, and the second loop was served the first's values.
+        Recorded under the loop's code, the stream is read and moved on by
+        the loop (:meth:`advance_rng_of_a_structure`) as the simulation reads
+        the same ledger (``observed_rng_reads``)."""
+        self._randomness.note_hidden_draws(code, drew)
+
     def advance_rng_of_a_structure(self, code: str, before: dict[str, str]) -> None:
         """Move on the RNG variables a top-level loop or branch *code* drew from.
 
-        A body statement moves none (see :meth:`_advance_rng`), so the
-        structure does it as a whole, as the simulation sees it: one statement
-        keyed on its lineages at entry (*before*). A variable a seed in the
-        body or a statement run whole moved already keeps its lineage.
+        A body statement's draw moves one only for the passes after it, until
+        the loop ends (see :meth:`_advance_rng`), so the structure does it as
+        a whole, as the simulation sees it: one statement keyed on its
+        lineages at entry (*before*). A variable a seed in the body or a
+        statement run whole moved already keeps its lineage.
         """
         lineage = self.tracking_state.variable_lineage
         drawn = drawn_rng_vars(key_hidden_reads(code, self.tracking_state), code, before)
@@ -1311,13 +1325,23 @@ class StatementProcessor:
         lineage derived from its own key (``advanced_rng_lineage``), so a
         change in the number or order of draws above re-keys every draw below.
         After the output lineages, which read the variable as it stood before
-        the draw, as the simulation's do. Not for a loop or branch body: the
-        structure moves it as a whole (:meth:`advance_rng_of_a_structure`).
+        the draw, as the simulation's do. A loop or branch body's draw moves
+        it only inside its loop (`InLoopChanges.drew`): the structure moves
+        it as a whole (:meth:`advance_rng_of_a_structure`).
         """
         self._rng_read = None
-        if not run.cache_key or is_control_body(run.code) or run.magic_reads is not None:
+        if not run.cache_key or run.magic_reads is not None:
             return  # a magic statement's draw moves it in record_magic
         state = self.tracking_state
+        if is_control_body(run.code):
+            # Moved on for the passes after it only, and taken back when the
+            # loop ends (`InLoopChanges.drew`).
+            try:
+                read = rng_reads_now(state, run.code)
+            except (SyntaxError, ValueError, AttributeError, RecursionError):
+                return
+            self._in_loop.drew((var for var, lineage in read.items() if lineage is not None), run.cache_key)
+            return
         try:
             read = rng_reads_now(state, run.code)
         except (SyntaxError, ValueError, AttributeError, RecursionError):
