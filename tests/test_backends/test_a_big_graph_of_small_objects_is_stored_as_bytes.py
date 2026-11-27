@@ -199,8 +199,11 @@ def test_a_miss_stores_it_in_a_few_times_its_pickle(tmp_path, trie_module):
     # about 2.5: the store's own pickle (1.3, through `kept_state`'s
     # reducers) and the looks through the value for an id() or a closure
     # it holds (about 1 together). Without the extension the renaming of
-    # attribute names is a Python call per node.
-    bound = 3.0 if getattr(_native.kernels, "reduce_apart", None) is not None else 5.0
+    # attribute names is a Python call per node. The same CPU-time ratio on
+    # CI's runners: 2.4 to 2.6 on Linux, 3.0 on Windows (its thread clock
+    # ticks in 1/64 s), 3.3 on macOS: 4.0 holds them all and still catches
+    # the per-node store that took over 10.
+    bound = 4.0 if getattr(_native.kernels, "reduce_apart", None) is not None else 5.0
     stores, pickles = [], []
     for n in range(len(words), len(words) - 6, -1):
         body.clear()

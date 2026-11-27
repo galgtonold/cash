@@ -137,6 +137,8 @@ _INTO_THE_NOTEBOOK = {
     ("cash.decorator.purity_checks", "cash.notebook.statement.identity_holders"),
     ("cash.analysis.cacheability_decision", "cash.notebook.shared_objects"),
     ("cash.analysis.cacheability_decision", "cash.notebook.lineage_formula"),
+    # A statement's callees with no readable text.
+    ("cash.analysis.cacheability_decision", "cash.notebook.statement.unseen_writes"),
     ("cash.analysis.handed_callables", "cash.notebook.held_functions"),
 }
 

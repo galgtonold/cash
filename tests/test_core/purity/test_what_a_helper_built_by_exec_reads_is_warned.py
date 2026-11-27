@@ -15,8 +15,8 @@ with no warning, and an edit to its text is still seen.
 from __future__ import annotations
 
 import os  # noqa: F401 - read by the helpers the exec below builds
-import time  # noqa: F401
-import uuid  # noqa: F401
+import time  # noqa: F401 - read by the helpers the exec below builds
+import uuid  # noqa: F401 - read by the helpers the exec below builds
 import warnings
 
 import pytest
@@ -39,19 +39,19 @@ def calls_stamp(x):
 
 
 def calls_token(x):
-    return token(x)  # noqa: F821
+    return token(x)  # noqa: F821 - defined by the exec above
 
 
 def calls_mode(x):
-    return mode(x)  # noqa: F821
+    return mode(x)  # noqa: F821 - defined by the exec above
 
 
 def calls_pure(x):
-    return pure(x)  # noqa: F821
+    return pure(x)  # noqa: F821 - defined by the exec above
 
 
 def calls_via_sourced(x):
-    return via_sourced(x)  # noqa: F821
+    return via_sourced(x)  # noqa: F821 - defined by the exec above
 
 
 def _calls(tmp_path, fn, arg):
@@ -99,7 +99,7 @@ def test_an_edit_to_its_text_is_seen(tmp_path):
 
         @c.cache
         def calls_edited(x):
-            return edited(x)  # noqa: F821
+            return edited(x)  # noqa: F821 - defined by the exec above
 
         assert calls_edited(1) == 2
         exec("def edited(x):\n    return x + 2\n", ns)
