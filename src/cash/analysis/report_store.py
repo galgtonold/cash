@@ -52,6 +52,7 @@ import atexit
 import dataclasses
 import functools
 import hashlib
+import importlib.machinery
 import inspect
 import json
 import re
@@ -65,8 +66,9 @@ from .. import _verify, _weak, source_reads
 from .._memo import CODE_OBJECTS, MODULE_ANALYSES, LruMemo
 from .._paths import is_pseudo_filename
 from .._type_memo import class_dict, class_qualname, module_of_class
-from .._user_attrs import plain_getattr, static_attr
-from ..code_digest import callable_identity
+from .._user_attrs import module_file, plain_getattr, static_attr
+from ..code_digest import callable_identity, loaded_extension_digest
+from ..cython_digest import is_cyfunction
 from ..effects import EffectKind
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..install_paths import top_package
@@ -96,6 +98,8 @@ _MAX_ENTRIES = 8
 #: How many ``__wrapped__`` / ``__func__`` steps lead from where a module
 #: holds a callable to the one the walk visited.
 _MAX_STEPS = 8
+#: The endings of a built extension's file.
+_EXTENSION_SUFFIXES = tuple(importlib.machinery.EXTENSION_SUFFIXES)
 
 STATS = {"loaded": 0, "stored": 0, "missed": 0, "stale": 0, "refused": 0, "cheap": 0, "failed": 0, "verified": 0}
 
@@ -270,8 +274,15 @@ def _chain(qualname: str) -> tuple[str, ...]:
 
 
 def _home(obj: Any) -> tuple[str, tuple[str, ...]] | None:
+    """Where *obj*'s module holds it by its qualified name: a class, a
+    function, or a function Cython compiled (``DistanceMetric.get_metric``
+    of hdbscan, a ``classmethod`` its class holds): left out, no name led
+    to such a helper, and every report whose walk visited one was walked
+    again in each process. What a report checks of it is its token, its
+    text, its built file whole (`_plan`) and its key digest (`_check`)."""
     base = obj.__func__ if type(obj) is types.MethodType else obj
-    module = plain_getattr(base, "__module__", None) if isinstance(base, (type, types.FunctionType)) else None
+    named = isinstance(base, (type, types.FunctionType)) or is_cyfunction(base)
+    module = plain_getattr(base, "__module__", None) if named else None
     qualname = plain_getattr(base, "__qualname__", None) if module else None
     if not isinstance(module, str) or not isinstance(qualname, str) or "<" in qualname:
         return None
@@ -581,6 +592,23 @@ def _file_of(obj: Any) -> str | None:
     if not isinstance(filename, str) or is_pseudo_filename(filename):
         return None
     return filename
+
+
+def _visited_file_digest(obj: Any, filename: str) -> str | None:
+    """`_file_digest` of *filename*, the file visited *obj* is in; for a
+    compiled function (Cython's) the built extension its module was loaded
+    from, digested as its key digests it (`loaded_extension_digest`), once
+    per loaded module for the report and the key alike: each report that
+    visits one read the whole binary again (2.5 MB a module of hdbscan's,
+    three of them per report)."""
+    if type(obj) is not types.FunctionType and filename.endswith(_EXTENSION_SUFFIXES):
+        module = sys.modules.get(plain_getattr(obj, "__module__", None) or "")
+        if module is not None and module_file(module) == filename:
+            try:
+                return f"built:{loaded_extension_digest(module, filename)}"
+            except OSError:
+                return None
+    return _file_digest(filename)
 
 
 def _file_digest(filename: str) -> str | None:
@@ -1023,7 +1051,7 @@ def _guards(
         if filename is not None:
             visited_files.add(filename)
             if filename not in files:
-                files[filename] = _file_digest(filename)
+                files[filename] = _visited_file_digest(obj, filename)
         digests.append(_object_digest(obj, None if filename is None else files[filename]))
     whole = set(plan["whole"])
     texts = []
