@@ -23,7 +23,10 @@ from __future__ import annotations
 import threading
 import weakref
 from collections.abc import Callable
+from types import MethodType
 from typing import Any
+
+from . import _weak
 
 __all__ = ["MIN_COPIES", "MIN_SECONDS", "Tally", "blocks_frozen", "on_found", "report", "tally", "text"]
 
@@ -100,15 +103,16 @@ _lock = threading.Lock()
 #: Who says the hint for a function: each `Cash`'s hook, a bound method held
 #: weakly so it keeps no `Cash` alive, answering whether the function is one
 #: of its own.
-_HOOKS: list[weakref.WeakMethod] = []
+_HOOKS: list[tuple[weakref.ReferenceType, Callable[..., bool]]] = []
 
 
 def on_found(hook: Callable[[str, Tally], bool]) -> None:
     """Call *hook*, a bound method, with each function whose hint is due; it
     returns whether the function is its own (and it said the hint)."""
     with _lock:
-        _HOOKS[:] = [ref for ref in _HOOKS if ref() is not None]
-        _HOOKS.append(weakref.WeakMethod(hook))  # type: ignore[arg-type]
+        _HOOKS[:] = [(owner, func) for owner, func in _HOOKS if owner() is not None]
+        bound: Any = hook
+        _HOOKS.append((_weak.ref(bound.__self__), bound.__func__))
 
 
 def report(name: str, found: Tally) -> None:
@@ -116,10 +120,11 @@ def report(name: str, found: Tally) -> None:
     `Cash` owns (an entry stored by hand) gets none: the fix is a decorator
     argument."""
     with _lock:
-        hooks = [ref() for ref in _HOOKS]
-    for hook in hooks:
-        if hook is None:
+        hooks = [(owner(), func) for owner, func in _HOOKS]
+    for obj, func in hooks:
+        if obj is None:
             continue
+        hook = MethodType(func, obj)
         try:
             if hook(name, found):
                 return
