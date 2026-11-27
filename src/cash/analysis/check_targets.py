@@ -120,8 +120,32 @@ def named_only_as_check_target(func_def: ast.AST, name: str, namespace: dict[str
 
     False when *name* or such a parameter is bound anywhere in it, or when
     it reads its own locals by a string (``locals()``, ``eval``).
+
+    A function of the tree, *name* and which tests *namespace* leaves to
+    the builtins alone, so it is a fact of the tree (`tree_memo.fact`),
+    kept across processes under the text the tree was parsed from: the
+    helper walk asks it of every class a body names, and a walk run again
+    because a file it read changed elsewhere (a commit) parsed and walked
+    each such body with a parent map again, for the same answers.
     """
-    return _only_check_target(func_def, name, _tests_in(namespace))
+    tests = _tests_in(namespace)
+    ordered = ",".join(sorted(tests))
+    return tree_memo.fact(
+        func_def,
+        ("check_target_only", name, ordered),
+        lambda node: _only_check_target(node, name, tests),
+        (f"check_target_only:{name}:{ordered}", _verdict_encoded, _verdict_decoded),
+    )
+
+
+def _verdict_encoded(_node: ast.AST, verdict: bool) -> bool:
+    return verdict
+
+
+def _verdict_decoded(_node: ast.AST, value: Any) -> bool:
+    if type(value) is not bool:
+        raise ValueError("not a verdict")
+    return value
 
 
 def _only_check_target(func_def: ast.AST, name: str, tests: set[str]) -> bool:
