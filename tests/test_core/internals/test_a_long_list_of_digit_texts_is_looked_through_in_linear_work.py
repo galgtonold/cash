@@ -29,6 +29,16 @@ def _digit_texts(rows=ROWS):
     return [str(100_000 + i) * 3 for i in range(rows)]
 
 
+def _odd_digit_texts(rows=ROWS):
+    """As many texts of 18 digits, each of them odd: no part of one ends in
+    a multiple of 8, as every address does (`identity_holders._ALIGNMENT`),
+    so none is an ``id()`` on any platform. Of `_digit_texts`' parts, off
+    Linux, where no mapping narrows them, 35,000 are aligned numbers past
+    4 GiB, macOS's 10-digit heap: one of them was now and then the address
+    of one of the list's own strings, a real ``id()`` the result held."""
+    return ["".join("13579"[i // 5**k % 5] for k in range(9)) * 2 for i in range(rows)]
+
+
 class _Thing:
     def __init__(self):
         self.name = "thing"
@@ -87,6 +97,8 @@ def test_the_list_is_read_once_when_a_number_in_it_could_be_an_id(disk_cash):
     # The address of an object nothing the function can reach holds: a
     # number that could be an id(), so the quick look at plain data leaves
     # the answer to the walk, which read the list a second time.
+    # Its texts' digits are odd, so its only number that could be an id()
+    # is that address, whatever addresses this process has.
     stranger = _Thing()
     spelled = str(id(stranger))
     runs = []
@@ -94,11 +106,14 @@ def test_the_list_is_read_once_when_a_number_in_it_could_be_an_id(disk_cash):
     @disk_cash.cache
     def make(n):
         runs.append(n)
-        return [*_digit_texts(n), spelled]
+        return [*_odd_digit_texts(n), spelled]
 
-    with method_calls(identity_holders, "_spelled_in") as read:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with method_calls(identity_holders, "_spelled_in") as read:
+            make(ROWS)
         make(ROWS)
-    make(ROWS)
+    assert "STORE-IDENTITY-HELD" not in _codes(caught)
     assert runs == [ROWS], "an address of an object the function cannot reach kept the list out of the cache"
     assert read.calls == 1, f"the list's text was read {read.calls} times"
 
