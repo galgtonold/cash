@@ -29,6 +29,7 @@ import contextvars
 import dataclasses
 import functools
 import inspect
+import linecache
 import os
 import sys
 import textwrap
@@ -38,6 +39,7 @@ from typing import Any, NamedTuple
 
 from .. import _weak, source_reads
 from .._annotation_refs import annotation_referents
+from .._paths import is_pseudo_filename
 from .._type_memo import class_mro, class_name, mro_of
 from .._user_attrs import instance_of, plain_getattr, plain_hasattr
 from ..code_digest import callable_identity, compiled_identity, extension_file_digest
@@ -77,6 +79,7 @@ from .helper_code import (
     is_user_code,
     own_code_is_user,
     qualname_of,
+    unseen_reads,
 )
 from .mutable_globals import mutable_global_reads
 from .purity_flow import (
@@ -94,6 +97,7 @@ from .purity_report import (
     ISSUE_UNTRACKABLE_DEP,
     READ_ONLY_ISSUE_KINDS,
     UNREAD_MODULE,
+    UNSEEN_SOURCE_READ,
     PurityIssue,
     PurityReport,
 )
@@ -681,7 +685,26 @@ class HelperWalk:
         self._record_walked_code(func)
         code_fn = jit_python_function(func) or func
         if type(code_fn) is types.FunctionType:
+            if entry.reported and self._reads_unseen(code_fn):
+                self._emit("_put_issues", [_unseen_read_issue(code_fn, qualname)])
             self._queue_bytecode_refs(entry._replace(func=code_fn))
+
+    def _reads_unseen(self, func: types.FunctionType) -> bool:
+        """Was *func* compiled from a string no file holds (``exec``), and
+        may it read what its missing source would have shown
+        (`unseen_reads`)? A file that went away is not this: its source
+        was there to read when it ran."""
+        filename = func.__code__.co_filename
+        if not is_pseudo_filename(filename) or linecache.getlines(filename):
+            return False
+        return unseen_reads(func, self._followed_from_bytecode)
+
+    def _followed_from_bytecode(self, value: Any) -> bool:
+        """Is *value* a function `_queue_bytecode_refs` walks, so its own
+        reads are judged when it is?"""
+        if not _is_function(value) or is_mock(value):
+            return False
+        return getattr(value, "_cash_cached", False) is True or own_code_is_user(value, self._root_module)
 
     def _queue_bytecode_refs(self, entry: _Entry) -> None:
         """Queue the user functions *entry*'s bytecode calls by global name:
@@ -1345,6 +1368,24 @@ def _made_anew(arg: Any, made: dict[int, Any]) -> Any:
     if method is None:
         method = made[id(arg)] = types.MethodType(arg.func, arg.owner)
     return method
+
+
+def _unseen_read_issue(func: types.FunctionType, qualname: str) -> PurityIssue:
+    """The finding for a function built by ``exec`` whose reads cannot be
+    seen (`HelperWalk._reads_unseen`): an ambient read, which the notebook
+    runs every time and the decorator warns about, as for a clock read it
+    can name. ``# @cash:assume-safe`` accepts it as it accepts that."""
+    name = plain_getattr(func, "__name__", "it")
+    return PurityIssue(
+        kind=ISSUE_AMBIENT_READ,
+        description=(
+            f"{UNSEEN_SOURCE_READ} ({name} was built by exec() from a string, so there is no source "
+            f"to show whether it reads the clock, the environment, a fresh id or a file) - such a value "
+            f"is not in the cache key, so the first call's value would be frozen into every later result"
+        ),
+        where=qualname,
+        line=0,
+    )
 
 
 def _is_function(value: Any) -> bool:

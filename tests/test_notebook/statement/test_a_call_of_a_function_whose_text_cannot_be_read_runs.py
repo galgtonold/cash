@@ -22,6 +22,13 @@ def _run(processor, code):
     return processor.process_statement(code, annotation=_PERSIST)
 
 
+def _unreadable(reason):
+    """A reason naming a function whose text cannot be read: by the check of
+    what it changes, or, first, by the check of what it may read, which
+    the analysis of a function built by ``exec`` in the notebook now makes."""
+    return "text cannot be read" in reason or "built by exec() from a string" in reason
+
+
 def _second_run(processor, define):
     _run(processor, "import time\nLOG = []")
     _run(processor, define)
@@ -41,7 +48,7 @@ def _second_run(processor, define):
 def test_it_runs_every_time(statement_processor, mock_shell, define):
     second = _second_run(statement_processor, define)
     assert second["status"] != CacheStatus.RESTORED
-    assert any("text cannot be read" in r for r in second["uncacheable_reasons"])
+    assert any(_unreadable(r) for r in second["uncacheable_reasons"]), second["uncacheable_reasons"]
 
 
 def test_a_readable_one_that_changes_nothing_is_served(statement_processor):
@@ -70,7 +77,7 @@ def test_a_method_of_a_class_an_exec_defined_runs_every_time(statement_processor
     to a function were followed, and the method's write was served away."""
     second = _second_method_run(statement_processor, EXEC_CLASS, call)
     assert second["status"] != CacheStatus.RESTORED
-    assert any("text cannot be read" in r for r in second["uncacheable_reasons"])
+    assert any(_unreadable(r) for r in second["uncacheable_reasons"]), second["uncacheable_reasons"]
 
 
 def test_a_method_of_a_readable_class_is_served(statement_processor):

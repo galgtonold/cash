@@ -10,19 +10,21 @@ part of the key is stored under (`qualname_of`).
 
 from __future__ import annotations
 
+import dis
 import functools
 import inspect
 import linecache
 import sys
 import types
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from typing import Any
 
 from cash._user_attrs import instance_of
+from cash.builtin_calls import FOLLOW_FROM_ARGUMENTS
 
 from .._paths import MAIN_MODULE_NAMES, is_pseudo_filename, resolve_main_module
 from .._type_memo import class_dict, class_name, class_qualname, module_of_class
-from .._user_attrs import hooked_class, plain_getattr, plain_hasattr
+from .._user_attrs import attribute_or, hooked_class, plain_getattr, plain_hasattr
 from ..install_paths import in_own_package, top_package
 from ..jit_functions import jit_python_function
 from ..loaded_modules import loaded_module
@@ -102,6 +104,93 @@ def _function_is_exec_built(obj: Any) -> bool:
     if not (is_pseudo_filename(filename) and filename.endswith(">")) or linecache.getlines(filename):
         return False
     return _defining_module(fn) is None
+
+
+def library_made(code: types.CodeType, globals_: Mapping[str, Any]) -> bool:
+    """Is *code* a method a library wrote for a class of the user's, from
+    text of its own: what ``@dataclass`` (``__create_fn__``), attrs
+    (``<attrs generated ...>``) or ``namedtuple`` (its ``__new__``) make.
+    They set the object's own fields and change nothing outside it; what
+    they call of the user's (a ``default_factory``, ``__post_init__``) ran
+    as code of its own and is read in turn. Their text has no file, so read
+    as any other function's they would count as changing what their
+    unreadable text changes: every statement making such an object of a
+    class in a module of the user's was refused."""
+    filename = code.co_filename
+    if filename.startswith("<attrs generated"):
+        return True
+    if filename != "<string>":
+        return False
+    if attribute_or(code, "co_qualname", "").startswith("__create_fn__.<locals>."):
+        return True
+    name = globals_.get("__name__") if isinstance(globals_, Mapping) else None
+    return code.co_name == "<lambda>" and isinstance(name, str) and name.startswith("namedtuple_")
+
+
+#: Opcodes that load a name of the function's globals or closure.
+_NAME_LOADS = frozenset({"LOAD_GLOBAL", "LOAD_NAME", "LOAD_DEREF", "LOAD_CLASSDEREF", "LOAD_FROM_DICT_OR_DEREF"})
+#: What calls or draws: a call, or an iteration.
+_CALLS_OR_DRAWS = ("CALL", "GET_ITER", "FOR_ITER", "GET_AITER", "SEND", "YIELD_FROM")
+
+
+def unseen_reads(func: types.FunctionType, followed: Callable[[Any], bool]) -> bool:
+    """May *func*, a function compiled from text cash cannot read (``exec``
+    of a string), read the clock, the environment, a fresh id or a file?
+
+    The analysis finds those reads in a function's source, and this one has
+    none: its report was empty, and a helper built so that returned
+    ``time.time()`` or read ``os.environ["MODE"]`` had its first value served
+    on every later run with no warning. Its bytecode cannot name the read,
+    but it can rule one out: code that reads no attribute, imports nothing,
+    and calls or iterates nothing but its arguments, the builtins whose
+    answer follows from their arguments, and functions the walk follows
+    itself (*followed*) reads only what it is handed and the data its
+    globals and closure hold, which the key folds. Library-made methods (a
+    dataclass's ``__init__``) are not the user's text and are left out.
+    """
+    if library_made(func.__code__, func.__globals__):
+        return False
+    names: set[str] = set()
+    calls = False
+    pending = [func.__code__]
+    seen: set[types.CodeType] = set()
+    while pending:
+        code = pending.pop()
+        if code in seen:
+            continue
+        seen.add(code)
+        for ins in dis.get_instructions(code):
+            op = ins.opname
+            if op.startswith("IMPORT_") or op in ("LOAD_ATTR", "LOAD_METHOD", "LOAD_SUPER_ATTR"):
+                return True
+            if op in _NAME_LOADS:
+                names.add(ins.argval)
+            elif op.startswith(_CALLS_OR_DRAWS):
+                calls = True
+        pending.extend(k for k in code.co_consts if isinstance(k, types.CodeType))
+    if not calls:
+        return False
+    closure = dict(zip(func.__code__.co_freevars, func.__closure__ or ()))
+    for name in names - FOLLOW_FROM_ARGUMENTS:
+        if name in closure:
+            try:
+                value = closure[name].cell_contents
+            except ValueError:  # an empty cell
+                return True
+        elif name in func.__globals__:
+            value = func.__globals__[name]
+        else:
+            return True
+        if not (followed(value) or _plain_data(value)):
+            return True
+    return False
+
+
+def _plain_data(value: Any) -> bool:
+    """A value that does nothing when code reads it: not a callable, which
+    may read anything when called, and not an iterator, which a ``for``
+    draws from. Its content is keyed as any global's."""
+    return not (callable(value) or any("__next__" in vars(k) for k in type(value).__mro__))
 
 
 def _unwrapped_member(member: Any) -> Any:

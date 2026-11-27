@@ -2686,7 +2686,7 @@ class StatementProcessor:
             names = ", ".join(repr(n) for n in unreadable)
             run.metrics["uncacheable_reasons"].append(
                 f"Calls {names}, whose text cannot be read (defined through exec, or compiled from a string): "
-                f"what it changes cannot be told, so the statement runs every time"
+                f"what it reads or changes cannot be told, so the statement runs every time"
             )
             run.skip_cache = True
             run.value_varies = True
