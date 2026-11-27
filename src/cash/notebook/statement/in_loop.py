@@ -74,6 +74,10 @@ class IterationOverlay:
     #: Every name its statements moved, here or, for a name an enclosing
     #: loop owns, in that loop's overlay.
     moved: set[str] = field(default_factory=set)
+    #: Each RNG variable a draw of its passes moved on
+    #: (:meth:`InLoopChanges.drew`): the lineage it had before those draws,
+    #: and the one the last of them left.
+    streams: dict[str, tuple[str | None, str]] = field(default_factory=dict)
 
 
 class InLoopChanges:
@@ -245,7 +249,46 @@ class InLoopChanges:
                 lineage.discard(name)
             else:
                 lineage.reset_to(name, before)
+        current = self.tracking_state.variable_lineage
+        for var, (before, left) in overlay.streams.items():
+            # Only where the draws were the last to move it: a seed in the
+            # body moved it since, and the loop keeps what that left.
+            if current.get(var) != left:
+                continue
+            if before is None:
+                lineage.discard(var)
+            else:
+                lineage.reset_to(var, before)
         return set(overlay.saved) | overlay.moved
+
+    def drew(self, rng_vars: Iterable[str], cache_key: str | None) -> None:
+        """A statement of a decomposed loop's pass, keyed *cache_key*, drew
+        from the seeded streams of *rng_vars*: move each on from its key.
+
+        The loop moves a stream as a whole when it ends
+        (``advance_rng_of_a_structure``), so without this every pass read
+        it at the lineage it had when the loop started: two passes over
+        equal items (``for p in [3, 3, 3]: r = train(p)``) had one key, and
+        the second was served the first's draw where Python draws the next
+        values. Moved on here, each pass's draw is keyed on the draws before
+        it, the same on every run of the loop. Kept in the outermost overlay
+        and taken back when that loop ends, as :meth:`moved` keeps names."""
+        if not self._overlays or not cache_key:
+            return
+        outer = self._overlays[0]
+        lineage = self.tracking_state.lineage
+        current = self.tracking_state.variable_lineage
+        for var in sorted(rng_vars):
+            now = current.get(var)
+            if now is None:
+                continue
+            before, left = outer.streams.get(var, (now, None))
+            if now != left:
+                # A seed in the body set it since the last draw moved it.
+                before = now
+            moved = hashlib.sha256(f"in-loop-draw:{now}:{cache_key}".encode()).hexdigest()
+            lineage.reset_to(var, moved)
+            outer.streams[var] = (before, moved)
 
     def note_bindings(self, tree: ast.Module | None) -> None:
         """A statement of the innermost decomposed loop ran: remember each

@@ -8,6 +8,10 @@ the loop changed none of it. The simulation moves only what a structure
 changes in place through those links, so the next cell found ``sessions``
 built on an older value and rebuilt it. A list the loop does change, by
 its text or through a library call, still moves what holds it.
+
+The stream the library call draws from is seeded: unseeded, a shuffle that
+happened to leave the first list as it was, stored on a slow run, was served
+to every later pass as a draw frozen on its first value, and nothing moved.
 """
 
 from __future__ import annotations
@@ -33,7 +37,7 @@ def test_a_loop_run_pass_by_pass_moves_what_it_changes_through_a_bound_name(cash
     cash_magics.cash_on("")
     cash_magics.badges.mode = "off"
     cells = [
-        "import random\nsessions = [{'actions': [{'at': 3}, {'at': 1}, {'at': 2}]} for _ in range(50)]",
+        "import random\nrandom.seed(0)\nsessions = [{'actions': [{'at': 3}, {'at': 1}, {'at': 2}]} for _ in range(50)]",
         f"for session in sessions:\n    {body}",
     ]
     run_cash_cell(cash_magics, cells[0], cells=cells)

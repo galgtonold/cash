@@ -121,7 +121,7 @@ yours is handed keeps its first record. A `with` block is watched the same way; 
 the statements in its branches were seen changing, and, for a branch that has
 not run yet, everything it hands to such code.
 
-<!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @853a669a, cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @9ff5b76d -->
+<!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @853a669a, cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @02da9e7f -->
 `if`/`elif`/`else` and `try`/`except` bodies are cached statement by
 statement too, and only the branch that ran is stored. `while` and `with`
 blocks are cached as one unit, because they have no list of items to key on,

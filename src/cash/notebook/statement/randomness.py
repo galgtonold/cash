@@ -944,6 +944,17 @@ class StatementRandomness:
             moved.add("torch.cuda")
         return {module: post[module] for module in moved if module in post}
 
+    def note_hidden_draws(self, code: str, drew: set[str]) -> None:
+        """Remember that the control structure *code* drew from the modules
+        in *drew* where its text does not spell a draw
+        (:meth:`_record_hidden_draws`). It is no statement of its own, so
+        nothing the next statement's store reads is set."""
+        newly_seen, flagged = self.newly_seen_draws, self.draw_newly_seen
+        try:
+            self._record_hidden_draws(code, drew)
+        finally:
+            self.newly_seen_draws, self.draw_newly_seen = newly_seen, flagged
+
     def _record_hidden_draws(
         self, code: str | None, drew: set[str], seeded_first: frozenset[str] = frozenset()
     ) -> None:
