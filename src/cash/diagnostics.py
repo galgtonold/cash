@@ -271,6 +271,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "CACHE-IF-BYPASSED",  # result outgrew a chunk, so cache_if never ran
         "CACHE-FRESHNESS-COST",  # proving the entry fresh cost a serious share
         # of the compute it avoids
+        "CACHE-HIT-COPIES-HELD",  # hits keep copying the result because other
+        # code holds earlier ones; frozen=True would hand back one object
         "CACHE-IF-RAISED",  # the cache_if predicate raised
         "CACHE-LOOP-GROWTH",  # a loop is persisting every state of a growing
         # object, costing the sum of every snapshot

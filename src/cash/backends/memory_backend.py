@@ -30,6 +30,7 @@ from .. import (
     _weak,
     cost_model,
     handed_copies,
+    held_copies_notice,
     held_reads,
     kept_state,
     phase_times,
@@ -187,8 +188,9 @@ class _Pickled:
 class _ReadOut:
     """What `InMemoryBackend._read_pickled` or `_read_marshalled` hands
     `get`: the value, the kept bytes it came from, how long reading it
-    took, whether it is the copy handed out before, and whether it was made from that copy while
-    something outside held it (`handed_copies`)."""
+    took, whether it is handed out as it is (the copy handed out before, or
+    one made from it that nothing need keep), and whether it was made from
+    that copy while something outside held it (`handed_copies`)."""
 
     __slots__ = ("cloned", "kept", "reused", "seconds", "value")
 
@@ -790,6 +792,9 @@ class InMemoryBackend(CacheBackend):
         self._frozen: dict[str, frozen_handback.Kept] = {}
         #: Keys whose kept object was seen changed, said once each.
         self._frozen_warned: builtins.set[str] = builtins.set()
+        #: Each function's hits of results kept as bytes, and those that
+        #: copied a held one (`held_copies_notice`).
+        self._held_tallies: dict[str, held_copies_notice.Tally] = {}
 
     #: How far the machine's memory percent must climb within one pressure
     #: episode before the tier takes a fresh share rather than holding flat.
@@ -1686,6 +1691,8 @@ class InMemoryBackend(CacheBackend):
             if phase is not None:
                 phase_times.sub_end(phase)
         if type(value) is _ReadOut:
+            if metadata is not None and stored is None:
+                self._tally_hit(metadata, value)
             if value.reused:
                 # Handed out before and proved untouched since: its sets are
                 # laid out already.
@@ -1705,6 +1712,17 @@ class InMemoryBackend(CacheBackend):
             del value
             return metadata, self._keep_frozen(key, stored, holder)
         return metadata, value
+
+    def _tally_hit(self, metadata: MetadataDict, read: _ReadOut) -> None:
+        """Count a hit of a result kept as bytes for its function, and say
+        CACHE-HIT-COPIES-HELD once its hits keep copying a held result
+        (`held_copies_notice`)."""
+        name = metadata.get("func_name")
+        if not name or held_copies_notice.blocks_frozen(metadata):
+            return
+        found = held_copies_notice.tally(self._held_tallies, name, read.cloned, read.seconds)
+        if found is not None:
+            held_copies_notice.report(name, found)
 
     def _frozen_hit(self, key: str) -> tuple[MetadataDict, Any] | None:
         """A hit of a ``frozen=True`` entry: the object the last hit handed
@@ -1945,8 +1963,12 @@ class InMemoryBackend(CacheBackend):
                         # The kept copy, or one made from it while
                         # something outside holds it: either way laid
                         # out as the bytes lay it out, and nothing to keep.
+                        # A copy says so, with its time, for the hint
+                        # that frozen=True would spare it
+                        # (`held_copies_notice`).
                         self._handed[key] = self._handed.pop(key, kept)
-                        return metadata, _ReadOut(made, kept, 0.0, True)
+                        seconds = 0.0 if reused else time.perf_counter() - started
+                        return metadata, _ReadOut(made, kept, seconds, True, not reused)
                     # Held again: the holder keeps it, so the new copy is
                     # kept in its place (`_keep_handed`), and the hits
                     # after, whose callers let go, hand that one back

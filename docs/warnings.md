@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @f7796412 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @aaeed91a -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -159,6 +159,7 @@ Caching happened, or refused to, and it is worth saying. Every code here starts 
 | [CACHE-EVICTED-RECOMPUTE](#cache-evicted-recompute) | both | the size cap had evicted a costly result, so it was computed again |
 | [CACHE-FORMAT-NEWER](#cache-format-newer) | both | the cache was written by a newer cash, so it is left alone |
 | [CACHE-FRESHNESS-COST](#cache-freshness-cost) | decorator | checking tracked files costs much of what a hit saves |
+| [CACHE-HIT-COPIES-HELD](#cache-hit-copies-held) | decorator | hits keep copying the result because other code holds earlier ones; `frozen=True` would hand back one object |
 | [CACHE-IDENTITY-COUPLED](#cache-identity-coupled) | decorator | a live matplotlib figure is never stored |
 | [CACHE-IDENTITY-UNCHECKED](#cache-identity-unchecked) | decorator | a result was stored without being checked for a live object's `id()` |
 | [CACHE-IF-BYPASSED](#cache-if-bypassed) | decorator | a chunked result was stored without running `cache_if` |
@@ -371,6 +372,34 @@ results.
 **When it is safe to ignore.** When the numbers in the message are still a good
 trade, such as half a second of checking against a five-minute job. It fires
 once per function per process.
+
+### CACHE-HIT-COPIES-HELD {#cache-hit-copies-held}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/held_copies_notice.py:tally @7516250a, cash/held_copies_notice.py:text @7d6d5f98 -->
+**What happened.** A hit hands back the object the last hit returned when
+nothing else holds it. Here other code kept the results earlier calls
+returned (a tokenizer keeping every dictionary it is given, a list of
+results), so most hits had to copy the cached result instead. The message
+says how many hits did and how long the copies took. The results were
+correct.
+
+**Why it matters.** Each copy rebuilds the whole result, and the garbage
+collector then has the extra objects to look through: tens of milliseconds a
+hit for a dictionary trie of a few hundred thousand nodes.
+
+**What to do.** If nothing changes what the function returns, declare it
+`@cash.cache(frozen=True)`: every hit then hands back the same object, held or
+not ([a hit hands back the same object](decorator.md#frozen-and-large-arguments)).
+If something does change it after all,
+[`KEY-FROZEN-MUTATED`](#key-frozen-mutated) says so and the next hit gets a
+new copy.
+
+**When it is safe to ignore.** When callers change the result they get: then
+each needs a copy of its own, and `frozen=True` is wrong. It fires once per
+function per process, after at least five hits that copied, more than half
+of its hits, that took a quarter of a second together.
 
 ### CACHE-IDENTITY-COUPLED {#cache-identity-coupled}
 

@@ -12,6 +12,7 @@ from collections import deque
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from .. import held_copies_notice
 from .._active import EXPLAINING as _EXPLAINING
 from .._clock import perf_counter as _perf_counter
 from .._type_memo import class_name
@@ -127,6 +128,8 @@ class Notices:
         # func_name -> the warnings asked for it while a call of it is
         # recorded (`record_warnings`), shown or not.
         self._recording: dict[str, list[dict[str, Any]]] = {}
+        # CACHE-HIT-COPIES-HELD for this instance's functions.
+        held_copies_notice.on_found(self.hits_copy_held)
 
     def warn_once(
         self,
@@ -409,6 +412,17 @@ class Notices:
             fix="nothing, for a one-off; if it keeps appearing, run "
             "f.cache_clear() so the unreadable records are replaced.",
         )
+
+    def hits_copy_held(self, func_name: str, found: held_copies_notice.Tally) -> bool:
+        """CACHE-HIT-COPIES-HELD for *func_name*, when it is this instance's
+        and not frozen already; whether it is this instance's."""
+        cf = self._cached.get(func_name)
+        if cf is None:
+            return False
+        if not cf.frozen:
+            message, fix = held_copies_notice.text(func_name, found)
+            self.warn_once(CashCacheIneffectiveWarning, func_name, "", message, code="CACHE-HIT-COPIES-HELD", fix=fix)
+        return True
 
     def evicted_recompute(self, func_name: str, seconds: float) -> None:
         """A result the disk cap had evicted was computed again, and it took

@@ -1014,6 +1014,10 @@ hit reads a new copy out of the stored entry, which it hands back from then
 on. The first call, the one that runs the function, returns the object it
 built; the hits hand back a copy of their own (an array a read-only view).
 
+When a function's hits keep copying a result other code holds,
+[`CACHE-HIT-COPIES-HELD`](warnings.md#cache-hit-copies-held) suggests
+`frozen=True` once.
+
 In a notebook too: `model = train(data)` in one cell and `score(model, batch)`
 in the next key `model` by the call that made it, as a script does, so the
 notebook and a script share `score`'s entries. That holds after a restart,
